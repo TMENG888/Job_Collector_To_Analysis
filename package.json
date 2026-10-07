@@ -8,7 +8,9 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "start": "node job_collector_ui/server.mjs",
-    "test": "node scripts/run-unit-tests.mjs"
+    "test": "node scripts/run-unit-tests.mjs",
+    "docs:demo": "node scripts/docs-demo.mjs",
+    "test:docs": "node scripts/test-docs-demo.mjs"
   },
   "dependencies": { "playwright": "1.62.1" },
   "peerDependencies": { "@oai/artifact-tool": "2.8.59" },

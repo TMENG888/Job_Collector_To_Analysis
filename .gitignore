@@ -39,7 +39,9 @@ work/采集清单.json
 work/标注结果.json
 work/ai_drama_review_decisions.json
 *.png
+!docs/images/*.png
 *.jpg
+!docs/images/*.jpg
 *.jpeg
 *.webp
 *.zip
