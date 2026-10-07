@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {pageFailure,parseZhaopinList,assertListPage} from './list_page_guard.mjs';
+import {zhaopinCheckpoint} from './zhaopin_checkpoint.mjs';
+assert.match(pageFailure({url:'https://www.zhaopin.com/jobs',text:'正在验证连接安全性，请勾选下方复选框。 Protected by Tencent Cloud EdgeOne'}),/安全验证/);
+assert.match(pageFailure({url:'about:blank',text:''}),/空白/);
+assert.match(pageFailure({url:'https://www.yupao.com',text:'登录，查看更多职位'}),/登录/);
+assert.equal(pageFailure({url:'https://www.zhaopin.com/jobs',text:'工程师职责：验证码开发'}),'');
+assert.throws(()=>parseZhaopinList({code:401,data:{list:[],count:0}}));
+assert.throws(()=>parseZhaopinList({data:{}}));
+assert.equal(parseZhaopinList({code:200,data:{list:[],count:0}}).explicitEmpty,true);
+const cached={records:new Map([['a',{number:'a'}]]),total:1,endPage:false,validResponse:false};
+assert.equal(Boolean(zhaopinCheckpoint(cached).complete),false);
+assert.equal(zhaopinCheckpoint({...cached,validResponse:true}).complete,true);
+assert.equal(zhaopinCheckpoint({...cached,records:new Map(),total:0,validResponse:true,explicitEmpty:true}).completion_reason,'confirmed_empty');
+await assert.rejects(()=>assertListPage({url:()=> 'about:blank',locator:()=>({innerText:async()=>''})}),{code:'USER_ACTION_REQUIRED'});
+console.log('PASS: verification, blank redirect, login gate, unknown envelope, explicit empty, historical-cache and page guard');

@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { learnJointExpansion, matchJointExpansion, publicJointExpansion } from './joint-job-expansion.mjs';
+const row = (title, description) => ({ '岗位名称': title, '岗位描述': description });
+const seeds = Array.from({ length: 6 }, () => row('AI漫剧师', '使用ComfyUI制作分镜和剧本'));
+const positive = row('AI漫画短剧实习', '负责使用ComfyUI进行分镜创作和后期制作');
+const toolOnly = row('AI应用工程师', '熟悉ComfyUI，维护模型接口');
+const wrongRole = row('AI算法研发工程师', '用ComfyUI研究分镜视频模型，研发推理接口');
+const rows = [...seeds, positive, toolOnly, wrongRole, ...Array.from({ length: 20 }, () => row('后端开发工程师', 'Java数据库接口开发'))];
+const options = { isSeed: (item) => /漫剧师/.test(item['岗位名称']), skills: [['ComfyUI', /ComfyUI/i]], tasks: [['分镜创作', /分镜|剧本/]], familyName: 'AI漫剧创作' };
+const model = learnJointExpansion(rows, options);
+assert.equal(model.seed_rows, 6);
+assert.ok(matchJointExpansion(positive, model)?.matched);
+assert.ok(matchJointExpansion(positive, model).joint_evidence.skills[0].quote.includes('ComfyUI'));
+assert.equal(matchJointExpansion(toolOnly, model), null);
+assert.equal(matchJointExpansion(wrongRole, model), null);
+assert.equal(matchJointExpansion(positive, learnJointExpansion(rows.slice(0, 2), options)), null);
+assert.equal(publicJointExpansion(model).skill_terms[0].regex, undefined);
+console.log(JSON.stringify({ ok: true, positiveWithDifferentTitle: true, toolOnlyRejected: true, technicalRoleRejected: true, insufficientSeedsRejected: true, originalEvidencePreserved: true }));

@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {savePlatformLoginStatus} from './platform_login_status.mjs';
+const dir=await fs.mkdtemp(path.join(os.tmpdir(),'platform-status-')),file=path.join(dir,'status.json');
+await fs.writeFile(file,JSON.stringify({platforms:{deepseek:{manual_window_closed_at:'existing'}}}));
+await Promise.all(['boss','yupao','zhaopin'].map(key=>savePlatformLoginStatus(file,dir,key,{manual_window_closed_at:'saved-'+key,browser_exit_code:0})));
+let status=JSON.parse(await fs.readFile(file,'utf8'));
+assert.deepEqual(Object.keys(status.platforms).sort(),['boss','deepseek','yupao','zhaopin']);
+await savePlatformLoginStatus(file,dir,'boss',{browser_exit_code:21,state:'启动失败'});
+status=JSON.parse(await fs.readFile(file,'utf8'));
+assert.equal(status.platforms.boss.manual_window_closed_at,undefined);
+assert.equal(status.platforms.boss.previous_manual_window_closed_at,'saved-boss');
+assert.equal(status.platforms.zhaopin.manual_window_closed_at,'saved-zhaopin');
+assert.equal(status.platforms.deepseek.manual_window_closed_at,'existing');
+console.log(JSON.stringify({ok:true,checks:['concurrent platform updates preserved','failed launch not saved','previous timestamp retained for audit','other sessions unchanged']}));

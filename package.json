@@ -1,0 +1,16 @@
+{
+  "name": "job-collector-to-analysis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "本机岗位采集、数据去重、标注与岗位市场洞察控制台",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node job_collector_ui/server.mjs",
+    "test": "node scripts/run-unit-tests.mjs"
+  },
+  "dependencies": { "playwright": "1.62.1" },
+  "peerDependencies": { "@oai/artifact-tool": "2.8.59" },
+  "peerDependenciesMeta": { "@oai/artifact-tool": { "optional": true } }
+}

@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>岗位采集控制台</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%2383ded0%22/><text x=%2214%22 y=%2241%22 font-size=%2226%22 font-family=%22Arial%22 font-weight=%22700%22 fill=%22%230d3735%22>JC</text></svg>" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">JC</div>
+        <div><strong>Job Collector</strong><span>岗位采集控制台</span></div>
+      </div>
+      <nav>
+        <a class="nav-item active" href="/tasks" data-view="tasks"><span>▦</span> 任务中心</a>
+        <a class="nav-item" href="/platforms" data-view="platforms"><span>◉</span> 平台登录</a>
+        <a class="nav-item" href="/labels" data-view="labels"><span>◇</span> AI打标</a>
+        <a class="nav-item" href="/insights" data-view="insights"><span>⌁</span> 岗位洞察</a>
+        <button class="nav-item" id="showGuide"><span>?</span> 使用与安全</button>
+      </nav>
+      <div class="sidebar-note">
+        <span class="pulse"></span>
+        <div><strong>本地运行</strong><small>仅监听 127.0.0.1<br />登录态不会上传</small></div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">LOCAL DATA WORKSPACE</p>
+          <h1 id="pageTitle">采集任务</h1>
+        </div>
+        <button class="primary" id="newTaskBtn"><span>＋</span> 新建采集任务</button>
+      </header>
+
+      <div id="tasksView" class="app-view">
+        <section class="stats" id="stats"></section>
+
+        <section class="workspace">
+          <div class="task-panel card">
+            <div class="panel-head">
+              <div><h2>任务列表</h2><p>同一输出目录可自动续爬</p></div>
+              <button class="icon-button" id="refreshBtn" title="刷新">↻</button>
+            </div>
+            <div class="task-list" id="taskList"></div>
+          </div>
+
+          <div class="detail card" id="detail">
+            <div class="empty-state">
+              <div class="empty-icon">⌁</div>
+              <h2>选择一个任务</h2>
+              <p>查看进度、运行日志并管理采集流程</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="platformsView" class="app-view hidden">
+        <section class="page-intro card"><div><h2>平台登录状态</h2><p>招聘平台与AI聊天平台使用独立本机配置目录。登录、验证码和安全验证均由人工完成。</p></div><button class="ghost" id="refreshPlatforms">刷新状态</button></section>
+        <section class="platform-groups" id="platformGroups"></section>
+      </div>
+
+      <div id="labelsView" class="app-view hidden">
+        <section class="label-stats stats" id="labelStats"></section>
+        <section class="workspace">
+          <div class="task-panel card">
+            <div class="panel-head"><div><h2>打标任务</h2><p>支持断点续标与结果复核</p></div><button class="icon-button" id="refreshLabels" title="刷新">↻</button></div>
+            <div class="task-list" id="labelList"></div>
+          </div>
+          <div class="detail card" id="labelDetail"><div class="empty-state"><div class="empty-icon">◇</div><h2>选择一个打标任务</h2><p>查看标注进度、质量指标和日志</p></div></div>
+        </section>
+      </div>
+
+      <div id="insightsView" class="app-view hidden">
+        <section class="insight-toolbar card">
+          <div class="insight-toolbar-copy">
+            <p class="eyebrow">JOB MARKET INTELLIGENCE</p>
+            <h2>岗位市场洞察</h2>
+            <p>全量匹配岗位数据，分析技能组合、薪资关联、需求画像、城市分布、行业和工作内容。结果属于招聘需求分析，不构成涨薪承诺。</p>
+          </div>
+          <form id="insightForm" class="insight-form">
+            <label class="wide">已发现的岗位数据集<select id="insightDataset"><option value="">正在扫描测试采集数据集…</option></select></label>
+            <small class="wide insight-report-source" id="insightCatalogNote">仅展示最终整合数据集，原始文件与历史版本保留。</small>
+            <label class="wide">输入数据（XLSX / 标准化 CSV）<input name="inputFile" required placeholder="请选择数据集或输入本机 XLSX / CSV 路径" /></label>
+            <small class="wide insight-report-source" id="insightTransferSource"></small>
+            <label>指定岗位 / 岗位族（可选）<input name="role" value="自动识别" placeholder="如爬虫工程师、ai漫剧师" /><small>已知岗位按岗位族匹配；其他名称按字面关键词匹配，不会自动换成其他岗位。</small></label>
+            <small class="wide insight-report-source">默认全量匹配，自动识别工作表并使用同源标签；筛选后生成分析，不修改原始数据。</small>
+            <button class="primary" id="runInsight" type="submit">生成全量分析</button>
+          </form>
+        </section>
+        <section id="insightStatus" class="insight-status"></section>
+        <section id="insightDashboard" class="insight-dashboard"></section>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="taskDialog">
+    <form id="taskForm">
+      <div class="dialog-head">
+        <div><p class="eyebrow">NEW COLLECTION</p><h2>新建采集任务</h2></div>
+        <button type="button" class="close" data-close>×</button>
+      </div>
+
+      <div class="steps">
+        <span class="active">1 基本信息</span><span>2 渠道与城市</span><span>3 数据规则</span>
+      </div>
+
+      <div class="form-grid">
+        <label>岗位名称<input name="label" required placeholder="例如：Java开发工程师" /></label>
+        <label>主关键词<input name="primaryKeyword" required placeholder="例如：Java开发" /></label>
+        <label class="wide">扩展关键词 <small>换行或逗号分隔</small><textarea name="keywords" rows="2" placeholder="Java工程师, Java后端, Spring Boot开发"></textarea></label>
+        <label>目标数据量<input name="targetRows" type="number" min="1" max="100000" value="5000" /></label>
+        <label>候选池目标<input name="candidateTarget" type="number" min="1" max="150000" value="7800" /></label>
+      </div>
+
+      <div class="section-title"><span>采集渠道</span><small>公开渠道与登录渠道可并行补充</small></div>
+      <div class="check-grid" id="platformChecks">
+        <label class="check-card"><input type="checkbox" name="platforms" value="shixiseng" checked /><span><b>实习僧</b><small>公开详情 · 实习岗位</small></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="iguopin" checked /><span><b>国聘</b><small>公开接口 · 字段完整</small></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="mohrss" checked /><span><b>公共招聘网</b><small>公开页面 · 补充渠道</small></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="zhaopin" checked /><span><b>智联招聘</b><small>需人工登录 · 主力渠道</small></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="yupao" /><span><b>鱼泡直聘</b><small>高验证风险 · 蓝领补充</small></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="boss" /><span><b>BOSS直聘</b><small>试验接入 · 需人工登录 · 首轮最多100条</small></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="job51" /><span><b>前程无忧</b><small>实验渠道 · 可能验证</small></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="jobonline" /><span><b>就业在线</b><small>公开列表与详情 · 全国检索 · 首轮最多1000条</small></span></label>
+      </div>
+
+      <div class="section-title"><span>智联采集城市</span><small>批量关键词 × 城市</small></div>
+      <div class="city-grid" id="cityChecks"></div>
+
+      <div class="form-grid compact">
+        <label>采集节奏<select name="pace"><option value="safe">稳健（最低频）</option><option value="balanced" selected>均衡（推荐）</option><option value="fast">较快（公开渠道）</option></select></label>
+        <label>输出目录 <small>留空则保存到桌面</small><input name="outputDir" placeholder="C:\Users\...\Desktop\岗位数据" /></label>
+        <label class="wide">附加结果目录 <small>仅接受带相同任务 ID 的源目录；历史数据请在岗位洞察中单独选择</small><textarea name="sourceDirectories" rows="2" placeholder="可选：同一任务的源目录"></textarea></label>
+      </div>
+
+      <p>采集交付不做岗位相关性过滤，保留有效去重候选。目标岗位由岗位洞察的关键词规则与扩展算法筛选。</p>
+
+      <div class="dialog-actions">
+        <button type="button" class="ghost" data-close>取消</button>
+        <button class="primary" type="submit">创建任务</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="labelDialog">
+    <form id="labelForm">
+      <div class="dialog-head"><div><p class="eyebrow">NEW LABELING JOB</p><h2>新建AI打标任务</h2></div><button type="button" class="close" data-close-label>×</button></div>
+      <div class="form-grid label-form-grid">
+        <label class="wide">选择已有采集数据<select id="labelDataset"><option value="">手工填写数据路径</option></select></label>
+        <label class="wide">输入数据（XLSX / 标准化 CSV）<input name="inputFile" required placeholder="输入本机 XLSX / CSV 路径" /></label>
+        <label>工作表<input name="sheetName" value="岗位数据" /></label>
+        <label>目标岗位族<input name="jobFamily" required placeholder="例如：爬虫/数据采集或智能体/大模型应用" /></label>
+        <label>标注平台<select name="platform"><option value="rules">本地规则预标注（不联网测试）</option><option value="deepseek">DeepSeek</option><option value="kimi">Kimi</option><option value="tongyi">通义</option><option value="zhipu">智谱清言</option><option value="doubao">豆包</option></select></label>
+        <label>测试/标注数量<input name="sampleSize" type="number" min="1" max="20000" value="20" /></label>
+        <label>每批岗位数<input name="batchSize" type="number" min="1" max="5" value="3" /></label>
+        <label>批次最短冷却（秒）<input name="cooldownSeconds" type="number" min="15" max="300" value="30" /><small>Kimi 强制单条且至少 30 秒，另有错峰与定期休息</small></label>
+        <label class="wide">输出目录 <small>留空则在源文件旁自动创建独立目录；指定时须为空</small><input name="outputDir" placeholder="可选：C:\...\AI打标结果" /></label>
+      </div>
+      <div class="safety compact-safety"><b>限速与数据最小化</b><p>不提交公司名称、招聘者、电话或链接。每平台仅一个任务；容量不足、额度限制或安全验证即暂停，断点续标。不伪装指纹或添加无关问题规避限制。</p></div>
+      <div class="dialog-actions"><button type="button" class="ghost" data-close-label>取消</button><button class="primary" type="submit">创建任务</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="guideDialog" class="guide-dialog">
+    <div class="dialog-head"><div><p class="eyebrow">QUICK GUIDE</p><h2>使用与安全</h2></div><button class="close" data-close-guide>×</button></div>
+    <div class="guide-content">
+      <ol>
+        <li><b>创建任务</b><span>填写岗位关键词、目标数量、城市与渠道。每个岗位使用独立输出目录。</span></li>
+        <li><b>登录一次</b><span>打开对应平台的共享浏览器，人工登录和验证后保持窗口开启；采集复用同一实例。各平台使用独立配置目录，不接管日常浏览器。</span></li>
+        <li><b>开始或分步运行</b><span>“全部运行”依次采集、合并、导出；也可单独运行公开渠道或智联。</span></li>
+        <li><b>暂停与续爬</b><span>暂停后再次运行同一阶段即可续爬。当前未落盘的小段可能重采，最终会自动去重。</span></li>
+        <li><b>合并结果</b><span>“合并去重”读取任务目录及附加目录中的标准化 CSV，以“平台 + 岗位ID”去重并做相关度排序。</span></li>
+      </ol>
+      <div class="safety"><b>账号保护原则</b><p>智联和鱼泡分别限制为单一采集进程；验证码和鱼泡滑块只由人工处理；低频随机间隔，不导出 Cookie/令牌，不伪造设备指纹。鱼泡更容易触发验证，出现验证页时请暂停并重新人工验证。</p></div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast"></div>
+  <script src="/vendor/d3.min.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+import { chromium } from 'playwright';
+import assert from 'node:assert/strict';
+
+const insight = await (await fetch('http://127.0.0.1:8765/api/insights')).json();
+const model = insight.report?.salary_model;
+assert.equal(insight.report?.version, 'job-market-insight-v7');
+assert.equal(model?.status, 'ready');
+assert.ok(model?.selection?.candidate_metrics?.length >= 8);
+assert.equal(model?.version, 'conditional-salary-selected-v6');
+assert.equal(model.coefficients.length, model.feature_names.length);
+assert.equal(model.baseline_coefficients.length, model.feature_names.length);
+
+const browser = await chromium.launch({ headless: true, executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN' });
+const errors = [];
+page.on('pageerror', (error) => errors.push(error.message));
+await page.goto('http://127.0.0.1:8765/', { waitUntil: 'networkidle' });
+await page.locator('[data-view="insights"]').click();
+await page.locator('#salaryEstimator').waitFor();
+const read = async () => ({ estimate: await page.locator('#salaryEstimateValue').innerText(), support: await page.locator('#salaryEstimateSupport').innerText() });
+const before = await read();
+const firstSkill = await page.locator('[data-salary-skill]').first().inputValue();
+await page.locator('[data-salary-skill]').first().locator('..').click();
+const withSkill = await read();
+await page.locator('#clearSalarySkills').click();
+const cleared = await read();
+assert.equal(errors.length, 0);
+assert.notEqual(withSkill.support, before.support);
+if (!model.selection.skill_model_selected) assert.match(withSkill.estimate, /K\/月|暂无可靠估价/);
+assert.deepEqual(cleared, before);
+console.log(JSON.stringify({ role: insight.report.role, selected_model: model.selection.selected, firstSkill, before, withSkill, errors }, null, 2));
+await browser.close();
