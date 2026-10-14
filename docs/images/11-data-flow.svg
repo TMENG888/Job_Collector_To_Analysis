@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="570" viewBox="0 0 1100 570">
+<title>岗位系统原生知识库与采集确认数据通路</title>
+<desc>采集适配器写入任务数据库，归集中央知识库供洞察、打标和助手读取。采集助手写操作必须按钮确认。</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L8 3L0 6" fill="#148777"/></marker></defs>
+<rect width="1100" height="570" rx="22" fill="#f4f7f5"/>
+<g font-family="'Microsoft YaHei',sans-serif" fill="#243a35">
+<text x="45" y="52" font-size="26" font-weight="700">统一数据通路 · 不需要 CSV 中转</text>
+<text x="45" y="83" font-size="15" fill="#667b74">平台＋岗位 ID 精确去重；固定内容版本；不同平台仍可能重复</text>
+<g stroke="#d0dfd8" fill="white">
+<rect x="45" y="130" width="200" height="110" rx="14"/><rect x="295" y="130" width="210" height="110" rx="14"/>
+<rect x="560" y="130" width="240" height="110" rx="14"/><rect x="855" y="115" width="200" height="64" rx="14"/>
+<rect x="855" y="195" width="200" height="64" rx="14"/><rect x="855" y="275" width="200" height="64" rx="14"/>
+<rect x="45" y="385" width="200" height="95" rx="14"/><rect x="295" y="385" width="210" height="95" rx="14"/>
+<rect x="560" y="385" width="240" height="95" rx="14"/>
+</g>
+<g font-size="19" text-anchor="middle">
+<text x="145" y="173">平台适配器／断点</text><text x="400" y="173">任务 SQLite</text>
+<text x="680" y="173">中央 SQLite / WAL</text><text x="955" y="153">洞察固定快照</text>
+<text x="955" y="233">打标与人工复核</text><text x="955" y="313">助手只读工具</text>
+<text x="145" y="423">聊天准备方案</text><text x="400" y="423">人工按钮确认</text><text x="680" y="423">采集中心业务接口</text>
+</g>
+<g font-size="14" text-anchor="middle" fill="#667b74">
+<text x="145" y="205">有界并发 · 账号锁</text><text x="400" y="205">原子写入 · 丰富字段保留</text><text x="680" y="205">增量归集约 15 秒 · 内容版本</text>
+<text x="145" y="452">不执行 · 10 分钟有效</text><text x="400" y="452">绑定会话与任务 · 防重复</text><text x="680" y="452">创建 / 启停 / 续采 / 下载</text>
+</g>
+<g fill="none" stroke="#148777" stroke-width="2.5" marker-end="url(#arrow)">
+<path d="M245 185H289"/><path d="M505 185H554"/><path d="M800 147H849"/>
+<path d="M800 207H824V227H849"/><path d="M800 225H820V307H849"/>
+<path d="M245 430H289"/><path d="M505 430H554"/><path d="M680 385V290H145V246"/>
+</g>
+<text x="45" y="535" font-size="15" fill="#667b74">CSV / Excel 为可选导出或手工导入；验证人工处理；回执只代表提交，完成状态需再次查询。</text>
+</g></svg>

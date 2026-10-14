@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-set "JOB_UI_PORT=8765"
+if not defined JOB_UI_PORT set "JOB_UI_PORT=8765"
 set "JOB_UI_OPEN_BROWSER=1"
 set "JOB_NODE="
 

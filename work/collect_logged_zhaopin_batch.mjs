@@ -6,11 +6,18 @@ import {writeAtomic,writeJsonAtomic} from './collector_storage.mjs';
 import {zhaopinCheckpoint} from './zhaopin_checkpoint.mjs';
 import {assertListPage,parseZhaopinList} from './list_page_guard.mjs';
 import {createManualSearchSession} from './manual_search_session.mjs';
+import {collectionExitCode} from './collection_policy.mjs';
+import {otherChannelValidCount,validJobRecord} from './task_collection_target.mjs';
+import {YieldWindow,yieldNote} from './collection_yield.mjs';
 
-const outputDir = path.resolve(process.argv[2] || 'outputs');
-const targetUnique = Number(process.argv[3] || 3934);
+const outputDir = path.resolve(process.argv[2] || 'outputs/zhaopin-batch');
+let targetUnique = Number(process.argv[3] || 3934);
 const batchConfigPath = process.argv[4] ? path.resolve(process.argv[4]) : null;
 const batchConfig = batchConfigPath ? JSON.parse(await fs.readFile(batchConfigPath, 'utf8')) : {};
+if(process.env.JOB_COLLECTOR_YIELD_RECOVERY==='1')batchConfig.lowYield={...batchConfig.lowYield,enabled:false};
+const strictTarget=Number(batchConfig.taskTargetRows||0);
+const otherValidRows=strictTarget?await otherChannelValidCount(outputDir,'zhaopin',process.env.JOB_COLLECTOR_TASK_ID||batchConfig.task_id):0;
+if(strictTarget)targetUnique=Math.max(0,strictTarget-otherValidRows);
 const rawDir = path.join(outputDir, '原始数据');
 const checkpointDir = path.join(outputDir, '断点数据', '智联招聘');
 await fs.mkdir(rawDir, { recursive: true });
@@ -45,6 +52,7 @@ function csvEscape(value) {
 }
 
 async function writeCsv(filePath, rows) {
+  if(process.env.JOB_COLLECTOR_NATIVE_STORE==='1'){const {writeNativeChannelRows}=await import('./collector_native_sink.mjs');return writeNativeChannelRows(outputDir,process.env.JOB_COLLECTOR_TASK_ID||batchConfig.task_id,rows);}
   const csv = [columns.join(','), ...rows.map((row) => columns.map((key) => csvEscape(row[key])).join(','))].join('\r\n');
   await writeAtomic(filePath, `\uFEFF${csv}`);
 }
@@ -97,9 +105,27 @@ async function loadExisting() {
 }
 
 const existing = await loadExisting();
+const discoveredIds=new Set(existing.keys());
+const schedulingPath=path.join(checkpointDir,'调度状态.json');
+const taskId=process.env.JOB_COLLECTOR_TASK_ID||batchConfig.task_id;
+const previousSchedule=await fs.readFile(schedulingPath,'utf8').then(JSON.parse).catch(()=>null);
+const combinations=keywords.flatMap(keyword=>cities.map(city=>({keyword,city})));
+const priority=new Set((previousSchedule?.task_id===taskId?previousSchedule.remaining||[]:[]).map(row=>JSON.stringify([row.keyword,row.city.name])));
+combinations.sort((a,b)=>Number(priority.has(JSON.stringify([b.keyword,b.city.name])))-Number(priority.has(JSON.stringify([a.keyword,a.city.name]))));
+let lowStreak=0,platformDeferred=false;
+function normalizedRows(current=null) {
+  const combined=new Map(existing);
+  if(current)for(const row of current.records.values()) {
+    const id=row.number||String(row.jobId||'');
+    if(id)combined.set(id,{raw:row,keyword:current.keyword,cityName:current.city.name,total:current.total,collectedAt:new Date().toISOString()});
+  }
+  const rows=[...combined.values()].map(item=>normalize(item.raw,item.keyword,item.cityName,item.total,item.collectedAt));
+  return strictTarget?rows.filter(validJobRecord):rows;
+}
+const enough=current=>normalizedRows(current).length>=targetUnique;
 console.log(`智联断点载入：${existing.size}/${targetUnique}`);
-if (existing.size >= targetUnique) {
-  const rows = [...existing.values()].slice(0, targetUnique).map((item) => normalize(item.raw, item.keyword, item.cityName, item.total, item.collectedAt));
+if (enough()) {
+  const rows = normalizedRows().slice(0,targetUnique);
   await writeCsv(path.join(outputDir, 'zhaopin_标准化数据.csv'), rows);
   console.log(JSON.stringify({ platform: '智联招聘', collected: rows.length, resumed: true, outputDir }));
   process.exit(0);
@@ -112,7 +138,7 @@ let page;
 try { page = context.pages()[0] || await context.newPage(); }
 catch(error) { await context.close().catch(()=>{}); console.error(error.message); process.exit(42); }
 page.setDefaultTimeout(20000);
-const manualSession=await createManualSearchSession(outputDir,process.env.JOB_COLLECTOR_TASK_ID||batchConfig.task_id||'',page,{instanceId:context.managedSession?.session_id});
+const manualSession=await createManualSearchSession(outputDir,process.env.JOB_COLLECTOR_TASK_ID||batchConfig.task_id||'',page,{instanceId:context.managedSession?.session_id,onBlocked:batchConfig.onBlocked||process.env.JOB_COLLECTOR_BLOCKED_POLICY||'wait'});
 let active = null;
 let checkpointFailure = null;
 let pendingCheckpoint = Promise.resolve();
@@ -141,6 +167,13 @@ page.on('response', async (response) => {
     active.endPage = parsed.endPage;
     const postData = response.request().postDataJSON?.() || {};
     active.lastPageIndex = Math.max(active.lastPageIndex, Number(postData.pageIndex || 0));
+    // Count each real response page once, not scroll attempts or delayed retries.
+    const pageIndex=Number(postData.pageIndex);
+    if(Number.isFinite(pageIndex) && !active.observedPages.has(pageIndex)) {
+      active.observedPages.add(pageIndex);
+      const probe=active.yieldWindow.observe((data.list||[]).map(row=>row.number||row.jobId));
+      if(probe.defer)active.lowYield=probe;
+    }
     for (const row of data.list || []) {
       const id = row.number || String(row.jobId || '');
       if (id) active.records.set(id, row);
@@ -150,9 +183,8 @@ page.on('response', async (response) => {
 });
 
 try {
-  outer: for (const keyword of keywords) {
-    for (const city of cities) {
-      if (existing.size >= targetUnique) break outer;
+  outer: for (const [comboIndex,{keyword,city}] of combinations.entries()) {
+      if (enough()) break outer;
       await assertCollectorResources();
       const checkpointPath = path.join(checkpointDir, `${safeName(keyword)}_${safeName(city.name)}.json`);
       let savedCheckpoint = null;
@@ -177,6 +209,7 @@ try {
         total: Number(savedCheckpoint?.total || 0), endPage: false,
         lastPageIndex: Number(savedCheckpoint?.last_page_index || 1),
         validResponse:false,explicitEmpty:false,responseError:'',
+        yieldWindow:new YieldWindow(discoveredIds,batchConfig.lowYield),observedPages:new Set(),lowYield:null,
       };
       const resumeSize = current.records.size;
       active = current;
@@ -199,29 +232,32 @@ try {
       persistPage(current);
 
       let stagnant = 0;
-      for (let attempt = 0; attempt < 80 && !current.explicitEmpty && !current.endPage && (!current.total || current.records.size < current.total); attempt += 1) {
+      for (let attempt = 0; attempt < 80 && !enough(current) && !current.explicitEmpty && !current.endPage && (!current.total || current.records.size < current.total); attempt += 1) {
         await manualSession.guard(current);
         if(current.responseError)throw new Error(current.responseError);
+        if(current.lowYield){console.log(`[低收益切换] 智联 ${keyword}/${city.name}: ${yieldNote(current.lowYield)}`);break;}
         if(checkpointFailure)throw checkpointFailure;
         if(attempt%3===0)await assertCollectorResources();
         const prompt=await page.locator('.geetest_panel, .verify-wrap, .captcha-dialog, .login-dialog').filter({visible:true}).allInnerTexts();
         const reason=blockedReason(prompt.join('\n'));
         if(reason)await manualSession.guard(current,reason);
         const before = current.records.size;
+        const beforePages=current.observedPages.size;
         await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })).catch(() => {});
         await sleep(500 + Math.floor(Math.random() * 350));
         await page.mouse.wheel(0, 1600 + Math.floor(Math.random() * 500)).catch(() => {});
         await sleep(1500 + Math.floor(Math.random() * 900));
-        stagnant = current.records.size === before ? stagnant + 1 : 0;
+        // Replaying saved pages is progress, not a stuck browser.
+        stagnant = current.records.size === before && current.observedPages.size===beforePages ? stagnant + 1 : 0;
         if ((attempt + 1) % 3 === 0 || current.endPage) {
           console.log(`智联 ${keyword}/${city.name}: ${current.records.size}/${current.total || '?'}，页 ${current.lastPageIndex}`);
         }
-        if (stagnant >= 6) break;
+        if (stagnant >= 6) {current.lowYield={records:0,newRows:0,reason:'scroll_stagnant'};console.log(`[检索暂缓] 智联 ${keyword}/${city.name} 连续6次滚动无新记录，保存断点后切换，不认定穷尽`);break;}
       }
       await manualSession.guard(current);
       if(current.responseError)throw new Error(current.responseError);
       if(!current.validResponse)throw new Error(`智联 ${keyword}/${city.name} 未收到有效职位响应，不能将 0/? 或历史缓存判定为采集完成`);
-      if(!current.explicitEmpty && !current.endPage && !(current.total>0&&current.records.size>=current.total))
+      if(!current.lowYield && !enough(current) && !current.explicitEmpty && !current.endPage && !(current.total>0&&current.records.size>=current.total))
         throw new Error(`智联 ${keyword}/${city.name} 列表停滞且未确认采集穷尽，已保留断点`);
 
       const collectedAt = new Date().toISOString();
@@ -230,10 +266,11 @@ try {
       const rawRecords = [...current.records.values()];
       const totalReached = current.total > 0 && rawRecords.length >= current.total;
       const completed = current.explicitEmpty || current.endPage || totalReached;
-      const completionReason = current.explicitEmpty ? 'confirmed_empty' : current.endPage ? 'end_page' : totalReached ? 'total_reached' : 'stagnant_or_page_limit';
+      const completionReason = current.explicitEmpty ? 'confirmed_empty' : current.endPage ? 'end_page' : totalReached ? 'total_reached' : current.lowYield ? 'low_yield_deferred' : 'stagnant_or_page_limit';
       await writeJsonAtomic(checkpointPath, {
         keyword, city, total: current.total, complete: completed, end_page: current.endPage,
         completion_reason: completionReason, last_page_index: current.lastPageIndex,
+        low_yield:current.lowYield,
         resumed_from: resumeSize, new_records: Math.max(0, rawRecords.length - resumeSize),
         collected_at: collectedAt, records: rawRecords,
       });
@@ -245,32 +282,47 @@ try {
         const id = row.number || String(row.jobId || '');
         if (id && !existing.has(id)) existing.set(id, { raw: row, keyword, cityName: city.name, total: current.total, collectedAt });
       }
-      const snapshot = [...existing.values()].slice(0, targetUnique).map((item) => normalize(item.raw, item.keyword, item.cityName, item.total, item.collectedAt));
+      const snapshot = normalizedRows().slice(0,targetUnique);
       await writeCsv(path.join(outputDir, 'zhaopin_标准化数据.csv'), snapshot);
       console.log(`智联合并进度：${existing.size}/${targetUnique}（本组合 ${rawRecords.length} 条）`);
+      lowStreak=current.lowYield?lowStreak+1:0;
       active = null;
-      if (existing.size >= targetUnique) break outer;
+      if (enough()) break outer;
+      if(lowStreak>=3){
+        platformDeferred=true;
+        await writeJsonAtomic(schedulingPath,{task_id:taskId,reason:'low_yield_deferred',remaining:combinations.slice(comboIndex+1),at:new Date().toISOString()});
+        console.log(`[平台让位] 智联连续3个条件低收益，本轮保存数据并释放账号；下次优先恢复未处理条件`);
+        break outer;
+      }
       await sleep(4200 + Math.floor(Math.random() * 2400));
-    }
   }
+  if(!platformDeferred)await writeJsonAtomic(schedulingPath,{task_id:taskId,remaining:[],at:new Date().toISOString()});
 } catch(error) {
   await pendingCheckpoint;
-  if(active)await flushCheckpoint(active).catch(e=>console.error('断点保存失败：'+e.message));
-  await writeJsonAtomic(path.join(outputDir,'智联招聘_暂停原因.json'),{keyword:active?.keyword,city:active?.city,stage:'列表采集',reason:error.message,url:page.url(),updated_at:new Date().toISOString()}).catch(()=>{});
+  process.exitCode=collectionExitCode(checkpointFailure||error);
+  if(active) {
+    await flushCheckpoint(active).catch(e=>{console.error('断点保存失败：'+e.message);process.exitCode=collectionExitCode(e);});
+    for(const row of active.records.values()) {
+      const id=row.number||String(row.jobId||'');
+      if(id)existing.set(id,{raw:row,keyword:active.keyword,cityName:active.city.name,total:active.total,collectedAt:new Date().toISOString()});
+    }
+  }
+  await writeJsonAtomic(path.join(outputDir,'智联招聘_暂停原因.json'),{task_id:process.env.JOB_COLLECTOR_TASK_ID||batchConfig.task_id||'',code:error.code||'collection_error',keyword:active?.keyword,city:active?.city,stage:'列表采集',reason:error.message,url:page.url(),updated_at:new Date().toISOString()}).catch(e=>{console.error(e.message);process.exitCode=42;});
   console.error(error.message);
-  process.exitCode=error.code==='RESOURCE_PRESSURE'?43:42;
 } finally {
   active = null;
   await manualSession.close().catch(()=>{});
   await context.close().catch(() => {});
 }
 
-if(!process.exitCode){
-const finalRows = [...existing.values()].slice(0, targetUnique).map((item) => normalize(item.raw, item.keyword, item.cityName, item.total, item.collectedAt));
+try {
+const finalRows = normalizedRows().slice(0,targetUnique);
 await writeCsv(path.join(outputDir, 'zhaopin_标准化数据.csv'), finalRows);
 await writeJsonAtomic(path.join(outputDir, '智联招聘_采集状态.json'), {
   target_unique: targetUnique, collected_unique: existing.size, output_rows: finalRows.length,
-  completed: finalRows.length >= targetUnique, updated_at: new Date().toISOString(),
+  task_id:process.env.JOB_COLLECTOR_TASK_ID||batchConfig.task_id||'',paused:Boolean(process.exitCode),
+  task_target_rows:strictTarget||null,other_channel_valid_rows:otherValidRows,valid_output_rows:finalRows.filter(validJobRecord).length,
+  completed: !process.exitCode && finalRows.length >= targetUnique, updated_at: new Date().toISOString(),
 });
 console.log(JSON.stringify({ platform: '智联招聘', target: targetUnique, unique: existing.size, outputRows: finalRows.length, outputDir }));
-}
+}catch(error){console.error(error.message);process.exitCode=42;}

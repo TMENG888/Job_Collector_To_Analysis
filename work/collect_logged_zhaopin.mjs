@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
 import {openContext} from './browser_public_channels.mjs';
 
-const outputDir = path.resolve(process.argv[2] || 'outputs');
+const outputDir = path.resolve(process.argv[2] || 'outputs/zhaopin');
 const keyword = process.argv[3] || '智能体开发';
 const cityName = process.argv[4] || '广州';
 const cityCode = process.argv[5] || '763';

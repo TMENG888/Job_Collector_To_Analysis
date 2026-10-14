@@ -1,0 +1,33 @@
+import http from 'node:http';
+import assert from 'node:assert/strict';
+import {createAssistantHandler} from './job_assistant_http.mjs';
+import {createAssistantIndex} from './job_decision_assistant.mjs';
+const report={role:'智能体/大模型应用',generated_at:'2026-10-12',cohort_observations:[{row_no:2,job_id:'1',job_name:'智能体工程师',city:'北京',experience:'1-3年',education:'本科',skills:['Python','RAG'],salary_midpoint_k:20}]};
+const index=createAssistantIndex(report,[{job_id:'1',job_name:'智能体工程师',job_description:'负责Python和RAG智能体开发'}]);
+let saved;
+const handler=createAssistantHandler({load:async()=>index},{status:async()=>({configured:!!saved,provider:'DeepSeek',model:saved?.model||''}),save:async body=>{saved=body;return {configured:true,provider:'DeepSeek',model:body.model};},load:async()=>({})});
+const server=http.createServer(async(req,res)=>{if(!await handler(req,res,new URL(req.url,'http://localhost').pathname)){res.writeHead(404);res.end();}});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const base=`http://127.0.0.1:${server.address().port}`;
+try{
+  const meta=await (await fetch(base+'/api/assistant/context')).json();assert.equal(meta.indexed_jobs,1);assert.equal(meta.verified_sources,1);
+  let response=await fetch(base+'/api/assistant/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'match',resume:'我有Python项目经验',question:'北京岗位'})});
+  assert.equal(response.status,200);let result=await response.json();assert.equal(result.sources[0].coverage,.5);assert.equal(result.statistics.median_salary_k,null);assert.ok(!JSON.stringify(result).includes('我有Python项目经验'));
+  response=await fetch(base+'/api/assistant/ask',{method:'POST',body:'{}'});assert.equal(response.status,415);
+  response=await fetch(base+'/api/assistant/ask',{method:'POST',headers:{'content-type':'application/json'},body:'invalid'});assert.equal(response.status,400);
+  response=await fetch(base+'/api/assistant/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'search',filters:{years:-5}})});assert.equal(response.status,400);
+  response=await fetch(base+'/api/assistant/model',{method:'POST',headers:{'content-type':'application/json',origin:'https://evil.example'},body:'{}'});assert.equal(response.status,403);assert.equal(saved,undefined);
+  response=await fetch(base+'/api/assistant/model',{method:'POST',headers:{'content-type':'application/json',origin:'http://127.0.0.1:8788'},body:JSON.stringify({provider:'deepseek',model:'deepseek-flash',apiKey:'test-only-not-real'})});assert.equal(response.status,200);
+  assert.ok(!(await response.text()).includes('test-only-not-real'));
+  response=await fetch(base+'/api/assistant/model');assert.ok(!(await response.text()).includes('apiKey'));
+  response=await fetch(base+'/api/assistant/model',{method:'POST',headers:{'content-type':'application/json'},body:'null'});assert.equal(response.status,400);
+  response=await fetch(base+'/api/assistant/model',{method:'POST',headers:{'content-type':'application/json'},body:'invalid-secret-placeholder'});assert.equal(response.status,400);assert.ok(!(await response.text()).includes('secret-placeholder'));
+  const send=async body=>{const response=await fetch(base+'/api/assistant/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});assert.equal(response.status,200);return response.json();};
+  const first=await send({message:'找北京本科岗位'});assert.equal(first.filters.city,'北京');assert.equal(first.result.scope.matched_jobs,1);
+  const next=await send({message:'换成上海',conversationId:first.conversationId});assert.equal(next.filters.city,'上海');assert.equal(next.filters.education,'本科');assert.equal(next.result.scope.matched_jobs,0);
+  response=await fetch(base+'/api/assistant/reset',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({conversationId:first.conversationId})});assert.equal(response.status,200);
+  response=await fetch(base+'/api/assistant/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:'继续',conversationId:first.conversationId})});assert.equal(response.status,400);
+  response=await fetch(base+'/api/assistant/attachment',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({filename:'test.txt',base64:Buffer.from('简历：Python项目经验').toString('base64')})});assert.equal(response.status,200);assert.match((await response.json()).text,/Python/);
+  response=await fetch(base+'/api/assistant/attachment',{method:'POST',headers:{'content-type':'application/json',origin:'https://evil.example'},body:'{}'});assert.equal(response.status,403);
+  console.log('PASS: assistant context/ask API, no raw resume echoed, source evidence, sparse salary gate, JSON-only input and validation');
+}finally{await new Promise(resolve=>server.close(resolve));}

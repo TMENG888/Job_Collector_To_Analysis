@@ -6,10 +6,11 @@ import {assertListPage} from './list_page_guard.mjs';
 import {blockedReason} from './browser_public_channels.mjs';
 
 export const sessionFileName=platform=>`${platform==='yupao'?'鱼泡直聘':'智联招聘'}_浏览器会话.json`;
-export async function createManualSearchSession(outputDir, taskId, page, {pollMs=1000,platform='zhaopin',settleMs=15000,instanceId=null}={}) {
+export async function createManualSearchSession(outputDir, taskId, page, {pollMs=1000,platform='zhaopin',settleMs=15000,instanceId=null,onBlocked=process.env.JOB_COLLECTOR_BLOCKED_POLICY||'wait'}={}) {
   const file=path.join(outputDir,sessionFileName(platform));
   const confirmation=file+'.confirm.json';
   const state={task_id:taskId,session_id:randomUUID(),pid:process.pid,platform,browser_instance_id:instanceId,
+    coordinator_pid:Number(process.env.JOB_COLLECTOR_COORDINATOR_PID)||null,
     login_status:'unknown',verification_status:'unchecked',browser_open:true};
   async function save(patch){Object.assign(state,patch,{updated_at:new Date().toISOString()});await writeJsonAtomic(file,state);}
   async function checkPage(){
@@ -29,7 +30,14 @@ export async function createManualSearchSession(outputDir, taskId, page, {pollMs
         }
       }
       try {if(forcedReason)throw Object.assign(Error(forcedReason),{code:'USER_ACTION_REQUIRED'});await checkPage();await save({verification_status:'clear',url:page.url(),keyword:current.keyword,city:current.city});return;}
-      catch(error){if(error.code!=='USER_ACTION_REQUIRED')throw error;}
+      catch(error){
+        if(error.code!=='USER_ACTION_REQUIRED')throw error;
+        if(onBlocked==='skip') {
+          await save({verification_status:'waiting_human',reason:error.message,url:page.url(),keyword:current.keyword,city:current.city});
+          console.log(`[渠道受阻] ${current.keyword}/${current.city.name}：${error.message}；保存断点并继续其他渠道，浏览器保留供人工处理。`);
+          throw error;
+        }
+      }
       await page.bringToFront();
       let reason='';
       while(!page.isClosed()) {

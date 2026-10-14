@@ -25,7 +25,7 @@ try{
  await page.getByText('本任务尚未生成最终结果',{exact:true}).waitFor();
  assert.ok((await page.locator('#detail').innerText()).includes('候选总量'));
  assert.ok(!(await page.locator('#detail').innerText()).includes('3,150'));
- const create=await fetch(base+'/api/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'同名岗位',primaryKeyword:'同名岗位',platforms:'job51',outputDir:directory,cities:'北京'})});
+ const create=await fetch(base+'/api/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'同名岗位',primaryKeyword:'同名岗位',platforms:'jobonline',outputDir:directory,cities:'北京'})});
  assert.equal(create.status,201);const created=await create.json();
  const newTask=created.task||created;
  assert.notEqual(newTask.outputDir,directory);assert.notEqual(newTask.outputDir,task.outputDir);

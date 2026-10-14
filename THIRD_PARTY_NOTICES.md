@@ -15,3 +15,23 @@ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH RE
 Data source: https://geo.datav.aliyun.com/areas_v3/bound/
 
 See `job_collector_ui/public/maps/source.json` for provenance. No additional license to these data is granted by this repository.
+
+## Marked v18.1.1
+
+`job_collector_ui/public/vendor/marked.esm.js` — https://github.com/markedjs/marked — MIT.
+
+Copyright (c) 2018–2026 MarkedJS; Copyright (c) 2011–2018 Christopher Jeffrey.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## DOMPurify v3.4.17
+
+`job_collector_ui/public/vendor/purify.es.js` — https://github.com/cure53/DOMPurify.
+
+Copyright (c) Cure53 and other contributors. Dual licensed under Apache-2.0 or MPL-2.0.
+Distributed here under Apache-2.0; see [full license](licenses/DOMPurify-Apache-2.0.txt).
+The vendor file retains its original license banner and is not modified.

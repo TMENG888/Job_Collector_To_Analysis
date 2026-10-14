@@ -8,8 +8,8 @@ import { cohortSalaryStatistics, summarizeCohort } from '../job_collector_ui/pub
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = path.join(root, 'job_collector_ui', 'public');
 const port = Number(process.env.JOB_DOCS_PORT || 18979);
-const generatedAt = '2026-10-07T13:00:00+08:00';
-const inputFile = 'D:\\JobCollectorDemo\\demo-agent.csv';
+const generatedAt = '2026-10-14T13:00:00+08:00';
+const inputFile = 'kb://task/docs-demo-agent';
 const cities = ['北京', '上海', '杭州', '深圳'];
 const observations = Array.from({ length: 96 }, (_, i) => ({
   row_no: i + 2, job_id: `DEMO-${i + 1}`, job_name: '智能体应用工程师（合成示例）',
@@ -37,12 +37,27 @@ const report = {
   selection_review: { pending_rows: 0, rows: [], note: '只读演示不包含真实待复核记录。' },
 };
 const task = {
-  id: 'docs-demo-agent', label: '智能体开发（演示）', status: 'completed',
-  targetRows: 120, candidateTarget: 180, message: '合成示例：演示交付已完成，未实际采集',
-  platforms: ['iguopin', 'zhaopin'], cities, pace: 'balanced', outputDir: 'D:\\JobCollectorDemo',
-  metrics: { hasFinalResult: true, finalRows: 120, publicRows: 80, zhaopinRows: 60, yupaoRows: 0, candidates: 140, duplicatesRemoved: 20 },
+  id: 'docs-demo-agent', label: '智能体开发（演示）', status: 'running', currentStage:'collection',
+  targetRows: 200, candidateTarget: 300, message: '合成示例：多平台并发，自动去重入库；未实际采集',
+  platforms: ['shixiseng','iguopin', 'jobonline','job51','zhaopin'], cities, pace: 'balanced', outputDir: 'outputs/demo-agent',
+  metrics: { knowledgeRows:120, hasFinalResult: true, finalRows: 120, publicRows: 80, zhaopinRows: 60, yupaoRows: 0, candidates: 140, duplicatesRemoved: 20,
+    liveCollection:{platformCounts:{shixiseng:40,iguopin:20,jobonline:20,job51:0,zhaopin:60},details:[]}},
 };
-const dataset = { path: inputFile, name: '智能体开发（演示）', format: 'csv', size: 48000, canonical: true, taskId: task.id, expectedRows: 120 };
+const dataset = { path: inputFile, name: '智能体开发（演示）', role:'智能体开发', resolution:'knowledge', format: 'sqlite', size: 0, canonical: true, taskId: task.id, expectedRows: 120 };
+const demoModel={configured:false,provider:'deepseek',model:'deepseek-flash'};
+const sessions=[
+  {id:'docs-compare',title:'智能体与嵌入式怎么选？（演示）',updated:Date.now(),turn_count:1},
+  {id:'docs-collection',title:'测试工程师采集方案（演示）',updated:Date.now()-86400000,turn_count:1},
+];
+const comparisonTurn={conversationId:'docs-compare',execution:'local',answer:'## 先比较需求，再核验具体岗位\n\n下表为**合成演示**，不能用于真实择业结论。\n\n| 方向 | 常见技术 | 招聘月薪中位数 |\n| --- | --- | --- |\n| 智能体应用 | Python、RAG、LLM | 18K |\n| 嵌入式开发 | C/C++、STM32、RTOS | 16K |\n\n技术数量不等于学习难度，招聘月薪也不等于个人可获得薪资。可继续问同城市、经验与学历的岗位证据。',trace:[{tool:'compare_roles',rows:24,status:'ready'}],filters:{},result:{mode:'compare',comparisons:[
+  {role:'智能体/大模型应用',matched_jobs:12,statistics:{valid_salary_rows:12,median_salary_k:18,p25_salary_k:14,p75_salary_k:22}},
+  {role:'嵌入式开发',matched_jobs:12,statistics:{valid_salary_rows:12,median_salary_k:16,p25_salary_k:12,p75_salary_k:20}},
+],notice:'合成数据只读演示；真实比较需核验同条件岗位证据。'}};
+const actionTurn={conversationId:'docs-collection',execution:'local',answer:'已准备采集方案，**尚未执行**。请核对下方关键词、城市、渠道和目标数量；正式服务需点击确认执行。本页只读，按钮不能启动任务。',filters:{},trace:[{tool:'collection_prepare',rows:0,status:'ready'}],result:{action:{
+  id:'docs-action',status:'pending',title:'创建并启动采集',expires_at:Date.now()+10*60000,
+  config:{label:'测试工程师-北京-8000',keywords:['测试工程师'],target_rows:8000,cities:['北京'],platforms:['shixiseng','iguopin','mohrss','jobonline','job51','zhaopin'],pace:'balanced'},
+  warning:'目标不是交付保证；部分公开渠道城市筛选不生效。登录和验证人工处理。本页只读，不能执行采集。',
+}}};
 const platforms = [
   ['zhaopin', '智联招聘', '招聘平台'], ['yupao', '鱼泡直聘', '招聘平台'], ['boss', 'BOSS直聘', '招聘平台'],
   ['liepin', '猎聘', '招聘平台'], ['jobonline', '就业在线', '招聘平台'], ['job51', '前程无忧', '招聘平台'],
@@ -54,6 +69,15 @@ const json = (res, status, value) => { res.writeHead(status, { 'Content-Type': '
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://127.0.0.1:${port}`);
+    // The UI uses POST to read a conversation. Only fixed synthetic replay is allowed.
+    if(req.method==='POST'&&url.pathname==='/api/assistant/session'){
+      let body='';for await(const chunk of req){body+=chunk;if(body.length>1024)return json(res,413,{error:'请求过大'});}
+      let payload;try{payload=JSON.parse(body);}catch{return json(res,400,{error:'无效JSON'});}
+      if(payload.action==='read'&&sessions.some(s=>s.id===payload.id)){
+        const turn=payload.id==='docs-compare'?comparisonTurn:{...actionTurn,result:{action:{...actionTurn.result.action,expires_at:Date.now()+10*60000}}};
+        return json(res,200,{id:payload.id,has_resume:false,turns:[{message:payload.id==='docs-compare'?'智能体岗位和嵌入式岗位有什么区别？（演示）':'创建北京测试工程师采集，目标8000条（演示）',turn}]});
+      }
+    }
     if (req.method !== 'GET') return json(res, 403, { error: '说明书演示为只读模式：不会采集、登录、打标或更改真实数据。' });
     if (url.pathname === '/api/tasks') return json(res, 200, { tasks: [task] });
     if (url.pathname.endsWith('/logs')) return json(res, 200, { content: '[演示] 候选 140 条 → 去重后 120 条。\n[演示] 请在真实任务的交付清单中核对 Excel 与目标数量。\n本页面所有数字均为合成示例，未实际启动采集。' });
@@ -61,10 +85,16 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/labels') return json(res, 200, { jobs: [] });
     if (url.pathname === '/api/state') return json(res, 200, { version: 'docs-readonly-demo', capabilities: {} });
     if (url.pathname === '/api/insights/datasets') return json(res, 200, { datasets: [dataset] });
+    if (url.pathname === '/api/knowledge/datasets') return json(res,200,{catalog:'knowledge-v1',datasets:[dataset]});
+    if (url.pathname.endsWith('/source')) return json(res,200,{taskId:task.id,role:dataset.role,dataset});
+    if (url.pathname === '/api/knowledge/status') return json(res,200,{revision:1,jobs:120});
+    if (url.pathname === '/api/assistant/sessions') return json(res,200,{sessions,persistent:true,collection_flow_version:2});
+    if (url.pathname === '/api/assistant/model') return json(res,200,demoModel);
+    if (url.pathname === '/api/assistant/context') return json(res,200,{knowledge:true,revision:1,candidate_rows:120,indexed_jobs:96,roles:['智能体/大模型应用','嵌入式开发'],model:demoModel,collection_control:true});
     if (url.pathname.endsWith('/insight-source')) return json(res, 200, { dataset });
     if (url.pathname === '/api/insights') return json(res, 200, { status: 'completed', report, config: { inputFile, role: report.role } });
     if (url.pathname.startsWith('/api/')) return json(res, 404, { error: '演示接口不存在' });
-    const pageRoute = /^\/(?:tasks|platforms|labels|insights)(?:\/[^/]+)?\/?$/;
+    const pageRoute = /^\/(?:tasks|platforms|labels|insights|assistant)(?:\/[^/]+)?\/?$/;
     const file = url.pathname === '/' || pageRoute.test(url.pathname) ? 'index.html' : decodeURIComponent(url.pathname).replace(/^\/+/, '');
     const target = path.resolve(publicDir, file);
     if (!target.startsWith(publicDir + path.sep)) return json(res, 403, { error: 'Forbidden' });

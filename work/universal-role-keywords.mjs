@@ -32,13 +32,14 @@ export function learnUniversalRoleKeywords(rows, family, settings = {}) {
     });
     ranked = [...merged.values()].sort((a, b) => b.score - a.score);
   } else ranked = extractKeywords(seeds, rows, negatives, algorithm, 100);
-  const keywords = ranked.map(term => ({ ...term,
+  const displayKeywords = ranked.map(term => ({ ...term,
     lift: (term.seed_df / seeds.length) / (term.background_df / rows.length),
-  })).filter(term => term.seed_df >= Math.max(2, Math.ceil(seeds.length * 0.02)) && term.lift >= 2.5).slice(0, topK);
+  })).filter(term => term.seed_df >= Math.max(2, Math.ceil(seeds.length * 0.02)) && term.lift >= 2.5);
+  const keywords = displayKeywords.slice(0, topK);
   if (keywords.length < minimumHits) throw new Error(`“${family.name}”区分性关键词不足，无法执行统一关键词筛选；请补充目标标题种子或复核岗位名称`);
   const names = { tfidf: 'TF-IDF', textrank: 'TextRank', contrast: '对比关键词', fusion: 'TF-IDF/TextRank融合' };
   return { version: 'universal-role-keywords-v1', family: family.name, algorithm,
-    display_name: `统一岗位关键词＋${names[algorithm]}`, keywords, minimum_hits: minimumHits,
+    display_name: `统一岗位关键词＋${names[algorithm]}`, keywords, display_keywords:displayKeywords.slice(0,100), minimum_hits: minimumHits,
     training_seed_rows: seeds.map(row => row.row_no), rule_seed_candidates: candidates.length,
     training_background_rows: rows.length, cold_start: false,
     seed_source: '目标标题种子，按职责正文去重；查询词和外部标签不参与提词',

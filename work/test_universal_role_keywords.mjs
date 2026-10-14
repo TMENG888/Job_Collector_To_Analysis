@@ -26,6 +26,9 @@ for (const name of roles) {
 }
 for (const algorithm of ['tfidf', 'textrank', 'contrast', 'fusion']) {
   const model = learnUniversalRoleKeywords([...seeds, ...background], literalRoleFamily('智能体开发'), { algorithm });
+  assert.deepEqual(model.keywords, model.display_keywords.slice(0,40));
+  const pollutedDisplay={...model,display_keywords:[{term:'客户拜访',score:100,seed_df:100}]};
+  assert.deepEqual(matchUniversalRoleKeywords(background[0],pollutedDisplay),matchUniversalRoleKeywords(background[0],model),'展示词不得参与筛选');
   assert.equal(matchUniversalRoleKeywords(seeds[0], model).matched, true, algorithm);
   assert.equal(matchUniversalRoleKeywords(row(99, '智能体开发', '无具体职责'), model).matched, false, '标题不能直通');
   assert.equal(matchUniversalRoleKeywords(row(99, 'Python开发', '岗位职责：负责知识检索和工具编排'), model).matched, true, '名称不明确但职责匹配');

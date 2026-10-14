@@ -6,7 +6,7 @@ import { savePlatformLoginStatus } from './platform_login_status.mjs';
 import {connectManagedContext,browserProfileRoot} from './managed_browser.mjs';
 import {navigatePlatformLogin} from './platform_login_navigation.mjs';
 
-const outputDir = path.resolve(process.argv[2] || 'outputs');
+const outputDir = path.resolve(process.argv[2] || 'outputs/login');
 const requested = String(process.argv[3] || 'all').toLowerCase();
 const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const profileRoot = browserProfileRoot();

@@ -11,14 +11,7 @@ const r=row('技术支持','岗位职责：负责剧本工具维护及视频格�
 model.reviewed_overrides={[reviewKey(r)]:{label:'exclude',reason:'已审核为技术维护'}};
 assert.equal(matchKeywordRole(r,model,{applyReviewedLabels:true}).matched,false);
 assert.equal(matchKeywordRole({...r,'岗位描述':'岗位职责：制作分镜并剪辑成片。'},model,{applyReviewedLabels:true}).keyword_evidence.reviewed_label,null,'JD变化必须失效覆盖');
-const hasLocalFixtures = await Promise.all([
- './models/ai-drama-keywords-v1.json', '../ui_data/keyword_validation/ai_drama_v1/review_input.json',
-].map(file => fs.access(new URL(file, import.meta.url)).then(() => true).catch(error => {
- if(error.code==='ENOENT') return false; throw error;
-})));
-if (!hasLocalFixtures.every(Boolean)) {
- console.log('keyword-role-matcher: synthetic fixtures passed; private dataset regression skipped (not bundled)');
-} else {
+if (process.env.JOB_TEST_PRIVATE_FIXTURES === '1') {
 const real=JSON.parse(await fs.readFile(new URL('./models/ai-drama-keywords-v1.json',import.meta.url),'utf8'));
 const input=JSON.parse(await fs.readFile(new URL('../ui_data/keyword_validation/ai_drama_v1/review_input.json',import.meta.url),'utf8'));
 for(const n of [3,4,18,244,2697]) assert.equal(matchKeywordRole(input.rows.find(x=>x.row_no===n),real,{applyReviewedLabels:true}).matched,true);
@@ -28,3 +21,4 @@ const predictions=input.rows.map(x=>matchKeywordRole(x,real,{applyReviewedLabels
 assert.equal(predictions.filter(x=>x.matched).length,229);
 console.log(JSON.stringify({ok:true,rows:input.rows.length,accepted:229,reviewOverridesContentBound:true,uncertainExcluded:true,keywordNestingDeduplicated:true}));
 }
+console.log('PASS: synthetic role matcher, content-bound overrides and keyword nesting; private dataset checks require JOB_TEST_PRIVATE_FIXTURES=1');

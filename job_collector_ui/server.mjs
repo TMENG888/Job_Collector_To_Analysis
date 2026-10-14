@@ -11,9 +11,27 @@ import { taskInsightSource } from '../work/task-insight-source.mjs';
 import { bossCities } from '../work/boss_page_adapter.mjs';
 import {assertCollectorResources,nativeCrashMessage} from '../work/collector_resources.mjs';
 import {ownedReport,isolatedDirectory,isolateLegacyTask} from '../work/task_dataset_scope.mjs';
-import {writeJsonAtomic} from '../work/collector_storage.mjs';
+import {writeJsonAtomic,writeAtomic} from '../work/collector_storage.mjs';
+import {createHash} from 'node:crypto';
 import {sessionFileName} from '../work/manual_search_session.mjs';
 import {managedBrowserState,switchManagedBrowser} from '../work/managed_browser.mjs';
+import {stageDisposition} from '../work/collection_policy.mjs';
+import {deliverPartial} from '../work/partial_delivery.mjs';
+import {otherChannelValidCount} from '../work/task_collection_target.mjs';
+import {collectionChannelAvailable,retiredCollectionChannels} from '../work/channel_availability.mjs';
+import {liveCollectionMetrics} from '../work/live_collection_metrics.mjs';
+import {synchronizePublicKeywords} from '../work/task_collection_config.mjs';
+import {updateUnifiedDataset} from '../work/unified_collection_store.mjs';
+import {createKnowledgeAssistantStore} from '../work/job_decision_assistant.mjs';
+import {knowledgeStore} from '../work/job_knowledge_store.mjs';
+import {createKnowledgeHandler} from '../work/job_knowledge_http.mjs';
+import {nativeTaskCounts} from '../work/collector_native_sink.mjs';
+import {createAssistantHandler} from '../work/job_assistant_http.mjs';
+import {createAssistantCredentialStore} from '../work/job_assistant_credentials.mjs';
+import {createAssistantSessionStore} from '../work/job_assistant_sessions.mjs';
+import {assistantSessionDirectory} from '../work/job_assistant_storage.mjs';
+import {createCollectionControl} from '../work/job_assistant_collection.mjs';
+import {zhaopinCities} from '../work/collection_cities.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -33,9 +51,13 @@ const insightStatePath = path.join(insightDataDir, 'state.json');
 const insightConfigPath = path.join(insightDataDir, 'config.json');
 const insightReportPath = path.join(insightDataDir, '岗位市场洞察.json');
 const insightLogPath = path.join(insightDataDir, 'analysis.log');
+const knowledge=knowledgeStore(dataDir);
+const handleKnowledge=createKnowledgeHandler(dataDir);
 const insightDatasetRoot = process.env.JOB_INSIGHT_DATASET_ROOT ? path.resolve(process.env.JOB_INSIGHT_DATASET_ROOT) : path.join(root, 'outputs');
 const host = '127.0.0.1';
 const port = Number(process.env.JOB_UI_PORT || process.argv[2] || 8765);
+const handleJobAssistant = createAssistantHandler(createKnowledgeAssistantStore(dataDir),createAssistantCredentialStore(path.join(dataDir,'assistant_private','model.json')),{repository:createAssistantSessionStore(await assistantSessionDirectory(dataDir)),collectionControl:createCollectionControl({baseUrl:`http://${host}:${port}`,storageDir:dataDir,getCities:()=>Object.keys(zhaopinCities)})});
+const latestExports=new Map();
 const active = new Map();
 const activeLabels = new Map();
 const startingLabels = new Map();
@@ -95,7 +117,7 @@ const platformDefinitions = [
   { key: 'liepin', name: '猎聘', group: '招聘平台', description: '共享登录浏览器 · 命令行采集渠道' },
   { key: 'boss', name: 'BOSS直聘', group: '招聘平台', description: '试验接入 · 人工登录后正常页面采集，需小样本验收' },
   { key: 'jobonline', name: '就业在线', group: '招聘平台', description: '公开列表与详情 · 全国岗位补充渠道' },
-  { key: 'job51', name: '前程无忧', group: '招聘平台', description: '需要验证时暂停 · 人工处理后断点续采' },
+  { key: 'job51', name: '前程无忧', group: '招聘平台', description: '本地浏览器会话 · 验证即停 · 断点续采' },
   { key: 'deepseek', name: 'DeepSeek', group: 'AI聊天平台', description: '技术岗位结构化标注' },
   { key: 'kimi', name: 'Kimi', group: 'AI聊天平台', description: '长岗位描述标注' },
   { key: 'tongyi', name: '通义', group: 'AI聊天平台', description: '中文分类与技能归一' },
@@ -104,10 +126,6 @@ const platformDefinitions = [
 ];
 const labelPlatforms = ['rules', ...platformDefinitions.filter((item) => item.group === 'AI聊天平台').map((item) => item.key)];
 
-const zhaopinCities = {
-  '北京': '530', '天津': '531', '上海': '538', '重庆': '551', '南京': '635', '苏州': '639',
-  '杭州': '653', '武汉': '736', '广州': '763', '深圳': '765', '成都': '801', '西安': '854',
-};
 const job51Cities = {
   '全国': '000000', '北京': '010000', '上海': '020000', '广州': '030200', '深圳': '040000',
   '天津': '050000', '重庆': '060000', '南京': '070200', '苏州': '070300', '杭州': '080200',
@@ -200,33 +218,29 @@ async function publicInsight() {
 }
 
 async function discoverInsightDatasets() {
-  const found = new Map();
-  for (const task of tasks.filter((item) => !item.archived)) {
-    try {
-      const { dataset } = await taskInsightSource(task);
-      found.set(dataset.path.toLowerCase(), { ...dataset, canonical: true, stage: 'final', name: `${task.label} · 最终整合数据${dataset.expectedRows ? ` · ${dataset.expectedRows.toLocaleString('zh-CN')} 条` : ''}` });
-    } catch {
-      // Incomplete tasks and obsolete shared-directory manifests are not final
-      // analysis datasets. They remain accessible via task/manual-path views.
-    }
-  }
-  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')).slice(0, 100);
+  return knowledge.catalog();
 }
 
 async function startInsight(body) {
   if (activeInsight) throw new Error('岗位洞察分析正在运行');
-  const inputFile = path.resolve(String(body.inputFile || '').trim());
-  if (!inputFile || !fsSync.existsSync(inputFile)) throw new Error('找不到输入Excel文件');
-  if (!['.xlsx', '.csv'].includes(path.extname(inputFile).toLowerCase())) throw new Error('仅支持 XLSX 或 UTF-8 标准化 CSV');
+  const requestedInput=String(body.inputFile||'').trim(),nativeInput=requestedInput.startsWith('kb://');
+  const inputFile = nativeInput?requestedInput:path.resolve(requestedInput);
+  if (!nativeInput&&(!requestedInput || !fsSync.existsSync(inputFile))) throw new Error('找不到输入数据');
+  if (!nativeInput&&!['.xlsx', '.csv'].includes(path.extname(inputFile).toLowerCase())) throw new Error('请选择知识库岗位范围，或手工导入 XLSX/CSV');
   let transferSource = null;
   if (body.sourceTaskId) {
     const task = tasks.find((item) => item.id === String(body.sourceTaskId) && !item.archived);
     if (!task) throw new Error('来源采集任务不存在');
-    transferSource = await taskInsightSource(task);
+    transferSource = await taskInsightSource(task,{knowledge:nativeInput,dataDir});
     if (transferSource.dataset.path.toLowerCase() !== inputFile.toLowerCase()) throw new Error('洞察文件不是该任务的当前交付文件，请重新点击“用于岗位洞察”');
     if (String(body.role || '').trim() !== task.label) throw new Error('分析岗位与来源采集任务不一致，请手工选择数据集后再修改岗位');
   }
   let labelJobId = String(body.labelJobId || '').trim();
+  // Native snapshots already contain version-checked, approved knowledge labels.
+  if (nativeInput) {
+    if (labelJobId && labelJobId !== 'auto') throw new Error('知识库分析自动使用同版本已批准标签，无需指定文件打标任务');
+    labelJobId = '';
+  }
   let labelJob = null;
   let consensusJobs = [];
   const compatibleLabelJobs = labelJobs.filter((item) => !item.archived && path.resolve(item.inputFile).toLowerCase() === inputFile.toLowerCase());
@@ -271,8 +285,22 @@ async function startInsight(body) {
     const reviewed = await reviewState(labelJob.outputDir);
     if (![...reviewed.decisions.values()].includes('approved')) throw new Error('所选打标任务尚无人工批准的标签');
   }
+  let analysisInputFile=inputFile;
+  if(nativeInput){const snapshot=await knowledge.snapshot(inputFile);analysisInputFile=snapshot.uri;if(transferSource)transferSource.dataset.expectedRows=snapshot.rows;}
+  if(transferSource?.dataset.resolution==='latest_snapshot'){
+    const sourceTask=tasks.find(item=>item.id===transferSource.taskId);
+    const refreshed=await updateUnifiedDataset(sourceTask,{publishCsv:true});
+    if(refreshed.latestSnapshotError)throw new Error(refreshed.latestSnapshotError);
+    transferSource=await taskInsightSource(sourceTask);
+    const content=await fs.readFile(inputFile,'utf8');
+    const manifest=JSON.parse(await fs.readFile(path.join(sourceTask.outputDir,'最新数据清单.json'),'utf8'));
+    if(createHash('sha256').update(content).digest('hex')!==manifest.hash)throw new Error('最新候选正在更新，请重试分析');
+    analysisInputFile=path.join(insightDataDir,'当前分析输入快照.csv');
+    await writeAtomic(analysisInputFile,content);
+  }
   const config = {
-    inputFile,
+    inputFile:analysisInputFile,
+    displayInputFile:inputFile,
     ...(transferSource ? { sourceTaskId: transferSource.taskId, sourceResolution: transferSource.dataset.resolution, expectedRows: transferSource.dataset.expectedRows } : {}),
     sheetName: String(body.sheetName || '岗位数据').trim() || '岗位数据',
     role: String(body.role || '自动识别').trim() || '自动识别',
@@ -340,7 +368,7 @@ async function publicPlatforms() {
   const saved = await readPlatformStatus();
   const sessions=await Promise.all(tasks.filter(t=>!t.archived).map(readManualSession));
   const browsers=new Map(await Promise.all(platformDefinitions.map(async p=>[p.key,await managedBrowserState(p.key)])));
-  return platformDefinitions.map((platform) => {
+  return platformDefinitions.filter(platform=>collectionChannelAvailable(platform.key)).map((platform) => {
     const entry = saved.platforms?.[platform.key] || {};
     const session=sessions.find(s=>s?.platform===platform.key);
     const browser=browsers.get(platform.key);
@@ -363,6 +391,7 @@ async function publicPlatforms() {
 function startPlatformLogin(key) {
   const platform = platformDefinitions.find((item) => item.key === key);
   if (!platform) throw new Error('不支持的登录平台');
+  if(key==='zhaopin' && [...active.values()].some(item=>['collection','zhaopin'].includes(item.stage))) throw new Error('多平台采集正在使用或排队等待智联会话，请先暂停相关任务再打开登录');
   if (activeLogins.has(key)) throw new Error(`${platform.name}登录窗口已经打开`);
   const child = spawn(process.execPath, [path.join(root, 'work', 'login_job_platforms.mjs'), platformSessionDir, key], {
     cwd: root,
@@ -378,9 +407,10 @@ function startPlatformLogin(key) {
 }
 
 async function createLabelJob(body) {
-  const inputFile = path.resolve(String(body.inputFile || '').trim());
-  if (!inputFile || !fsSync.existsSync(inputFile)) throw new Error('找不到输入Excel文件');
-  if (!['.xlsx', '.csv'].includes(path.extname(inputFile).toLowerCase())) throw new Error('仅支持 XLSX 或 UTF-8 标准化 CSV');
+  const requestedInput=String(body.inputFile||'').trim(),nativeInput=requestedInput.startsWith('kb://');
+  const inputFile = nativeInput?(await knowledge.snapshot(requestedInput)).uri:path.resolve(requestedInput);
+  if (!nativeInput&&(!requestedInput || !fsSync.existsSync(inputFile))) throw new Error('找不到输入数据');
+  if (!nativeInput&&!['.xlsx', '.csv'].includes(path.extname(inputFile).toLowerCase())) throw new Error('请选择知识库岗位范围，或导入XLSX/CSV');
   const platform = String(body.platform || 'rules');
   if (!labelPlatforms.includes(platform)) throw new Error('不支持的打标平台');
   const jobFamily = String(body.jobFamily || '').trim();
@@ -391,7 +421,7 @@ async function createLabelJob(body) {
   const batchSize = platform === 'kimi' ? 1 : requestedBatchSize;
   const id = `${Date.now()}-label`;
   const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
-  const outputDir = path.resolve(String(body.outputDir || path.join(path.dirname(inputFile), `AI打标_${sampleSize}条_${stamp}_${id}`)).trim());
+  const outputDir = path.resolve(String(body.outputDir || path.join(nativeInput?path.join(dataDir,'knowledge_labels'):path.dirname(inputFile), `AI打标_${sampleSize}条_${stamp}_${id}`)).trim());
   if (labelJobs.some((job) => path.resolve(job.outputDir).toLowerCase() === outputDir.toLowerCase())) throw new Error('该输出目录已被其他打标任务使用，请为新任务指定独立目录');
   if (fsSync.existsSync(outputDir) && (await fs.readdir(outputDir)).length) throw new Error('新打标任务的输出目录必须为空，避免覆盖已有结果');
   const configDir = path.join(labelDataDir, id);
@@ -470,7 +500,8 @@ async function runLabelJob(item, options = {}) {
 
 async function launchLabelJob(item, options = {}) {
   if (activeLabels.has(item.id)) throw new Error('该打标任务已经在运行');
-  if (!fsSync.existsSync(item.inputFile)) throw new Error(`输入 Excel 已不存在：${item.inputFile}。请创建使用新路径的任务，勿覆盖旧任务记录。`);
+  if (String(item.inputFile).startsWith('kb://')) await knowledge.read(item.inputFile);
+  else if (!fsSync.existsSync(item.inputFile)) throw new Error(`输入文件已不存在：${item.inputFile}。请创建使用新路径的任务，勿覆盖旧任务记录。`);
   if (item.platform !== 'rules') {
     if (activeLogins.has(item.platform)) throw new Error('该平台共享浏览器正在打开，请稍后启动打标；无需关闭浏览器');
     const webRuns = [...activeLabels.values()].filter((running) => running.platform !== 'rules');
@@ -547,13 +578,18 @@ function runtimePython() {
 }
 
 function stageCommand(task, stage) {
+  if (['collection','zhaopin'].includes(stage)) return {
+    command: process.execPath,
+    args: [path.join(root,'work','collect_parallel_channels.mjs'),JSON.stringify({
+      public:stage==='collection' && task.platforms.some(key=>['shixiseng','iguopin','mohrss','job51','jobonline'].includes(key)),
+      zhaopin:task.platforms.includes('zhaopin'),publicConfigPath:task.publicConfigPath,
+      zhaopinConfigPath:task.zhaopinConfigPath,outputDir:task.outputDir,candidateTarget:task.candidateTarget,
+      lockDir:path.join(dataDir,'channel_locks'),
+    })],
+  };
   if (stage === 'public') return {
     command: process.execPath,
     args: [path.join(root, 'work', 'collect_public_job_platforms.mjs'), task.publicConfigPath, task.outputDir],
-  };
-  if (stage === 'zhaopin') return {
-    command: process.execPath,
-    args: [path.join(root, 'work', 'collect_logged_zhaopin_batch.mjs'), task.outputDir, String(task.candidateTarget), task.zhaopinConfigPath],
   };
   if (stage === 'yupao') return {
     command: process.execPath,
@@ -579,6 +615,7 @@ function stageCommand(task, stage) {
 }
 
 const stageNames = {
+  collection: '多平台并发采集',
   public: '公开渠道采集', zhaopin: '智联登录采集', yupao: '鱼泡登录采集',
   boss: 'BOSS页面采集（试验）', login_boss: 'BOSS人工登录',
   login_zhaopin: '智联人工登录', login_yupao: '鱼泡人工验证/登录', finalize: '合并去重', workbook: '导出Excel',
@@ -589,12 +626,7 @@ async function runChild(task, stage, pipeline = false) {
   const profileKey=stage.replace('login_','');
   if(activeLogins.has(profileKey)||[...active.values()].some(item=>item.stage==='login_'+profileKey || (stage.startsWith('login_')&&item.stage===profileKey))) throw new Error('该平台浏览器正在使用，请勿同时打开登录和采集会话');
   if (['boss','login_boss'].includes(stage) && (startingBoss || activeLogins.has('boss') || [...active.values()].some(item => ['boss','login_boss'].includes(item.stage)))) throw new Error('BOSS使用独立本地会话，同一时间只能登录或采集一个任务');
-  if (stage === 'zhaopin' && (
-    [...active.values()].some((item) => item.stage === 'zhaopin')
-    || tasks.some((item) => item.id !== task.id && item.status === 'running' && item.currentStage === 'zhaopin')
-  )) {
-    throw new Error('为保护账号，同一时间只能运行一个智联采集任务');
-  }
+  if (['collection','zhaopin'].includes(stage) && task.platforms.includes('zhaopin') && activeLogins.has('zhaopin')) throw new Error('智联人工登录窗口正在使用，请完成登录后再启动采集');
   if (stage === 'yupao' && (
     [...active.values()].some((item) => item.stage === 'yupao')
     || tasks.some((item) => item.id !== task.id && item.status === 'running' && item.currentStage === 'yupao')
@@ -613,6 +645,11 @@ async function runChild(task, stage, pipeline = false) {
   const isBoss = ['boss','login_boss'].includes(stage);
   if (isBoss) startingBoss = true;
   try {
+    if (['public','collection'].includes(stage)) {
+      const synced = await synchronizePublicKeywords(task);
+      if (synced.changed) await appendLog(task.id, `\n[配置修复] 公开渠道同步全部 ${synced.keywords.length} 个任务关键词；断点与已采集数据保留。\n`);
+    }
+    if (stage === 'finalize') await updateUnifiedDataset(task);
     await setTask(task.id, { status: 'running', currentStage: stage, message: `${stageNames[stage]}运行中`, pipeline });
     await appendLog(task.id, `\n[${new Date().toLocaleString('zh-CN')}] ▶ ${stageNames[stage]}\n`);
   } catch (error) { startingStages.delete(task.id); if (isBoss) startingBoss = false; throw error; }
@@ -620,7 +657,7 @@ async function runChild(task, stage, pipeline = false) {
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: root,
-      env: { ...process.env, JOB_COLLECTOR_TASK_ID:task.id, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+      env: { ...process.env, JOB_COLLECTOR_NATIVE_STORE:'1',JOB_COLLECTOR_TASK_ID:task.id, JOB_COLLECTOR_BLOCKED_POLICY:pipeline?'skip':'wait', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
       windowsHide: stage !== 'login',
     });
     active.set(task.id, { child, stage, startedAt: Date.now() });
@@ -641,24 +678,29 @@ async function runChild(task, stage, pipeline = false) {
       if (wasPaused) {
         await appendLog(task.id, `\n[已暂停] 下次运行将复用同一输出目录和断点文件。\n`);
         await setTask(task.id, { status: 'paused', message: '已暂停，可从断点续爬', pipeline: false, lastStage: stage });
-        resolve({ paused: true, code, signal });
+        resolve({ paused: true, userPaused: true, code, signal });
       } else if (code === 43 || nativeCrashMessage(code)) {
         const message=code === 43?'系统资源不足，采集已安全暂停；请释放资源后从当前阶段断点续采':nativeCrashMessage(code);
         await appendLog(task.id,`\n[资源/原生异常暂停] ${message}\n`);
         await setTask(task.id,{status:'paused',message,pipeline:false,lastStage:stage});
         resolve({paused:true,code});
-      } else if (['boss','public','zhaopin','yupao'].includes(stage) && code === 42) {
+      } else if (['collection','boss','public','zhaopin','yupao'].includes(stage) && stageDisposition(code,pipeline)==='continue_partial') {
+        const issue={stage,at:now(),message:`${stageNames[stage]}部分受阻：数据和断点已保留，跳过受阻渠道继续后续阶段；详见日志`};
+        await appendLog(task.id,`\n[渠道跳过] ${issue.message}\n`);
+        await setTask(task.id,{status:'running',message:issue.message,lastStage:stage,collectionIssues:[...(task.collectionIssues||[]).filter(item=>item.stage!==stage),issue]});
+        resolve({partial:true,code});
+      } else if (['collection','boss','public','zhaopin','yupao'].includes(stage) && [42,44].includes(code)) {
         await setTask(task.id, { status: 'paused', message: `${stageNames[stage]}暂停：请查看日志和断点状态，人工处理登录、验证、文件占用或页面异常后再续爬`, pipeline: false, lastStage: stage });
         resolve({ paused: true, code });
       } else if (code === 0) {
         await appendLog(task.id, `\n[完成] ${stageNames[stage]}\n`);
-        await setTask(task.id, { status: pipeline ? 'running' : 'ready', message: `${stageNames[stage]}已完成`, lastStage: stage });
+        await setTask(task.id, { status: pipeline ? 'running' : 'ready', message: `${stageNames[stage]}已完成`, lastStage: stage,collectionIssues:(task.collectionIssues||[]).filter(item=>item.stage!==stage) });
         resolve({ code });
       } else {
         const message = `${stageNames[stage]}退出，代码 ${code ?? signal}`;
         await appendLog(task.id, `\n[失败] ${message}\n`);
         await setTask(task.id, { status: 'failed', message, pipeline: false, lastStage: stage });
-        reject(new Error(message));
+        reject(Object.assign(new Error(message), {code,signal,stage}));
       }
     });
   });
@@ -667,42 +709,72 @@ async function runChild(task, stage, pipeline = false) {
 async function runPipeline(task, resumeFrom = '') {
   const stages = [];
   const publicPlatforms = ['shixiseng', 'iguopin', 'mohrss', 'job51', 'jobonline'];
-  if (task.platforms.some((key) => publicPlatforms.includes(key))) stages.push('public');
-  if (task.platforms.includes('zhaopin')) stages.push('zhaopin');
-  if (task.platforms.includes('yupao')) stages.push('yupao');
-  if (task.platforms.includes('boss')) stages.push('boss');
-  stages.push('finalize', 'workbook');
+  if (task.platforms.some((key) => publicPlatforms.includes(key)) || task.platforms.includes('zhaopin')) stages.push('collection');
+  if (task.platforms.includes('yupao') && collectionChannelAvailable('yupao')) stages.push('yupao');
+  if (task.platforms.includes('boss') && collectionChannelAvailable('boss')) stages.push('boss');
+  // Database ingestion is the default delivery path. File exports are now explicit actions.
   if (resumeFrom) {
-    const start = stages.indexOf(resumeFrom);
+    if(resumeFrom==='public')resumeFrom='collection';
+    if(resumeFrom==='zhaopin' && stages.includes('collection'))stages[stages.indexOf('collection')]='zhaopin';
+    if(['finalize','workbook'].includes(resumeFrom))resumeFrom='';
+    const start = resumeFrom?stages.indexOf(resumeFrom):stages.length;
     if (start < 0) throw new Error('流水线恢复阶段不属于该任务');
     stages.splice(0, start);
   }
+  let currentStage='';
   try {
     for (const stage of stages) {
+      currentStage=stage;
       const fresh = taskById(tasks, task.id);
       if (!fresh || fresh.status === 'paused' || fresh.status === 'stopping') return;
       const result = await runChild(fresh, stage, true);
       if (result.paused) return;
     }
     const fresh = taskById(tasks, task.id) || task;
-    const metrics = await metricsFor(fresh);
-    if (metrics.targetReached) {
-      await setTask(task.id, { status: 'completed', currentStage: '', message: '采集、合并与导出全部完成', pipeline: false });
-    } else {
-      await appendLog(task.id, `\n[本轮完成] 最终 ${metrics.finalRows}/${fresh.targetRows} 条，尚未达到目标；可调整关键词/城市后续爬。\n`);
-      await setTask(task.id, {
-        status: 'partial', currentStage: '', pipeline: false,
-        message: `本轮已导出 ${metrics.finalRows} 条，尚未达到 ${fresh.targetRows} 条目标`,
-      });
-    }
+    const ingested=await updateUnifiedDataset(fresh);await knowledge.sync({refresh:false});
+    await setTask(task.id,{status:ingested.rows>=fresh.targetRows?'completed':'partial',currentStage:'',pipeline:false,lastStage:'collection',message:`本轮已去重入库 ${ingested.rows}/${fresh.targetRows} 条；可直接用于洞察与助手，不需要导出${fresh.collectionIssues?.length?'；受阻渠道和断点保留':''}`});
   } catch (error) {
     await appendLog(task.id, `\n流水线停止：${error.message}\n`);
+    await finalizeAfterCollectionError(task,{stage:currentStage,code:error.code,signal:error.signal}).catch(async failure=>{
+      await appendLog(task.id, `\n[异常收尾失败] ${failure.message}；保留原数据和断点，不宣称交付完成。\n`);
+    });
   }
 }
 
+async function finalizeAfterCollectionError(task,cause) {
+  if(['collection','public','zhaopin','yupao','boss'].includes(cause.stage)&&Number.isInteger(cause.code)&&cause.code>0&&![42,43].includes(cause.code)&&!cause.signal){
+    const fresh=taskById(tasks,task.id)||task;if(['paused','stopping'].includes(fresh.status))return {skipped:true};
+    const saved=await updateUnifiedDataset(fresh);await knowledge.sync({refresh:false});
+    if(saved.rows){await setTask(task.id,{status:'partial',currentStage:'',pipeline:false,lastStage:cause.stage,message:`渠道异常退出（${cause.code}）；已安全归集 ${saved.rows} 条到知识库，断点保留，可直接分析`});return {delivered:true,available:saved.rows};}
+    return {skipped:true};
+  }
+  return deliverPartial({
+    cause,
+    count:()=>otherChannelValidCount(task.outputDir,'',task.id),
+    run:async stage=>{
+      await appendLog(task.id, `\n[异常收尾] 仅处理本任务已保存的数据：${stageNames[stage]}；不再请求招聘平台。\n`);
+      return runChild(taskById(tasks,task.id)||task,stage,false);
+    },
+    finish:async()=>{
+      const fresh=taskById(tasks,task.id)||task;
+      const metrics=await metricsFor(fresh);
+      const issue={stage:cause.stage,at:now(),message:`${stageNames[cause.stage]}异常退出（${cause.code}），已合并去重并导出本轮已保存的数据`};
+      await setTask(task.id,{
+        status:'partial',currentStage:'',pipeline:false,lastStage:cause.stage,
+        collectionIssues:[...(fresh.collectionIssues||[]).filter(item=>item.stage!==cause.stage),issue],
+        message:`${issue.message}；已导出 ${metrics.finalRows}/${fresh.targetRows} 条${metrics.targetReached?'；渠道异常仍需处理':'，目标未达到'}`,
+      });
+      await appendLog(task.id, `\n[异常收尾完成] ${metrics.finalRows}/${fresh.targetRows} 条；渠道异常保留，数量不代表岗位相关性验收。\n`);
+    },
+  });
+}
+
 async function runSingle(task, stage) {
+  let recoveryAttempted=false;
   try {
-    await runChild(task, stage, false);
+    const result=await runChild(task, stage, false);
+    recoveryAttempted=true;
+    await finalizeAfterCollectionError(task,{stage,...result});
     if (stage === 'workbook') {
       const fresh = taskById(tasks, task.id) || task;
       const metrics = await metricsFor(fresh);
@@ -713,7 +785,15 @@ async function runSingle(task, stage) {
             message: `Excel 已导出 ${metrics.finalRows} 条，尚未达到 ${fresh.targetRows} 条目标`,
           });
     }
-  } catch {}
+  } catch(error) {
+    if(recoveryAttempted){
+      await appendLog(task.id, `\n[异常收尾失败] ${error.message}；不再次执行导出，原数据和断点保留。\n`);
+      return;
+    }
+    await finalizeAfterCollectionError(task,{stage,code:error.code,signal:error.signal}).catch(async failure=>{
+      await appendLog(task.id, `\n[异常收尾失败] ${failure.message}；保留原数据和断点，不宣称交付完成。\n`);
+    });
+  }
 }
 
 async function createTask(body) {
@@ -726,7 +806,9 @@ async function createTask(body) {
   const candidateTarget = Math.max(targetRows, Math.min(150000, Number(body.candidateTarget || Math.ceil(targetRows * 1.55))));
   const cityNames = splitTerms(body.cities).filter((name) => zhaopinCities[name]);
   if (!cityNames.length) cityNames.push('北京', '上海', '广州', '深圳', '杭州', '成都');
-  const allowedPlatforms = ['shixiseng', 'iguopin', 'mohrss', 'job51', 'jobonline', 'zhaopin', 'yupao', 'boss'];
+  const allowedPlatforms = ['shixiseng', 'iguopin', 'mohrss', 'jobonline', 'job51', 'zhaopin', 'boss'].filter(collectionChannelAvailable);
+  const retiredRequested=splitTerms(body.platforms).filter(key=>!collectionChannelAvailable(key));
+  if(retiredRequested.length)throw new Error(`渠道已撤出采集入口：${retiredRequested.join('、')}；历史数据和断点仍保留`);
   const platforms = splitTerms(body.platforms).filter((value) => allowedPlatforms.includes(value));
   if (!platforms.length) throw new Error('至少选择一个采集渠道');
   const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
@@ -747,11 +829,15 @@ async function createTask(body) {
   const publicCity = { name: '全国', code: '全国' };
   const publicConfig = {
     task_id:id,
-    keywords: [primaryKeyword],
+    keywords,
     platforms: {
       shixiseng: { enabled: platforms.includes('shixiseng'), cities: [publicCity] },
       zhaopin: { enabled: false, cities: [] },
-      job51: { enabled: platforms.includes('job51'), cities: cityNames.map((name) => ({ name, code: job51Cities[name] })).filter((item) => item.code) },
+      job51: {
+        enabled: platforms.includes('job51'),
+        cities: cityNames.map((name) => ({ name, code: job51Cities[name] })).filter((item) => item.code),
+        maxPages: pace === 'safe' ? 10 : pace === 'fast' ? 20 : 15,
+      },
       jobonline: { enabled: platforms.includes('jobonline'), cities: [publicCity], maxPages: 10, maxRows: Math.min(candidateTarget,1000) },
       iguopin: { enabled: platforms.includes('iguopin'), cities: [{ name: '全国', code: '' }] },
       mohrss: { enabled: platforms.includes('mohrss'), cities: [{ name: '全国', code: '' }] },
@@ -855,16 +941,22 @@ async function metricsFor(task) {
   try { manifest = JSON.parse(await fs.readFile(path.join(task.outputDir, '采集清单.json'), 'utf8')); } catch {}
   quality=ownedReport(quality,task)?quality:null;
   manifest=ownedReport(manifest,task)?manifest:null;
-  const publicRows = Number(manifest?.total_rows || 0);
-  const zhaopinRows = await countCsvRows(path.join(task.outputDir, 'zhaopin_标准化数据.csv'));
-  const yupaoRows = await countCsvRows(path.join(task.outputDir, 'yupao_标准化数据.csv'));
-  const bossRows = await countCsvRows(path.join(task.outputDir, 'boss_标准化数据.csv'));
+  const liveCollection = await liveCollectionMetrics(task);
+  const native=await nativeTaskCounts(task.outputDir,task.id);
+  for(const [key,count]of Object.entries(native.platformCounts))liveCollection.platformCounts[key]=Math.max(liveCollection.platformCounts[key]||0,count);
+  const nativePublic=['shixiseng','iguopin','mohrss','jobonline','job51'].reduce((n,key)=>n+(native.platformCounts[key]||0),0);
+  const publicRows = Math.max(Number(manifest?.total_rows || 0), liveCollection.publicRows,nativePublic);
+  const zhaopinRows = Math.max(native.platformCounts.zhaopin||0,await countCsvRows(path.join(task.outputDir, 'zhaopin_标准化数据.csv')));
+  const yupaoRows = Math.max(native.platformCounts.yupao||0,await countCsvRows(path.join(task.outputDir, 'yupao_标准化数据.csv')));
+  const bossRows = Math.max(native.platformCounts.boss||0,await countCsvRows(path.join(task.outputDir, 'boss_标准化数据.csv')));
+  const unified=await fs.readFile(path.join(task.outputDir,'统一采集数据状态.json'),'utf8').then(JSON.parse).catch(()=>null);
+  const knowledgeRows=Math.max(native.rows,unified?.task_id===task.id?Number(unified.rows||0):0);
   const finalRows = Number(quality?.output_rows || 0);
   return {
-    publicRows, zhaopinRows, yupaoRows, bossRows, finalRows,
+    publicRows, zhaopinRows, yupaoRows, bossRows, finalRows, knowledgeRows,liveCollection,
     hasFinalResult:Boolean(quality),finalResultMessage:quality?'本任务最终结果':'本任务尚未生成最终结果',
     candidates: publicRows + zhaopinRows + yupaoRows + bossRows,
-    targetReached: Boolean(quality?.target_reached),
+    targetReached: knowledgeRows>=task.targetRows||Boolean(quality?.target_reached),
     duplicatesRemoved: Number(quality?.duplicates_removed || 0),
     platformCounts: quality?.platform_counts || {},
   };
@@ -872,9 +964,11 @@ async function metricsFor(task) {
 
 async function readManualSession(task) {
   const running=active.get(task.id);
-  if(!['zhaopin','yupao'].includes(running?.stage))return null;
-  const session=await fs.readFile(path.join(task.outputDir,sessionFileName(running.stage)),'utf8').then(JSON.parse).catch(()=>null);
-  return session?.task_id===task.id && session.pid===running.child.pid && session.browser_open ? session : null;
+  if(!['collection','zhaopin','yupao'].includes(running?.stage))return null;
+  const session=await fs.readFile(path.join(task.outputDir,sessionFileName(running.stage==='collection'?'zhaopin':running.stage)),'utf8').then(JSON.parse).catch(()=>null);
+  const ownerMatches=session?.pid===running.child.pid || session?.coordinator_pid===running.child.pid;
+  if(session?.task_id!==task.id || !ownerMatches || !session.browser_open)return null;
+  try { process.kill(session.pid,0);return session; } catch { return null; }
 }
 async function publicTask(task) {
   const running = active.get(task.id);
@@ -885,6 +979,8 @@ async function publicTask(task) {
     pace: task.pace, outputDir: task.outputDir, legacyOutputDir:task.legacyOutputDir||null,status: task.status, currentStage: task.currentStage,
     message: browserSession?.verification_status==='waiting_human'?'等待人工验证：请处理已打开的搜索页，不要关闭浏览器，完成后点击继续当前会话':task.message, createdAt: task.createdAt, updatedAt: task.updatedAt,
     browserSession,
+    latestExport:await fs.readFile(path.join(task.outputDir,'最新导出状态.json'),'utf8').then(JSON.parse).catch(()=>null),
+    collectionIssues:task.collectionIssues||[],
     runningSeconds: running ? Math.floor((Date.now() - running.startedAt) / 1000) : 0,
     metrics: await metricsFor(task),
   };
@@ -926,10 +1022,11 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && pathname === '/api/state') {
       const visible = tasks.filter((task) => !task.archived);
-      return json(res, 200, { tasks: await Promise.all(visible.map(publicTask)), version: '1.9.6', capabilities: { bossCollection: true, jobonlineCollection: true, publicChannelCheckpoints: true, nativeDatasets: true, labelReview: true, labelPacing: true, resourceRouting: true, insightSelection: true, taskInsightTransfer: true, finalDatasetCatalog: true }, activeCount: active.size });
+      return json(res, 200, { tasks: await Promise.all(visible.map(publicTask)), version: '1.11.0', capabilities: { unifiedKnowledge:true,nativeCollection:true,optionalExports:true,automaticPartialDelivery:true,retiredChannels:[...retiredCollectionChannels],channelFailureIsolation:true,publicAllKeywords:true,bossCollection: false, job51Collection: true, jobonlineCollection: true, publicChannelCheckpoints: true, nativeDatasets: true, labelReview: true, labelPacing: true, resourceRouting: true, insightSelection: true, taskInsightTransfer: true, finalDatasetCatalog: true }, activeCount: active.size });
     }
+    if (await handleKnowledge(req,res,pathname)||await handleJobAssistant(req, res, pathname)) return;
     if (req.method === 'GET' && pathname === '/api/insights/datasets') {
-      return json(res, 200, { root: insightDatasetRoot, catalog: 'final-only-v1', datasets: await discoverInsightDatasets() });
+      return json(res, 200, { root: knowledge.filename, catalog: 'knowledge-v1', datasets: await discoverInsightDatasets() });
     }
     if (req.method === 'GET' && pathname === '/api/insights') {
       return json(res, 200, await publicInsight());
@@ -1042,17 +1139,34 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && taskInsightMatch) {
       const item = taskById(tasks, taskInsightMatch[1]);
       if (!item || item.archived) return json(res, 404, { error: '采集任务不存在' });
-      return json(res, 200, await taskInsightSource(item));
+      return json(res, 200, await taskInsightSource(item,{knowledge:true,dataDir}));
     }
     if (req.method === 'GET' && taskResourceMatch) {
       const item = taskById(tasks, taskResourceMatch[1]);
       return item && !item.archived ? json(res, 200, { task: await publicTask(item) }) : json(res, 404, { error: '采集任务不存在' });
     }
-    const actionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(run|pause|login|open|archive|confirm-verification)$/);
+    const actionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(run|pause|login|open|archive|confirm-verification|export-latest|refresh-latest)$/);
     if (req.method === 'POST' && actionMatch) {
       const [, id, action] = actionMatch;
       const task = taskById(tasks, id);
       if (!task) return json(res, 404, { error: '任务不存在' });
+      if(action==='refresh-latest'){
+        if(fsSync.existsSync(path.join(task.outputDir,'任务归属.json'))){const refreshed=await updateUnifiedDataset(task);if(refreshed.latestSnapshotError)throw new Error(refreshed.latestSnapshotError);}
+        await knowledge.sync({refresh:false});return json(res,200,await taskInsightSource(task,{knowledge:true,dataDir}));
+      }
+      if(action==='export-latest'){
+        if(latestExports.size)return json(res,409,{error:'已有最新数据导出正在进行，请稍后重试'});
+        await writeJsonAtomic(path.join(task.outputDir,'最新导出状态.json'),{task_id:task.id,status:'running',startedAt:now()});
+        const child=spawn(process.execPath,[path.join(root,'work/export_latest_dataset.mjs'),JSON.stringify(task)],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe']});
+        latestExports.set(task.id,child);
+        child.stdout.on('data',()=>{});let failure='';child.stderr.on('data',chunk=>{failure+=String(chunk).slice(0,2000);});
+        const finish=async(code)=>{
+          latestExports.delete(task.id);
+          if(code!==0){const previous=await fs.readFile(path.join(task.outputDir,'最新导出状态.json'),'utf8').then(JSON.parse).catch(()=>null);if(previous?.status==='running')await writeJsonAtomic(path.join(task.outputDir,'最新导出状态.json'),{task_id:task.id,status:'failed',error:failure||'导出进程异常退出',updatedAt:now()});}
+        };
+        child.once('error',error=>{failure=error.message;void finish(1);});child.once('close',code=>void finish(code));
+        return json(res,202,{ok:true,message:'正在导出最新CSV／Excel，采集状态不变；完成情况显示在任务页'});
+      }
       if(action==='confirm-verification') {
         const session=await readManualSession(task);
         if(session?.verification_status!=='waiting_human')return json(res,409,{error:'没有正在等待人工验证的当前浏览器会话'});
@@ -1062,8 +1176,9 @@ const server = http.createServer(async (req, res) => {
       if (action === 'run') {
         if (active.has(id) || startingStages.has(id) || ['running', 'stopping'].includes(task.status)) throw new Error('该任务已有程序正在运行或正在检查启动条件');
         const { stage = 'all', resumeFrom = '' } = await bodyJson(req);
+        if(!collectionChannelAvailable(stage)||!collectionChannelAvailable(resumeFrom))throw new Error('该渠道已停用，不能续采；请运行其他渠道或合并导出已有数据');
         if (stage === 'all') {
-          if (resumeFrom && !['public', 'zhaopin', 'yupao', 'boss', 'finalize', 'workbook'].includes(resumeFrom)) throw new Error('恢复阶段无效');
+          if (resumeFrom && !['collection','public', 'zhaopin', 'yupao', 'boss', 'finalize', 'workbook'].includes(resumeFrom)) throw new Error('恢复阶段无效');
           if (resumeFrom === 'public' && !task.platforms.some(key=>['shixiseng','iguopin','mohrss','job51','jobonline'].includes(key)) || ['zhaopin','yupao','boss'].includes(resumeFrom) && !task.platforms.includes(resumeFrom)) throw new Error('恢复阶段不属于该任务');
           // Clear the old pause marker before entering the pipeline's cancellation checks.
           await setTask(task.id, { status: 'ready', pipeline: true, message: '准备恢复采集流水线' });
@@ -1130,6 +1245,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, host, () => {
   console.log(`岗位采集控制台已启动：${consoleUrl()}`);
   console.log(`任务数据：${dataDir}`);
+  if (process.env.JOB_UI_START_WORKER !== '0') spawn(process.execPath,[path.join(root,'work','unified_collection_worker.mjs'),consoleUrl()],{cwd:root,stdio:'ignore',windowsHide:true}).unref();
   if (process.env.JOB_UI_OPEN_BROWSER === '1') openBrowser();
 });
 

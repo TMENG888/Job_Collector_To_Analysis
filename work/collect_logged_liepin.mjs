@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
 import {openContext} from './browser_public_channels.mjs';
 
-const outputDir = path.resolve(process.argv[2] || 'outputs');
+const outputDir = path.resolve(process.argv[2] || 'outputs/liepin');
 const keyword = process.argv[3] || '智能体开发';
 const cityName = process.argv[4] || '全国';
 const rawDir = path.join(outputDir, '原始数据');

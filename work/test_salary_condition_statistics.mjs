@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import {summarizeCohort,cohortConditionValue,cohortFilterFields,filterCohort,cohortFilterOptions,cohortSalaryStatistics} from '../job_collector_ui/public/insight-cohorts.js';
+import {renderProfileCloud,renderDonut,renderSalaryExperienceLine} from '../job_collector_ui/public/insight-profile-charts.js';
 
 const rows=Array.from({length:30},(_,i)=>({city:i<20?(i%2?'北京 ':'北京市'):'上海',experience:i%2?'3-5年':'经验不限',education:i%3?'本科':'不限',company_size:'100-299人',employment_type:i<25?'全职':'实习',salary_midpoint_k:i+3,skills:['Python'],tasks:[],domains:[]}));
 rows.push({city:'无薪地区',experience:'未明确',education:'未明确',company_size:'未明确',employment_type:'未明确',salary_midpoint_k:null,skills:['SQL']});
@@ -29,7 +30,7 @@ function element(id){
 const selects=ids.map(element);
 const root=element('cohortExplorer');
 root.querySelectorAll=()=>selects;
-const context=vm.createContext({$:id=>element(id.slice(1)),number:value=>Number(value).toLocaleString('en-US'),percent:value=>(value*100).toFixed(1)+'%',escapeHtml:value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),summarizeCohort,cohortConditionValue,filterCohort,cohortFilterOptions,cohortSalaryStatistics,insightBars:()=>'<div>bars</div>',drawCityDetail:()=>{}});
+const context=vm.createContext({$:id=>element(id.slice(1)),number:value=>Number(value).toLocaleString('en-US'),percent:value=>(value*100).toFixed(1)+'%',escapeHtml:value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),summarizeCohort,cohortConditionValue,filterCohort,cohortFilterOptions,cohortSalaryStatistics,renderProfileCloud,renderDonut,renderSalaryExperienceLine,insightBars:()=>'<div>bars</div>',drawCityDetail:()=>{}});
 vm.runInContext(script.slice(script.indexOf('function cohortSalaryMarkup()'),script.indexOf('async function loadInsightDatasets()'))+
  script.slice(script.indexOf('function bindCohortExplorer('),script.indexOf('const cityMapCodes ='))+
  '\nglobalThis.bindTest=bindCohortExplorer;',context);
@@ -51,12 +52,8 @@ assert.equal(element('salaryEstimateValue').textContent,'17.5K/月');
 context.bindTest({cohort_observations:rows.slice(0,4)});
 assert.equal(element('salaryEstimateValue').textContent,'样本不足');
 
-let live;
-try { live=JSON.parse(await fs.readFile('ui_data/insights/岗位市场洞察.json','utf8')); }
-catch (error) { if(error.code!=='ENOENT') throw error; }
-if (!live) {
- console.log('salary-condition-statistics: synthetic fixtures passed; local report integration skipped (no report bundled)');
-} else {
+if(process.env.JOB_TEST_PRIVATE_FIXTURES==='1'){
+const live=JSON.parse(await fs.readFile('ui_data/insights/岗位市场洞察.json','utf8'));
 const actual=live.cohort_observations;
 context.bindTest(live);
 const stats=cohortSalaryStatistics(actual);
@@ -75,3 +72,4 @@ for(const row of actual.filter((_,i)=>i%67===0)){
 }
 console.log(JSON.stringify({passed:true,live_jobs:actual.length,valid_salary_rows:stats.count,median_k:stats.median,nonempty_progressive_combinations:combinations,checks:'五项联动、空格/市名归一、实际取值、原文不限、统一岗位/薪资范围、无薪岗位不误报无岗位、重置、小样本、真实报告'}));
 }
+console.log('PASS: synthetic condition-linked salary statistics and profile chart integration; private report checks opt-in');

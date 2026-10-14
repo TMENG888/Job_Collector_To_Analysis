@@ -1,13 +1,19 @@
 import { summarizeCohort, cohortConditionValue, filterCohort, cohortFilterOptions, cohortSalaryStatistics } from './insight-cohorts.js';
 import { patchHtml, updateLog } from './dom-updates.js';
+import {renderProfileCloud,renderDonut,renderSalaryExperienceLine} from './insight-profile-charts.js';
+import {installWordCloudInteractions} from './insight-wordcloud.js';
+import {loadJobAssistant} from './job-assistant.js';
+installWordCloudInteractions();
+import {mergeLiveProgress, collectionProgress} from './collection-progress.js';
+import {renderCollectionDashboard} from './collection-dashboard.js';
 import { fetchJsonWithTimeout } from './http-client.js';
-import { localPathKey, finalDatasetCatalog, selectLegacyTaskDataset } from './insight-transfer.js';
+import { localPathKey, finalDatasetCatalog, selectLegacyTaskDataset,resolveLatestInsightSource } from './insight-transfer.js';
 const state = { tasks: [], selectedId: null, platforms: [], labelJobs: [], selectedLabelId: null, insight: null, insightDatasets: [], insightRenderKey: null, insightFormInitialized: false, insightDatasetRequest: 0, insightLabelRequest: 0, view: 'tasks', timer: null, logTimer: null };
 const normalizedLocalPath = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
 const $ = (selector) => document.querySelector(selector);
 const number = (value) => new Intl.NumberFormat('zh-CN').format(Number(value || 0));
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-const stageLabel = { public: '公开渠道', zhaopin: '智联采集', yupao: '鱼泡采集', boss: 'BOSS采集', login_boss: 'BOSS登录', login_zhaopin: '智联登录', login_yupao: '鱼泡验证', finalize: '合并去重', workbook: 'Excel导出' };
+const stageLabel = { collection: '多平台采集', public: '多平台采集', zhaopin: '多平台采集', yupao: '多平台采集', boss: '多平台采集', login_boss: 'BOSS登录', login_zhaopin: '智联登录', login_yupao: '鱼泡验证', finalize: '导出交付', workbook: '导出交付' };
 const statusLabel = { ready: '就绪', running: '运行中', completed: '已完成', partial: '未达目标', failed: '需处理', paused: '已暂停', stopping: '停止中' };
 const platformLabel = { shixiseng: '实习僧', iguopin: '国聘', mohrss: '公共招聘网', job51: '前程无忧', jobonline: '就业在线', zhaopin: '智联招聘', yupao: '鱼泡直聘', boss: 'BOSS直聘' };
 const loginStatusLabel = { not_logged_in: '未保存', opening: '正在打开', saved: '会话已保存',browser_open:'共享浏览器已开启' };
@@ -47,20 +53,19 @@ function toast(message, error = false) {
 }
 
 function progress(task) {
-  const current = task.metrics.hasFinalResult ? task.metrics.finalRows : 0;
-  return Math.min(100, Math.round((current / task.targetRows) * 100));
+  return collectionProgress(task).percent;
 }
 
 function renderStats() {
   const running = state.tasks.filter((task) => ['running', 'stopping'].includes(task.status)).length;
   const completed = state.tasks.filter((task) => task.status === 'completed').length;
-  const rows = state.tasks.reduce((sum, task) => sum + task.metrics.finalRows, 0);
+  const rows = state.tasks.reduce((sum, task) => sum + (task.metrics.knowledgeRows??task.metrics.finalRows), 0);
   const candidates = state.tasks.reduce((sum, task) => sum + task.metrics.candidates, 0);
   patchHtml($('#stats'), [
     ['任务总数', state.tasks.length, '独立配置与输出目录'],
     ['正在运行', running, running ? '请勿同时启动多个登录渠道' : '当前无活动进程'],
-    ['已交付任务', completed, '已完成 Excel 导出'],
-    ['最终数据量', number(rows), `候选池 ${number(candidates)} 条`],
+    ['已完成任务', completed, '数据直接入库，文件下载可选'],
+    ['去重入库量', number(rows), `采集候选 ${number(candidates)} 条`],
   ].map(([label, value, note]) => `<div class="stat"><span>${label}</span><strong>${value}</strong><em>${note}</em></div>`).join(''));
 }
 
@@ -98,20 +103,14 @@ function renderDetail() {
   }
   if ($('#detail').dataset.taskId !== task.id) { $('#detail').replaceChildren(); $('#detail').dataset.taskId = task.id; }
   const isRunning = ['running', 'stopping'].includes(task.status);
-  const value = progress(task);
   const chips = [...task.platforms.map((key) => platformLabel[key]), ...task.cities.slice(0, 5), task.pace === 'safe' ? '稳健节奏' : task.pace === 'fast' ? '较快节奏' : '均衡节奏'];
   patchHtml($('#detail'), `
     <div class="detail-head">
-      <div class="detail-title"><div><h2>${escapeHtml(task.label)}</h2><p>${escapeHtml(task.message)}${task.currentStage ? ` · ${stageLabel[task.currentStage]}` : ''}</p></div><span class="badge ${task.status}">${statusLabel[task.status] || task.status}</span></div>
+      <div class="detail-title"><div><h2>${escapeHtml(task.label)}</h2><p>${escapeHtml(task.status==='running' && task.currentStage ? `${stageLabel[task.currentStage]}进行中 · 自动归集去重` : task.message)}</p></div><span class="badge ${task.status}">${statusLabel[task.status] || task.status}</span></div>
       <div class="detail-actions">
         ${task.browserSession?.verification_status==='waiting_human'?'<button class="primary" data-action="confirm-verification">已人工验证，继续当前会话</button>':''}
-        <button class="primary" data-action="all" ${isRunning ? 'disabled' : ''}>▶ 全部运行</button>
-        <button class="ghost" data-action="public" ${isRunning ? 'disabled' : ''}>采集公开渠道</button>
-        <button class="ghost" data-action="zhaopin" ${isRunning ? 'disabled' : ''}>采集 / 续爬智联</button>
-        <button class="ghost" data-action="yupao" ${isRunning ? 'disabled' : ''}>采集 / 续爬鱼泡</button>
-        ${task.platforms.includes('boss') ? `<button class="ghost" data-action="boss" ${isRunning ? 'disabled' : ''}>采集 / 续爬BOSS（试验）</button>` : ''}
-        <button class="ghost" data-action="finalize" ${isRunning ? 'disabled' : ''}>合并去重</button>
-        <button class="ghost" data-action="workbook" ${isRunning ? 'disabled' : ''}>导出 Excel</button>
+        <button class="primary" data-action="all" ${isRunning ? 'disabled' : ''}>${isRunning?'采集中':task.metrics.candidates?'▶ 断点续采全部平台':'▶ 开始采集全部平台'}</button>
+        <button class="ghost" data-action="export-latest" ${task.latestExport?.status==='running'?'disabled':''} title="可选下载；洞察和助手直接读知识库，不需要文件中转">${task.latestExport?.status==='running'?'数据下载准备中…':'下载数据（可选）'}</button>
         <button class="danger" data-action="pause" ${!isRunning || task.status === 'stopping' ? 'disabled' : ''}>暂停</button>
         <button class="ghost" data-action="open">打开文件夹</button>
         <button class="secondary" data-action="insights">用于岗位洞察</button>
@@ -120,16 +119,8 @@ function renderDetail() {
     </div>
     <div class="detail-body">
       ${task.browserSession?`<p>登录状态：${escapeHtml(authLabels[task.browserSession.login_status]||'未确认')} · 验证状态：${escapeHtml(verificationLabels[task.browserSession.verification_status]||'未检查')}</p>`:''}
-      <div class="progress-wrap"><div><div class="progress-info"><span>交付完成度</span><span>${task.metrics.hasFinalResult ? `${number(task.metrics.finalRows)} / ${number(task.targetRows)}` : '本任务尚未生成最终结果'}</span></div><div class="progress"><i style="width:${value}%"></i></div></div><div class="progress-number">${value}%</div></div>
-      <div class="metric-grid">
-        <div class="metric"><small>公开渠道</small><b>${number(task.metrics.publicRows)}</b></div>
-        <div class="metric"><small>智联候选</small><b>${number(task.metrics.zhaopinRows)}</b></div>
-        <div class="metric"><small>鱼泡候选</small><b>${number(task.metrics.yupaoRows)}</b></div>
-        ${task.platforms.includes('boss') ? `<div class="metric"><small>BOSS候选</small><b>${number(task.metrics.bossRows)}</b></div>` : ''}
-        <div class="metric"><small>候选总量</small><b>${number(task.metrics.candidates)}</b></div>
-        <div class="metric"><small>最终结果</small><b>${task.metrics.hasFinalResult ? number(task.metrics.finalRows) : '—'}</b></div>
-        <div class="metric"><small>去除重复</small><b>${number(task.metrics.duplicatesRemoved)}</b></div>
-      </div>
+      ${renderCollectionDashboard(task,{number,escapeHtml})}
+      ${task.latestExport?`<p class="latest-export-status">最新导出：${escapeHtml(task.latestExport.status==='running'?'正在处理':task.latestExport.status==='failed'?'失败':task.latestExport.status==='partial'?'CSV已更新，Excel未更新':'CSV／Excel已更新')} ${task.latestExport.rows?number(task.latestExport.rows)+' 条':''} ${escapeHtml(task.latestExport.updatedAt?new Date(task.latestExport.updatedAt).toLocaleString('zh-CN'):'')} ${escapeHtml(task.latestExport.warning||task.latestExport.error||'')}</p>`:''}
       <div class="task-config">${chips.filter(Boolean).map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join('')}</div>
       <div class="log-head"><h3>实时运行日志</h3><span>${isRunning ? `已运行 ${task.runningSeconds || 0} 秒 · 2秒刷新` : '最近输出'}</span></div>
       <pre class="log" id="taskLog">正在读取日志…</pre>
@@ -146,18 +137,19 @@ function renderDetail() {
 function render() { renderStats(); renderList(); renderDetail(); }
 
 function routePath(view = state.view) {
+  if (view === 'assistant') return '/?view=assistant';
   const id = view === 'labels' ? state.selectedLabelId : view === 'tasks' ? state.selectedId : null;
   return `/${view}${id ? `/${encodeURIComponent(id)}` : ''}`;
 }
 
 function syncRoute(replace = false) {
   const route = routePath();
-  if (location.pathname !== route) history[replace ? 'replaceState' : 'pushState']({}, '', route);
+  if (location.pathname + location.search !== route) history[replace ? 'replaceState' : 'pushState']({}, '', route);
 }
 
 function restoreRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
-  const view = ['tasks', 'platforms', 'labels', 'insights'].includes(parts[0]) ? parts[0] : 'tasks';
+  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'platforms', 'labels', 'insights'].includes(parts[0]) ? parts[0] : 'tasks';
   const id = parts[1] ? decodeURIComponent(parts[1]) : null;
   if (view === 'labels') state.selectedLabelId = id;
   if (view === 'tasks') state.selectedId = id;
@@ -166,18 +158,25 @@ function restoreRoute() {
 
 function switchView(view, options = {}) {
   state.view = view;
+  document.body.dataset.view = view;
+  document.body.classList.toggle('assistant-chat-page',view==='assistant');
   document.querySelectorAll('.app-view').forEach((element) => element.classList.add('hidden'));
   $(`#${view}View`).classList.remove('hidden');
   document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
-  const titles = { tasks: '采集任务', platforms: '平台登录', labels: 'AI打标', insights: '岗位洞察' };
+  document.querySelectorAll('.sidebar [data-view]').forEach((link) => {
+    if (link.dataset.view === view) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+  const titles = { tasks: '采集任务', platforms: '平台登录', labels: 'AI打标', insights: '岗位洞察', assistant: '求职助手' };
   $('#pageTitle').textContent = titles[view];
-  $('#newTaskBtn').classList.toggle('hidden', ['platforms', 'insights'].includes(view));
+  $('#newTaskBtn').classList.toggle('hidden', ['platforms', 'insights', 'assistant'].includes(view));
   $('#newTaskBtn').innerHTML = view === 'labels' ? '<span>＋</span> 新建打标任务' : '<span>＋</span> 新建采集任务';
   if (options.history !== false) syncRoute();
   if (view === 'tasks') refresh(false);
   if (view === 'platforms') loadPlatforms(false);
   if (view === 'labels') loadLabels(false);
   if (view === 'insights') { loadInsightDatasets(); loadInsightLabelJobs(); loadInsight(false); }
+  if (view === 'assistant') loadJobAssistant();
 }
 
 function percent(value) { return `${(Number(value || 0) * 100).toFixed(1)}%`; }
@@ -226,8 +225,10 @@ async function loadInsightDatasets() {
     const [data, taskData] = await Promise.all([api('/api/insights/datasets'), api('/api/tasks')]);
     if (requestId !== state.insightDatasetRequest) return;
     state.insightDatasets = finalDatasetCatalog(data.datasets || [], taskData.tasks || []);
-    $('#insightCatalogNote').textContent = `当前 ${number(state.insightDatasets.length)} 个最终整合数据集；每个任务只显示一份，平台分片、重复格式和历史版本不进入默认目录。原始与打标文件保留，可手工指定其他路径。`;
-    const options = state.insightDatasets.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name)} · ${escapeHtml(item.format || 'xlsx')}${item.collecting ? ' · 采集中数据' : ''} · ${(item.size / 1024 / 1024).toFixed(1)} MB</option>`).join('');
+    const nativeCatalog = state.insightDatasets.some(item => item.resolution === 'knowledge');
+    if (nativeCatalog) state.insightDatasets.unshift({path:'kb://all',name:'全部岗位知识库',role:'自动识别',resolution:'knowledge',format:'sqlite'});
+    $('#insightCatalogNote').textContent = `当前 ${number(state.insightDatasets.filter(item=>item.taskId).length)} 个任务知识库范围，可选择全库；直接读数据库，不需要CSV导出。分析使用固定版本快照；助手读取全部岗位的最新知识库。历史文件保留。`;
+    const options = state.insightDatasets.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name)} · ${item.resolution==='knowledge'?'数据库直连':escapeHtml(item.format||'xlsx')}${item.collecting ? ' · 采集中' : ''}</option>`).join('');
     select.innerHTML = `<option value="">手工输入 XLSX / CSV 路径</option>${options}`;
     const labelSelection = $('#labelDataset').value;
     $('#labelDataset').innerHTML = `<option value="">手工填写数据路径</option>${options}`;
@@ -243,6 +244,11 @@ async function loadInsightLabelJobs() {
   if (!select) return;
   const requestId = ++state.insightLabelRequest;
   const inputFile = normalizedLocalPath($('#insightForm input[name="inputFile"]')?.value);
+  if (String($('#insightForm input[name="inputFile"]')?.value).startsWith('kb://')) {
+    select.innerHTML = '<option value="auto">知识库自动使用同版本已批准标签</option>';
+    select.dataset.sourcePath = inputFile;
+    return;
+  }
   if (select.dataset.sourcePath !== inputFile) {
     const selected = select.value === '' ? '' : 'auto';
     select.innerHTML = '<option value="auto">自动使用同源标签（推荐）</option><option value="">不使用外部标签（仅规则抽取）</option>';
@@ -265,7 +271,8 @@ async function loadInsightLabelJobs() {
 
 function renderInsightStatus() {
   const transfer = state.insightTransfer;
-  $('#insightTransferSource').textContent = transfer ? `来源采集任务：${transfer.role} · ${transfer.expectedRows ? `交付 ${number(transfer.expectedRows)} 条` : '交付条数待核对'} · ${/legacy$/.test(transfer.resolution || '') ? '旧服务：按任务目录及交付信息验证，后端清单校验需重启后生效' : '按任务交付清单验证'}。全量分析会逐条筛选，不代表全部记录都属于目标岗位。` : '';
+  $('#insightTransferSource').textContent = transfer ? `来源采集任务：${transfer.role} · ${transfer.expectedRows ? `${transfer.resolution==='latest_snapshot'?'候选快照':'交付'} ${number(transfer.expectedRows)} 条` : '条数待读取'} · ${transfer.requiresManualSource?'已选择任务目录中的最新数据.csv；旧服务兼容模式，生成分析时校验文件，不使用最终交付接口':transfer.resolution==='latest_snapshot'?'按任务归属及文件摘要验证，未最终交付'+(transfer.updatedAt?'；更新于 '+new Date(transfer.updatedAt).toLocaleString('zh-CN'):''):/legacy$/.test(transfer.resolution || '') ? '旧服务：按任务目录及交付信息验证，后端清单校验需重启后生效' : '按任务交付清单验证'}。全量分析会逐条筛选，不代表全部记录都属于目标岗位。` : '';
+  if(transfer?.resolution==='knowledge')$('#insightTransferSource').textContent=`来源：${transfer.role}知识库 · ${number(transfer.expectedRows||0)} 条候选。生成分析时固定数据库快照，原始候选由岗位规则再次筛选；不依赖CSV导出。`;
   const insight = state.insight || { status: 'empty', message: '尚未生成岗位市场洞察' };
   const status = $('#insightStatus');
   const report = insight.report;
@@ -341,10 +348,6 @@ function renderInsightDashboard() {
     <section class="card insight-explorer" id="cohortExplorer"></section>
     <section class="card insight-label-provenance">标签来源：${escapeHtml(report.label_provenance?.mode || '规则抽取')}${report.label_provenance?.total != null ? ` · 已预标注 ${number(report.label_provenance.total)} 条` : ''} · 已用于分析 ${number(report.label_provenance?.used_in_focused_rows)} 条${report.label_provenance?.included_by_external_label ? ` · 标签补充纳入 ${number(report.label_provenance.included_by_external_label)} 条` : ''}${report.label_provenance?.non_target != null ? ` · 规则判为非目标 ${number(report.label_provenance.non_target)} 条（待复核）` : ''}${report.label_provenance?.excluded_by_prelabel ? ` · 从关键词匹配样本排除 ${number(report.label_provenance.excluded_by_prelabel)} 条` : ''}${report.label_provenance?.human_approved != null ? ` · 人工批准 ${number(report.label_provenance.human_approved)} 条` : ''}</section>
     <section class="insight-grid">
-      <article class="card insight-panel"><div class="insight-panel-head"><div><h3>多技术栈组合</h3><p>2–4项频繁项集；调整后估计已控制画像条件</p></div></div><div class="table-scroll"><table class="insight-table"><thead><tr><th>技术栈组合</th><th>项数</th><th>样本</th><th>支持度</th><th>原始中位数</th><th>调整后估计</th></tr></thead><tbody>${(report.frequent_skill_sets || report.skill_combinations || []).slice(0, 15).map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${item.size || 2}</td><td>${number(item.count)}</td><td>${percent(item.support)}</td><td>${item.raw_median_salary_k ?? item.median_salary_k ?? '—'}K</td><td>${item.adjusted_estimate_k == null ? '—' : `${item.adjusted_estimate_k}K`}</td></tr>`).join('') || '<tr><td colspan="6">当前样本没有达到组合展示阈值</td></tr>'}</tbody></table></div></article>
-    </section>
-    <section class="insight-grid two-col">
-      <article class="card insight-panel"><div class="insight-panel-head"><div><h3>岗位种子学习特征</h3><p>按目标岗位中的频率及相对其他岗位的区分度学习技能与职责</p></div></div>${insightBars(report.topic_model?.discovered_terms, 'seed_count', (value, item) => `${value} · Lift ${item.lift}`)}</article>
       <article class="card insight-panel"><div class="insight-panel-head"><div><h3>样本纳入依据</h3><p>${report.selection_contract === 'role-evidence-v2' ? '学习关键词＋领域工程上下文；职责与任职要求分别取证，待复核独立保留' : report.selection_contract === 'universal-keywords-v1' ? '标题建立种子，学习关键词筛选全部岗位；规则结果待复核' : '历史报告：直接匹配与技能＋业务职责联合匹配'}</p></div></div>${insightBars(report.topic_model?.match_methods)}</article>
     </section>
     ${report.selection_review ? `<section class="card insight-label-provenance" id="insightPendingReview"><details><summary>待复核岗位 ${number(report.selection_review.pending_rows)} 条（不计入主报告）</summary><p>${escapeHtml(report.selection_review.note)}</p><p>预览前20条；完整记录包含源行号、平台岗位ID、原文依据和证据位置。<button type="button" id="downloadInsightReview">下载完整复核清单（JSON）</button></p>${report.selection_review.rows.slice(0,20).map(r => `<p>第 ${number(r.row_no)} 行 · ${escapeHtml(r.title)} · ${escapeHtml(r.platform)}<br/>${r.keyword_evidence.quotes.slice(0,3).map(q=>`${escapeHtml(q.location === 'requirements' ? '任职要求' : q.location === 'duties' ? '职责' : '未分节')}：${escapeHtml(q.quote)}`).join('<br/>')}</p>`).join('')}</details></section>` : ''}
@@ -370,13 +373,16 @@ function bindCohortExplorer(report) {
   if (!rows.length) {
     root.innerHTML = '<div class="insight-panel-head"><div><h3>岗位画像</h3><p>历史报告仅有汇总，没有逐条岗位；重新生成洞察后可按五项条件联动查看薪资和技术栈。行业按岗位计数，与新报告的公司去重口径不同。</p></div></div><div class="insight-grid two-col">' +
       [['高频技能', report.skills], ['高频工作内容', report.tasks], ['业务工作方向', report.business_domains], ['公司行业定位', report.industries]]
-        .map(([title, items]) => '<article><h4>' + title + '</h4>' + (insightBars(items, 'count') || '<p>暂无可用标签</p>') + '</article>').join('') + '</div>';
+        .map(([title, items]) => '<article class="profile-cloud-panel"><h4>' + title + '</h4>' + renderProfileCloud(items,title) + '</article>').join('') + '</div><p>经验薪资折线及占比环图需要逐条岗位数据，请重新生成报告。</p>';
     return;
   }
   const filterSpecs = [['city','城市','cohortCity'],['experience','经验','cohortExperience'],['education','学历','cohortEducation'],['company_size','公司规模','cohortCompanySize'],['employment_type','用工类型','cohortEmployment']];
   root.innerHTML = `<div class="insight-panel-head"><div><h3>条件岗位画像与薪资统计</h3><p>五项条件共用同一批匹配岗位，同步统计薪资、技能与技术栈、工作内容及行业。选项来自当前报告实际岗位，随其他已选条件联动；每个标签在同一岗位只计一次。</p></div></div>
     <div class="cohort-filters">${filterSpecs.map(([field,label,id])=>`<label>${label}<select id="${id}" data-cohort-filter="${field}"><option value="">不限（不筛选）</option></select></label>`).join('')}<button type="button" class="ghost" id="resetCohort">全部不限</button></div>
-    <div id="cohortSummary" aria-live="polite"></div>${cohortSalaryMarkup()}<div class="insight-grid two-col"><article><h4>高频技能与技术栈</h4><div id="cohortSkills"></div></article><article><h4>高频工作内容</h4><div id="cohortTasks"></div></article><article><h4>业务工作方向</h4><div id="cohortDomains"></div></article><article><h4>公司行业定位</h4><div id="cohortIndustries"></div></article></div><details><summary>查看业务判断原文依据</summary><div id="cohortEvidence"></div></details>`;
+    <div id="cohortSummary" aria-live="polite"></div>${cohortSalaryMarkup()}<div class="insight-grid two-col profile-cloud-grid"><article class="profile-cloud-panel"><h4>技能与技术栈词云</h4><div id="cohortSkills"></div></article><article class="profile-cloud-panel"><h4>工作内容词云</h4><div id="cohortTasks"></div></article><article class="profile-cloud-panel"><h4>业务方向词云</h4><div id="cohortDomains"></div></article><article class="profile-cloud-panel"><h4>公司行业词云</h4><div id="cohortIndustries"></div></article></div>
+    <article class="profile-chart-panel"><h4>经验与招聘月薪中位数</h4><div id="cohortSalaryExperience"></div></article>
+    <div class="insight-grid two-col"><article class="profile-chart-panel"><h4>学历要求占比</h4><div id="cohortEducationDonut"></div></article><article class="profile-chart-panel"><h4>城市岗位占比</h4><div id="cohortCityDonut"></div></article></div>
+    <details><summary>查看业务判断原文依据</summary><div id="cohortEvidence"></div></details>`;
   const update = () => {
     const profile = Object.fromEntries(filterSpecs.map(([field,,id])=>[field,$('#'+id).value]));
     for (const [field,,id] of filterSpecs) {
@@ -393,8 +399,11 @@ function bindCohortExplorer(report) {
     const salary = cohortSalaryStatistics(selected);
     $('#cohortSummary').innerHTML = `<p><b>${number(summary.count)} 条匹配岗位</b> · 有效薪资 ${number(salary.count)} 条 · ${number(summary.count-salary.count)} 条岗位薪资缺失、无法解析或超范围，仍参与技能画像${summary.count && summary.count < 20 ? ' · 小样本，统计波动较大' : ''}${!summary.count ? ' · 当前条件组合没有岗位，请改为不限或点击全部不限；不会自动借用其他样本' : ''}</p>`;
     updateCohortSalary(selected);
-    for (const [id,key] of [['cohortSkills','skills'],['cohortTasks','tasks'],['cohortDomains','business_domains']]) $('#'+id).innerHTML = insightBars(summary[key], 'count', (count,item)=>`${number(count)} · ${percent(item.rate)}`) || '<p>暂无可用标签</p>';
-    $('#cohortIndustries').innerHTML = summary.industries.length ? insightBars(summary.industries, 'share', (value)=>percent(value)) : '<p>缺少公司行业信息，暂不推测行业。</p>';
+    for (const [id,key,title] of [['cohortSkills','skills','技能与技术栈词云'],['cohortTasks','tasks','工作内容词云'],['cohortDomains','business_domains','业务方向词云']]) $('#'+id).innerHTML = renderProfileCloud(summary[key],title);
+    $('#cohortIndustries').innerHTML = renderProfileCloud(summary.industries,'公司行业词云',true);
+    $('#cohortSalaryExperience').innerHTML = renderSalaryExperienceLine(selected);
+    $('#cohortEducationDonut').innerHTML = renderDonut(selected,'education','学历要求占比');
+    $('#cohortCityDonut').innerHTML = renderDonut(selected,'city','城市岗位占比');
     $('#cohortEvidence').innerHTML = summary.business_domains.slice(0,6).map(d=>`<p><b>${escapeHtml(d.name)}</b> · ${number(d.count)} 条岗位<br>${d.evidence.map(e=>`#${number(e.row_no)} ${escapeHtml(e.job_name)}：${escapeHtml(e.quote || '标签来源有证据，未提取业务片段')}`).join('<br>')}</p>`).join('') || '<p>当前筛选没有明确业务方向证据。</p>';
     if (city) drawCityDetail(city,selected); else { $('#cityMapDetail')?.remove(); }
   };
@@ -475,7 +484,7 @@ function selectMapCity(city) {
 
 function insightReportKey(report) {
   if (!report) return 'empty';
-  return [report.version, report.generated_at, report.input_file, report.sheet_name, report.analysis_mode, report.sample_rows].join('|');
+  return [report.version, report.generated_at, report.topic_model?.display_model?.updated_at, report.input_file, report.sheet_name, report.analysis_mode, report.sample_rows].join('|');
 }
 
 function renderInsight() {
@@ -491,8 +500,9 @@ async function loadInsight(silent = true) {
     state.insight = await api('/api/insights');
     if(!state.insightFormInitialized && state.insight.report) {
       const report=state.insight.report;
-      $('#insightForm input[name="inputFile"]').value=report.input_file;
-      $('#insightForm input[name="role"]').value=report.detected_role?.manual_label || report.role || '自动识别';
+      // The previous report is a result, not the default source for a new analysis.
+      $('#insightForm input[name="inputFile"]').value='kb://all';
+      $('#insightForm input[name="role"]').value='自动识别';
       state.insightFormInitialized=true;
       await loadInsightDatasets();await loadInsightLabelJobs();
     }
@@ -505,7 +515,7 @@ async function loadPlatforms(silent = true) {
   state.platformsLoading = true;
   try {
     const data = await api('/api/platforms');
-    state.platforms = data.platforms;
+    state.platforms = data.platforms.filter(item=>!['yupao','boss'].includes(item.key));
     const groups = [...new Set(state.platforms.map((item) => item.group))];
     patchHtml($('#platformGroups'), groups.map((group) => `<div class="platform-section"><div class="section-heading"><h2>${escapeHtml(group)}</h2><p>${group === '招聘平台' ? '用于岗位详情采集' : '用于人工登录后的结构化打标'}</p></div><div class="platform-grid">${state.platforms.filter((item) => item.group === group).map((item) => `<article class="platform-card card"><div class="platform-card-head"><div class="platform-logo">${escapeHtml(item.name.slice(0, 2))}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.description)}</p></div><span class="session-badge ${item.status}">${loginStatusLabel[item.status] || item.status}</span></div><div class="session-message">登录状态：${escapeHtml(authLabels[item.loginStatus]||'未确认')} · 验证状态：${escapeHtml(verificationLabels[item.verificationStatus]||'未检查')}<br>${escapeHtml(item.message)}${item.key === 'yupao' && item.browserExecutable ? `<details class="browser-instance-info"><summary>浏览器实例 · PID ${escapeHtml(item.browserPid)}</summary><small>程序：${escapeHtml(item.browserExecutable)}<br>配置目录：${escapeHtml(item.browserProfile)}${item.browserInitialization?.source_profile ? `<br>初始化：${item.browserInitialization.mode === 'full' ? '本机完整配置快照' : '本机常用设置'}（${escapeHtml(item.browserInitialization.source_profile)}）${item.browserInitialization.mode === 'full' ? '<br>加密登录数据已复制，登录态请在新实例人工确认' : ''}` : ''}${item.browserProxy ? `<br>代理：${escapeHtml(item.browserProxy)}` : ''}</small></details>` : ''}${item.key === 'yupao' && browserSwitchReason(item) ? `<br><span class="browser-switch-reason">${escapeHtml(browserSwitchReason(item))}</span>` : ''}</div><div class="platform-actions"><small>${item.updatedAt ? `最近会话 ${new Date(item.updatedAt).toLocaleString('zh-CN')}` : '尚无本机登录记录'}</small><div class="platform-browser-actions"><button class="secondary" data-platform-login="${escapeHtml(item.key)}" ${item.status === 'opening' ? 'disabled' : ''}>${item.browserOpen ? '显示共享浏览器' : '打开登录浏览器'}</button>${item.key === 'yupao' ? `<button class="secondary" data-platform-switch="yupao" ${!item.canSwitchBrowser ? 'disabled' : ''} title="将当前 Cookie 迁入独立的新实例，后续采集自动复用；请先暂停鱼泡采集">携带 Cookie 切换新浏览器</button>` : ''}</div></div></article>`).join('')}</div></div>`).join(''));
     document.querySelectorAll('[data-platform-login]').forEach((button) => {
@@ -736,6 +746,21 @@ async function refresh(silent = true) {
   try {
     const data = await api('/api/tasks');
     state.tasks = data.tasks;
+    try {
+      const unified=await api(`/unified-progress.json?t=${Date.now()}`);
+      if(Date.now()-Date.parse(unified.updatedAt)<45000)state.tasks=state.tasks.map(task=>{
+        const report=unified.tasks?.[task.id];
+        return report?.task_id===task.id?{...task,metrics:{...task.metrics,unifiedDataset:report}}:task;
+      });
+    } catch {}
+    // Static compatibility snapshot keeps the running collector untouched.
+    // Native server metrics take precedence after a normal service restart.
+    if (state.tasks.some(task=>!task.metrics.liveCollection)) {
+      try {
+        const snapshot = await api(`/live-progress.json?t=${Date.now()}`);
+        state.tasks = mergeLiveProgress(state.tasks,snapshot);
+      } catch {}
+    }
     if (state.view !== 'tasks') return;
     if (!state.selectedId && state.tasks.length) state.selectedId = state.tasks[0].id;
     syncRoute(true);
@@ -760,10 +785,14 @@ async function loadLog() {
 
 async function handleAction(task, action) {
   try {
+    if(action==='export-latest'){
+      const data=await api(`/api/tasks/${encodeURIComponent(task.id)}/export-latest`,{method:'POST',body:'{}'});
+      toast(data.message);return refresh();
+    }
     if (['insights', 'labels'].includes(action)) {
       await loadInsightDatasets();
       let dataset;
-      try { dataset = (await api(`/api/tasks/${encodeURIComponent(task.id)}/insight-source`)).dataset; }
+      try { dataset = action==='insights'?await resolveLatestInsightSource(task,api):(await api(`/api/tasks/${encodeURIComponent(task.id)}/insight-source`)).dataset; }
       catch (error) { if (error.status !== 404) throw error; dataset = selectLegacyTaskDataset(task, state.insightDatasets); }
       if (action === 'labels') {
         $('#labelForm input[name="inputFile"]').value = dataset.path;
@@ -778,7 +807,7 @@ async function handleAction(task, action) {
         switchView('insights');
         $('#insightForm').scrollIntoView({ behavior: 'smooth' });
       }
-      toast(`已选择 ${task.label} 的交付数据${dataset.expectedRows ? ` ${number(dataset.expectedRows)} 条` : ''}${dataset.collecting ? '；采集更新后需重新生成' : ''}`);
+      toast(dataset.requiresManualSource?`已对接 ${task.label} 的最新导出CSV；点击“生成全量分析”时校验并读取文件`:`已选择 ${task.label} 的${dataset.resolution==='latest_snapshot'?'最新候选':'交付'}数据${dataset.expectedRows ? ` ${number(dataset.expectedRows)} 条` : ''}${dataset.updatedAt?'；更新于 '+new Date(dataset.updatedAt).toLocaleString('zh-CN'):''}${dataset.collecting ? '；采集更新后需重新生成' : ''}`);
       return;
     }
     if (action === 'pause') {
@@ -839,6 +868,12 @@ for (const eventName of ['input', 'change']) $('#insightForm').addEventListener(
 });
 $('#insightDataset').addEventListener('change', (event) => {
   if (event.currentTarget.value) $('#insightForm input[name="inputFile"]').value = event.currentTarget.value;
+  const selected=state.insightDatasets.find(item=>item.path===event.currentTarget.value);
+  if(['latest_snapshot','knowledge'].includes(selected?.resolution)){
+    $('#insightForm input[name="role"]').value=selected.role;
+    state.insightTransfer={...selected,role:selected.role};
+    renderInsightStatus();
+  }
   loadInsightLabelJobs();
 });
 $('#insightForm input[name="inputFile"]').addEventListener('change', () => {
@@ -887,7 +922,7 @@ $('#insightForm').addEventListener('submit', async (event) => {
   body.analysisMode = 'full';
   body.labelJobId = 'auto';
   body.sheetName = '岗位数据';
-  if (state.insightTransfer && localPathKey(body.inputFile) === localPathKey(state.insightTransfer.path) && body.role === state.insightTransfer.role) body.sourceTaskId = state.insightTransfer.taskId;
+  if (state.insightTransfer && !state.insightTransfer.requiresManualSource && localPathKey(body.inputFile) === localPathKey(state.insightTransfer.path) && body.role === state.insightTransfer.role) body.sourceTaskId = state.insightTransfer.taskId;
   try {
     if (body.labelJobId && !(await api('/api/state')).capabilities?.labelReview) throw new Error('请先更新服务以接入复核标签');
     const data = await api('/api/insights/run', { method: 'POST', body: JSON.stringify(body) });

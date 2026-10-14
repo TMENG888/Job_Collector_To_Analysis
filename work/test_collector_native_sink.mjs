@@ -1,0 +1,16 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import assert from 'node:assert/strict';
+import {writeNativeChannelRows,readNativeTaskRows,nativeTaskCounts} from './collector_native_sink.mjs';
+import {otherChannelValidCount} from './task_collection_target.mjs';
+const dir=await fs.mkdtemp(path.join(os.tmpdir(),'native-sink-test-'));
+await fs.writeFile(path.join(dir,'任务归属.json'),JSON.stringify({task_id:'native'}));
+const row={platform:'智联招聘',job_id:'1',job_name:'嵌入式软件工程师',company_name:'测试公司',city:'北京',job_url:'https://example.com/1',job_description:'负责C++开发STM32驱动与固件，具有嵌入式软件项目经验。'};
+await writeNativeChannelRows(dir,'native',[row,row]);assert.equal((await nativeTaskCounts(dir,'native')).rows,1);
+await writeNativeChannelRows(dir,'native',[{...row,job_description:'短'}]);assert.equal((await readNativeTaskRows(dir,'native'))[0].job_description,row.job_description);
+await assert.rejects(writeNativeChannelRows(dir,'foreign',[row]),/归属/);
+await assert.rejects(writeNativeChannelRows(dir,'native',[{...row,job_id:'2'},{...row,task_id:'foreign'}]),/task_id/);assert.equal((await nativeTaskCounts(dir,'native')).rows,1,'failed batches must roll back');
+assert.equal(await otherChannelValidCount(dir,'','native'),1);assert.equal(await otherChannelValidCount(dir,'zhaopin','native'),0);
+assert.equal((await fs.readdir(dir)).some(name=>name.endsWith('.csv')),false);
+console.log('PASS: direct collector-to-SQLite writes, transactional rollback, richer-field preservation, channel targets and no CSV output');

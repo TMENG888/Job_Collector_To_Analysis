@@ -1,0 +1,18 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {fileURLToPath} from 'node:url';
+import {writeNativeChannelRows} from './collector_native_sink.mjs';
+import {createKnowledgeStore} from './job_knowledge_store.mjs';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const dir=await fs.mkdtemp(path.join(os.tmpdir(),'knowledge-analysis-test-')),out=path.join(dir,'task');await fs.mkdir(out);
+const task={id:'embedded',label:'嵌入式软件开发',outputDir:out};await fs.writeFile(path.join(out,'任务归属.json'),JSON.stringify({task_id:task.id}));await fs.writeFile(path.join(dir,'tasks.json'),JSON.stringify([task]));
+const rows=Array.from({length:14},(_,i)=>({platform:'智联招聘',job_id:String(i),job_name:'嵌入式软件开发工程师',company_name:'测试公司'+i,city:'北京',salary:'15-25K',education:'本科',experience:'1-3年',employment_type:'全职',job_url:'https://example.com/'+i,job_description:`岗位职责：负责嵌入式软件研发和固件开发，基于STM32进行C++驱动开发，进行RTOS实时任务调试与板级联调。任职要求：熟悉Linux与ARM，掌握嵌入式系统的软件开发流程。项目编号${i}。`}));
+await writeNativeChannelRows(out,task.id,rows);const store=createKnowledgeStore(dir);await store.sync({refresh:false});const snapshot=await store.snapshot('kb://task/embedded');
+const configFile=path.join(dir,'config.json'),reportFile=path.join(dir,'report.json');await fs.writeFile(configFile,JSON.stringify({inputFile:snapshot.uri,displayInputFile:'kb://task/embedded',role:'嵌入式软件开发',analysisMode:'full'}));
+await promisify(execFile)(process.execPath,[path.join(root,'work/analyze_job_market_sample.mjs'),configFile,reportFile],{cwd:root,env:{...process.env,JOB_UI_DATA_DIR:dir},timeout:45000,maxBuffer:1000000,windowsHide:true});
+const report=JSON.parse(await fs.readFile(reportFile,'utf8'));assert.equal(report.total_rows,14);assert.ok(report.sample_rows>0);assert.equal(report.input_file,'kb://task/embedded');assert.equal(report.knowledge_snapshot,snapshot.uri);assert.ok(report.cohort_observations.every(j=>j.knowledge_key&&j.knowledge_hash));assert.equal((await fs.readdir(out)).some(n=>n.endsWith('.csv')),false);assert.ok((await store.assistantData()).jobs.some(j=>j.label_source==='同内容版本洞察纳入记录'));
+console.log('PASS: direct SQLite snapshot → full insight analysis → version-matched observations back into the shared assistant knowledge base; no CSV intermediary');

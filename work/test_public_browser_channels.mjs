@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {chromium} from 'playwright';
-import {collect51Records,collectJobonline,blockedReason,parse51Payload} from './browser_public_channels.mjs';
+import {collectJobonline,blockedReason} from './browser_public_channels.mjs';
+import {collect51Records,parse51Payload} from './job51/collector.mjs';
 const dir=await fs.mkdtemp(path.join(os.tmpdir(),'job-public-channel-'));
 const browser=await chromium.launch({headless:true,executablePath:'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'});
 let closed=0;
@@ -25,6 +26,8 @@ try{
  assert.equal(closed,1,'failed browser closed');
  const success=await collect51Records('智能体开发',{name:'北京',code:'010000'},{checkpointPath:path.join(dir,'51-ok.json'),contextFactory:()=>contextFactory(route=>route.request().url().includes('/api/job/search-pc')?route.fulfill({json:{resultbody:{job:{totalCount:1,items:first.resultbody.job.items}}}}):route.fulfill({contentType:'text/html; charset=utf-8',body:'<script>fetch("/api/job/search-pc?pageNum=1")</script>'}))});
  assert.equal(success.records.length,1);assert.equal(closed,2);
+ await assert.rejects(collect51Records('测试',{name:'北京',code:'010000'},{checkpointPath:path.join(dir,'51-html.json'),contextFactory:()=>contextFactory(route=>route.request().url().includes('/api/job/search-pc')?route.fulfill({contentType:'text/html',body:'<textarea id="renderData">访问验证</textarea>'}):route.fulfill({contentType:'text/html',body:'<script>fetch("/api/job/search-pc?pageNum=1")</script>'}))}),e=>e.code==='verification_required'&&!e.message.includes('Unexpected token'));
+ assert.equal(closed,3);
  const onlineFixture=`<html><body><script>
  const list=()=>{document.body.innerHTML=[1,2].map(i=>'<div><div class="position_item_left"><p><span class="left_title" onclick="detail('+i+')">工程师'+i+'</span><span class="salary">4000-6000元</span></p><p class="left_info"><span>山东省-威海市</span><span>|经验不限</span><span>|大学本科</span><span>|社招</span></p><p><span class="name">测试公司</span><span class="nature">民营</span><span class="size">50-99人</span></p></div>职位来源：公共招聘</div>').join('')+'<button disabled>下一页</button>'};
  window.detail=i=>{history.pushState({},'', '/positionDetail?id='+i);document.body.innerHTML='<div>4000-6000元/月</div><div class="job-sec"><h3>职位描述:</h3><div class="text">负责产品工艺设计及成本核算</div></div><div class="job-sec"><h3>职位亮点:</h3><ul><li>五险一金</li></ul></div><div class="location-address">山东省威海市测试地址</div><div><h2>测试公司</h2><p>行业：制造业</p><p>人数：50-99人</p></div><div>职位同步时间：2026/07/06</div>'};window.onpopstate=list;list();
@@ -32,8 +35,27 @@ try{
  const onlinePath=path.join(dir,'online.json');
  const online=await collectJobonline('工程师',{name:'全国'},{checkpointPath:onlinePath,maxRows:2,contextFactory:()=>contextFactory(route=>route.fulfill({contentType:'text/html; charset=utf-8',body:onlineFixture}))});
  assert.equal(online.length,2);assert.equal(online[0].platform,'就业在线');assert.equal(online[0].industry,'制造业');assert.equal(online[0].company_size,'50-99人');assert.equal(online[0].salary,'4000-6000元/月');assert.match(online[0].job_description,/工艺设计/);
- assert.equal(new Set(online.map(r=>r.job_id)).size,2);assert.equal(closed,3);
+ assert.equal(new Set(online.map(r=>r.job_id)).size,2);assert.equal(closed,4);
  await assert.rejects(collectJobonline('工程师',{name:'全国'},{checkpointPath:path.join(dir,'blocked-online.json'),contextFactory:()=>contextFactory(route=>route.fulfill({contentType:'text/html; charset=utf-8',body:'请先登录后查看'}))}), /登录或账号/);
- assert.equal(closed,4);
+ assert.equal(closed,5);
+ const resumeFixture=`<html><body><script>
+ let pageNo=1;history.replaceState({pageNo},'');
+ function nextPage(){pageNo++;history.replaceState({pageNo},'');list();}
+ function list(){document.body.innerHTML='<div class="position_item_left"><span class="left_title" onclick="detail()">工程师'+pageNo+'</span><span class="name">测试公司</span></div><button '+(pageNo===2?'disabled':'')+' onclick="nextPage()">下一页</button>';}
+ function detail(){const id=pageNo;fetch('/detail-visited?id='+id);history.pushState({},'', '/positionDetail?id='+id);document.body.innerHTML='<div>4000-6000元/月</div><div class="job-sec"><h3>职位描述:</h3><div class="text">负责数据分析</div></div>';}
+ window.onpopstate=e=>{pageNo=e.state.pageNo;list()};list();
+ </script></body></html>`;
+ const resumePath=path.join(dir,'online-resume.json');
+ await fs.writeFile(resumePath,JSON.stringify({records:[{job_id:'1',job_name:'工程师1'}],pageNo:1,nextPageNo:2,nextCardIndex:0,completed:false}));
+ const visits=[];
+ const resumed=await collectJobonline('工程师',{name:'全国'},{checkpointPath:resumePath,maxPages:2,maxRows:10,contextFactory:()=>contextFactory(route=>{if(route.request().url().includes('/detail-visited')){visits.push(new URL(route.request().url()).searchParams.get('id'));return route.fulfill({body:'ok'});}return route.fulfill({contentType:'text/html; charset=utf-8',body:resumeFixture});})});
+ assert.equal(resumed.length,2);assert.deepEqual(visits,['2'],'resume skips already processed page details');
+ assert.equal(JSON.parse(await fs.readFile(resumePath,'utf8')).completed,true);
+ const withinPagePath=path.join(dir,'online-within-page.json');
+ const withinPageOptions={checkpointPath:withinPagePath,contextFactory:()=>contextFactory(route=>route.fulfill({contentType:'text/html; charset=utf-8',body:onlineFixture}))};
+ const capped=await collectJobonline('工程师',{name:'全国'},{...withinPageOptions,maxRows:1});
+ const withinPage=await collectJobonline('工程师',{name:'全国'},{...withinPageOptions,maxRows:2});
+ assert.equal(withinPage.length,2);
+ assert.equal(withinPage[0].collected_at,capped[0].collected_at,'same-page cursor does not refetch first saved detail');
  console.log(JSON.stringify({ok:true,checks:['51 captcha stops promptly','partial checkpoint survives','contexts closed on error/success','valid API payload','jobonline detail fields and dedup','jobonline login stop'],testDir:dir}));
 }finally{await browser.close();}

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Workbook, SpreadsheetFile, FileBlob } from '@oai/artifact-tool';
+import {knowledgeStore} from './job_knowledge_store.mjs';
 
 export const jobColumnAliases = {
   record_no: '序号', relevance_level: '相关度分级', relevance_evidence: '相关度依据', platform: '平台',
@@ -14,8 +14,17 @@ export const jobColumnAliases = {
 };
 
 export async function readJobDataset(inputFile, requestedSheet = '岗位数据') {
+  if(String(inputFile).startsWith('kb://')){
+    const data=await knowledgeStore().read(inputFile);
+    const headers=[...new Set(['岗位名称','岗位描述',...data.rows.flatMap(row=>Object.keys(row).map(key=>jobColumnAliases[key]||key))])];
+    const rows=data.rows.map((row,i)=>({row_no:i+2,...Object.fromEntries(Object.entries(row).map(([key,value])=>[jobColumnAliases[key]||key,Array.isArray(value)&&!key.startsWith('knowledge_approved_')?value.join(' | '):value]))}));
+    if(!rows.length)throw new Error('知识库当前范围没有岗位数据');
+    return {sheetName:'岗位数据',headers,rows,source:{format:'sqlite',revision:data.revision,knowledge_uri:inputFile}};
+  }
   const ext = path.extname(inputFile).toLowerCase();
   if (!['.xlsx', '.csv'].includes(ext)) throw new Error('仅支持 XLSX 或 UTF-8 标准化 CSV 数据');
+  // Database-native use does not require the optional spreadsheet runtime.
+  const { Workbook, SpreadsheetFile, FileBlob } = await import('@oai/artifact-tool');
   const before = await fs.stat(inputFile);
   const workbook = ext === '.csv'
     ? await Workbook.fromCSV((await fs.readFile(inputFile, 'utf8')).replace(/^\uFEFF/, ''), { sheetName: '岗位数据' })

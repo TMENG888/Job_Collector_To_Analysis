@@ -3,12 +3,23 @@ import path from 'node:path';
 import {openContext} from './browser_public_channels.mjs';
 import {assertListPage} from './list_page_guard.mjs';
 import {writeAtomic,writeJsonAtomic} from './collector_storage.mjs';
+import {collectionExitCode} from './collection_policy.mjs';
+import {collectionChannelAvailable} from './channel_availability.mjs';
 import {createManualSearchSession} from './manual_search_session.mjs';
+import {otherChannelValidCount,validJobRecord} from './task_collection_target.mjs';
 
-const outputDir = path.resolve(process.argv[2] || 'outputs');
+const outputDir = path.resolve(process.argv[2] || 'outputs/yupao');
+if(!collectionChannelAvailable('yupao')){
+  console.log('鱼泡采集渠道已停用：跳过网站请求，保留已有数据和断点；继续其他渠道及合并导出。');
+  process.exit(0);
+}
 const configPath = process.argv[3] ? path.resolve(process.argv[3]) : null;
 if (!configPath) throw new Error('用法: collect_logged_yupao.mjs <输出目录> <鱼泡配置.json>');
 const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+const taskTarget=Number(config.taskTargetRows||0);
+const otherValid=taskTarget?await otherChannelValidCount(outputDir,'yupao',process.env.JOB_COLLECTOR_TASK_ID||config.task_id):0;
+const remaining=taskTarget?Math.max(0,taskTarget-otherValid):Infinity;
+const outputRows=rows=>taskTarget?rows.filter(validJobRecord).slice(0,remaining):rows;
 const rawDir = path.join(outputDir, '原始数据');
 const checkpointDir = path.join(outputDir, '断点数据', '鱼泡直聘');
 await fs.mkdir(rawDir, { recursive: true });
@@ -37,6 +48,7 @@ const columns = [
 ];
 
 async function writeCsv(filePath, rows) {
+  if(process.env.JOB_COLLECTOR_NATIVE_STORE==='1'){const {writeNativeChannelRows}=await import('./collector_native_sink.mjs');return writeNativeChannelRows(outputDir,process.env.JOB_COLLECTOR_TASK_ID||config.task_id,rows);}
   const csv = [columns.join(','), ...rows.map((row) => columns.map((key) => csvEscape(row[key])).join(','))].join('\r\n');
   await writeAtomic(filePath, `\uFEFF${csv}`);
 }
@@ -172,13 +184,14 @@ async function saveCheckpoint(filePath, state) {
 }
 
 let context;
+if(taskTarget&&remaining===0){console.log('本任务有效数据已达到目标，不再打开鱼泡搜索页');process.exit(0);}
 try {context=await openContext('yupao',{headless:false});}
 catch(error){console.error(error.message);process.exit(error.code==='RESOURCE_PRESSURE'?43:42);}
 let page;
 try {page=context.pages()[0] || await context.newPage();}
 catch(error){await context.close().catch(()=>{});console.error(error.message);process.exit(42);}
 page.setDefaultTimeout(18000);
-const manualSession=await createManualSearchSession(outputDir,process.env.JOB_COLLECTOR_TASK_ID||config.task_id||'',page,{platform:'yupao',instanceId:context.managedSession?.session_id});
+const manualSession=await createManualSearchSession(outputDir,process.env.JOB_COLLECTOR_TASK_ID||config.task_id||'',page,{platform:'yupao',instanceId:context.managedSession?.session_id,onBlocked:config.blockedPolicy||process.env.JOB_COLLECTOR_BLOCKED_POLICY||'wait'});
 let activeCombo = null;
 let activeState=null,activeCheckpoint=null;
 const requestOwners=new WeakMap();
@@ -303,6 +316,7 @@ async function collectDetails(keyword, city, state, checkpointPath, combo) {
   const limit = detailLimitPerCombo === 0 ? records.length : Math.min(records.length, detailLimitPerCombo);
   const pending = records.slice(0, limit).filter((record) => !details[jobId(record)]);
   for (let index = 0; index < pending.length; index += 1) {
+    if(taskTarget&&outputRows(await loadAllRows()).length>=remaining)break;
     const record = pending[index];
     const id = jobId(record);
     const bizId = String(record.jobBizId || '');
@@ -325,7 +339,7 @@ async function collectDetails(keyword, city, state, checkpointPath, combo) {
       }
       details[id] = { ok: false, data: {}, page_text: '', url: detailUrl, error: String(error.message || error) };
     }
-    if ((index + 1) % 10 === 0 || index + 1 === pending.length) {
+    if (taskTarget || (index + 1) % 10 === 0 || index + 1 === pending.length) {
       state.details = details;
       state.updated_at = new Date().toISOString();
       await saveCheckpoint(checkpointPath, state);
@@ -355,8 +369,9 @@ async function loadAllRows() {
 }
 
 try {
-  for (const keyword of keywords) {
+  collection: for (const keyword of keywords) {
     for (const city of cities) {
+      if(taskTarget&&outputRows(await loadAllRows()).length>=remaining)break collection;
       const checkpointPath = path.join(checkpointDir, `${safeName(keyword)}_${safeName(city.name)}.json`);
       let state = { keyword, city, total: 0, records: [], details: {}, list_complete: false, complete: false, collected_at: new Date().toISOString() };
       try { state = { ...state, ...JSON.parse(await fs.readFile(checkpointPath, 'utf8')) }; } catch {}
@@ -367,7 +382,7 @@ try {
       activeState=state;activeCheckpoint=checkpointPath;
       const combo = await collectList(keyword, city, state, checkpointPath);
       await collectDetails(keyword, city, state, checkpointPath, combo);
-      const rows = await loadAllRows();
+      const rows = outputRows(await loadAllRows());
       await writeCsv(path.join(outputDir, 'yupao_标准化数据.csv'), rows);
       await writeJsonAtomic(path.join(rawDir, `鱼泡直聘_${safeName(keyword)}_${safeName(city.name)}_登录会话.json`),state);
       console.log(`鱼泡合并进度：${rows.length} 条唯一岗位`);
@@ -375,17 +390,18 @@ try {
     }
   }
 } catch(error) {
+  process.exitCode=collectionExitCode(error);
   if(activeState){
     if(activeCombo){activeState.records=[...activeCombo.records.values()];activeState.total=activeCombo.total;}
     activeState.complete=false;activeState.pause_reason=error.message;
-    await saveCheckpoint(activeCheckpoint,activeState).catch(e=>console.error('断点保存失败：'+e.message));
+    await saveCheckpoint(activeCheckpoint,activeState).catch(e=>{console.error('断点保存失败：'+e.message);process.exitCode=42;});
   }
   await writeJsonAtomic(path.join(outputDir,'鱼泡直聘_暂停原因.json'),{task_id:process.env.JOB_COLLECTOR_TASK_ID||config.task_id||'',keyword:activeState?.keyword,city:activeState?.city,stage:activeCombo?.detailTargetId?'详情采集':'列表采集',reason:error.message,url:page.url(),updated_at:new Date().toISOString()}).catch(()=>{});
-  console.error(error.message);process.exitCode=error.code==='RESOURCE_PRESSURE'?43:42;
+  console.error(error.message);
 } finally {
   try {
   activeCombo = null;
-  const rows = await loadAllRows();
+  const rows = outputRows(await loadAllRows());
   if (rows.length) await writeCsv(path.join(outputDir, 'yupao_标准化数据.csv'), rows);
   await writeJsonAtomic(path.join(outputDir, '鱼泡直聘_采集状态.json'), {
     rows: rows.length, updated_at: new Date().toISOString(), paused:Boolean(process.exitCode),
@@ -395,5 +411,5 @@ try {
   finally {await manualSession.close().catch(()=>{});await context.close().catch(() => {});}
 }
 
-const finalRows = await loadAllRows();
+const finalRows = outputRows(await loadAllRows());
 console.log(JSON.stringify({ platform: '鱼泡直聘', rows: finalRows.length, paused:Boolean(process.exitCode), outputDir }));

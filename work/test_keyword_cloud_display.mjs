@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import {buildKeywordCloudDisplay} from './keyword-cloud-display.mjs';
+import {parseChannelCsv} from './public_channel_csv.mjs';
+const family={name:'数据分析',title:/数据分析/};
+const rows=Array.from({length:8},(_,i)=>({row_no:i+2,'岗位名称':'数据分析师','岗位描述':`岗位职责：负责经营分析、数据清洗与用户画像，第${i}组。任职要求：掌握Python和SQL以及Excel。公司简介：只提到Kafka和Tableau。福利待遇：FineBI。`}));
+const snapshot=structuredClone(rows);
+const model=buildKeywordCloudDisplay(rows,family);
+assert.deepEqual(rows,snapshot,'Display builder must not mutate source rows');
+assert.ok(model.terms.some(t=>t.name==='SQL'));assert.ok(model.terms.some(t=>t.name==='Excel'),'Include requirements');
+assert.ok(!model.terms.some(t=>['Kafka','Tableau','FineBI'].includes(t.name)),'Company/welfare isolation');
+assert.ok(model.terms.every(t=>t.used_for_filter===false&&t.evidence.quote&&t.seed_df>=model.minimum_seed_df));
+assert.equal(buildKeywordCloudDisplay(rows,{name:'智能体/大模型应用',title:/智能体/}),null,'Untested profiles retain original display');
+assert.equal(buildKeywordCloudDisplay(rows.slice(0,4),family),null,'No fabricated cold-start terms');
+assert.equal(buildKeywordCloudDisplay(rows,family,{limit:2}).terms.length,2);
+const boundary=rows.map(r=>({...r,'岗位描述':r['岗位描述'].replace(/Python和SQL以及Excel/,'MySQL数据库')}));
+assert.ok(!buildKeywordCloudDisplay(boundary,family).terms.some(t=>t.name==='SQL'),'SQL must not match MySQL');
+if(process.env.JOB_TEST_PRIVATE_FIXTURES==='1'){
+const report=JSON.parse(await fs.readFile('ui_data/insights/岗位市场洞察.json','utf8'));
+const raw=parseChannelCsv(await fs.readFile(report.input_file,'utf8')).map((r,i)=>({...r,row_no:i+2,'岗位名称':r.job_name,'岗位描述':r.job_description}));
+const actual=buildKeywordCloudDisplay(raw,family);
+const reference=JSON.parse(await fs.readFile('ui_data/insights/comparisons/wordcloud-20261010/results.json','utf8')).variants.find(v=>v.id==='fusion');
+assert.deepEqual(actual.terms.map(t=>t.name),reference.terms.map(t=>t.name),'Production word list equals tested fusion');
+assert.equal(actual.seed_rows,1204);assert.equal(actual.terms.length,100);
+}
+console.log('PASS display-only isolation, requirements, evidence, cold start, SQL boundary, immutable inputs; private parity opt-in');

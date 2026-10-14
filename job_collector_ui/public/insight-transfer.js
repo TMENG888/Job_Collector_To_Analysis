@@ -1,4 +1,16 @@
 export const localPathKey = (value) => String(value || '').trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase();
+export async function resolveLatestInsightSource(task,request){
+  try{return (await request(`/api/knowledge/tasks/${encodeURIComponent(task.id)}/source`)).dataset;}catch(error){if(error.status!==404)throw error;}
+  try{return (await request(`/api/tasks/${encodeURIComponent(task.id)}/refresh-latest`,{method:'POST',body:'{}',timeoutMs:120000})).dataset;}
+  catch(error){
+    if(error.status!==404)throw error;
+    // Old servers can still analyze an explicitly supplied CSV. Do not attach
+    // a sourceTaskId: their delivery-only validator cannot recognize snapshots.
+    const directory=String(task.outputDir||'').replace(/[\\/]+$/,'');
+    if(!directory)throw new Error('任务输出目录缺失，无法对接最新数据');
+    return {path:directory+'\\最新数据.csv',taskId:task.id,format:'csv',resolution:'latest_snapshot_legacy',expectedRows:null,collecting:task.status==='running',complete:false,requiresManualSource:true};
+  }
+}
 export const localDirectory = (value) => localPathKey(value).replace(/\\[^\\]+$/, '');
 const basename = (value) => String(value || '').replaceAll('/', '\\').split('\\').pop();
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -28,6 +40,7 @@ export function selectLegacyTaskDataset(task, datasets) {
 }
 
 export function finalDatasetCatalog(datasets, tasks) {
+  if(datasets.some(d=>d.resolution==='knowledge'))return datasets.filter(d=>d.resolution==='knowledge');
   const found = new Map();
   for (const task of tasks.filter((item) => !item.archived)) {
     const candidates = datasets.filter((dataset) => localDirectory(dataset.path) === localPathKey(task.outputDir));
@@ -47,7 +60,7 @@ export function finalDatasetCatalog(datasets, tasks) {
     }
     if (!selected) continue;
     const rows = selected.expectedRows || Number(task.metrics?.finalRows) || null;
-    const dataset = { ...selected, taskId: task.id, canonical: true, expectedRows: rows, collecting: task.status === 'running', resolution: selected.resolution || 'final_catalog_legacy', name: `${task.label} · 最终整合数据${rows ? ` · ${rows.toLocaleString('zh-CN')} 条` : ''}` };
+    const dataset = { ...selected, taskId: task.id, canonical: true, expectedRows: rows, collecting: task.status === 'running', resolution: selected.resolution || 'final_catalog_legacy', name: `${task.label} · ${selected.resolution==='latest_snapshot'?'最新候选数据（未最终交付）':'最终整合数据'}${rows ? ` · ${rows.toLocaleString('zh-CN')} 条` : ''}` };
     found.set(localPathKey(dataset.path), dataset);
   }
   return [...found.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));

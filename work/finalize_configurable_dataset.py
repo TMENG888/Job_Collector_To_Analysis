@@ -11,6 +11,7 @@ import re
 import sys
 from collections import Counter
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 csv.field_size_limit(min(sys.maxsize, 2_147_483_647))
@@ -26,6 +27,10 @@ label = str(profile.get("label") or "岗位").strip()
 task_id = profile.get("task_id")
 if not task_id:
     raise ValueError("缺少 task_id，拒绝生成无法确认任务归属的交付文件")
+if profile.get("strict_valid_rows"):
+    owner = json.loads((output_dir / "任务归属.json").read_text(encoding="utf-8"))
+    if owner.get("task_id") != task_id:
+        raise ValueError("输出目录不属于当前任务，拒绝合并历史数据")
 
 
 def literal_pattern(terms, fallback=r"(?!)"):
@@ -101,6 +106,11 @@ def read_rows(file_path):
 
 
 source_files = discover_sources()
+if not source_files and (output_dir / "统一采集数据.csv").exists():
+    state = json.loads((output_dir / "统一采集数据状态.json").read_text(encoding="utf-8"))
+    if state.get("task_id") != task_id:
+        raise ValueError("统一采集数据集不属于当前任务")
+    source_files = [output_dir / "统一采集数据.csv"]
 if not source_files:
     raise FileNotFoundError("没有找到可合并的 *_标准化数据.csv；请先运行采集，或在配置中添加 source_directories")
 
@@ -126,12 +136,62 @@ for row in raw_rows:
     seen.add(key)
     deduped.append(row)
 
+# Reconcile the automatically maintained dataset without counting its copy of
+# channel records as extra input or duplicates. Channel exports remain the
+# authoritative backup; checkpoint-only records can complete partial delivery.
+unified_added = 0
+unified_path = output_dir / "统一采集数据.csv"
+unified_status = output_dir / "统一采集数据状态.json"
+if unified_path.exists() and unified_status.exists():
+    state = json.loads(unified_status.read_text(encoding="utf-8"))
+    if state.get("task_id") != task_id:
+        raise ValueError("统一采集数据集不属于当前任务")
+    by_key = {(str(row.get("platform", "")).strip(), str(row.get("job_id", "")).strip()): row for row in deduped}
+    for captured in read_rows(unified_path):
+        if captured.get("task_id") != task_id:
+            raise ValueError("统一数据集中混入其他任务记录")
+        key = (str(captured.get("platform", "")).strip(), str(captured.get("job_id", "")).strip())
+        if not all(key):
+            continue
+        previous = by_key.get(key)
+        if previous is None:
+            deduped.append(captured)
+            raw_rows.append(captured)
+            by_key[key] = captured
+            unified_added += 1
+        else:
+            for field, value in captured.items():
+                if not previous.get(field) and value:
+                    previous[field] = value
+            if len(captured.get("job_description", "")) > len(previous.get("job_description", "")):
+                previous["job_description"] = captured["job_description"]
+
 eligible = []
 excluded = []
+validity_excluded = []
+def valid_job_record(row):
+    if not all(str(row.get(field, "")).strip() for field in ["platform", "job_id", "job_name", "company_name", "city", "job_url", "job_description"]):
+        return False
+    description = str(row["job_description"]).strip()
+    if len(description) < 20 or re.search(r"^\s*(?:<!doctype|<html|<textarea)|aliyun_waf|请按住滑块|拖动到最右边|Protected by Tencent Cloud EdgeOne", description, re.I):
+        return False
+    try:
+        if re.search(r"\s", row["job_url"]):
+            return False
+        url = urlparse(row["job_url"])
+        return url.scheme in ("http", "https") and bool(url.hostname) and not url.username and not url.password
+    except ValueError:
+        return False
+
 filter_reason_counts = Counter()
 filter_reason_by_source = {}
 for row in deduped:
+    if row.get("task_id") and row["task_id"] != task_id:
+        raise ValueError("源记录 task_id 与当前任务不一致，拒绝合并")
     row["task_id"] = task_id
+    if profile.get("strict_valid_rows") and not valid_job_record(row):
+        validity_excluded.append(row.copy())
+        continue
     row["relevance_level"] = "未做岗位相关性筛选"
     row["relevance_evidence"] = "保留采集候选；目标岗位由岗位洞察筛选"
     row.pop("_source_file", None)
@@ -139,7 +199,7 @@ for row in deduped:
 
 rank = {level_name: index for index, level_name in enumerate(levels)}
 eligible.sort(key=lambda row: rank.get(row.get("relevance_level", ""), len(rank)))
-rows = eligible
+rows = eligible[:target_rows] if profile.get("trim_to_target") else eligible
 for index, row in enumerate(rows, 1):
     row["record_no"] = index
 
@@ -164,6 +224,8 @@ write_csv(named_csv, rows)
 json_text = json.dumps(rows, ensure_ascii=False, indent=2)
 stable_json.write_text(json_text, encoding="utf-8")
 named_json.write_text(json_text, encoding="utf-8")
+if profile.get("strict_valid_rows"):
+    (output_dir / "有效性待补全记录.json").write_text(json.dumps({"task_id": task_id, "rows": validity_excluded}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 required_fields = ["job_id", "job_name", "company_name", "city", "job_url", "job_description"]
 field_completeness = {}
@@ -175,10 +237,15 @@ invalid_urls = [row for row in rows if row.get("job_url") and not re.match(r"^ht
 quality = {
     "task_id": task_id,
     "collection_relevance_filter": False,
+    "strict_valid_rows": bool(profile.get("strict_valid_rows")),
+    "validity_excluded_rows": len(validity_excluded),
+    "validity_rule": "岗位ID、标题、公司、城市、来源链接、描述均非空；描述至少20字且非验证页；有效HTTP(S)链接" if profile.get("strict_valid_rows") else "未启用严格有效性门槛",
+    "trimmed_rows": len(eligible) - len(rows),
     "dataset_label": label,
     "target_rows": target_rows,
     "target_reached": len(rows) >= target_rows,
     "input_rows": len(raw_rows),
+    "unified_checkpoint_rows_added": unified_added,
     "unique_rows_before_filter": len(deduped),
     "eligible_rows_before_trim": len(eligible),
     "low_relevance_rows_excluded": len(excluded),

@@ -50,3 +50,14 @@ work/ai_drama_review_decisions.json
 *.bak
 .DS_Store
 Thumbs.db
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.ndjson
+*.enc
+快照/
+work/node_modules/
+work/*_env/
+job_collector_ui/public/live-progress.json
+job_collector_ui/public/unified-progress.json

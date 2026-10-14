@@ -1,7 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {latestDatasetSource} from './latest_dataset.mjs';
+import {knowledgeStore} from './job_knowledge_store.mjs';
 
-export async function taskInsightSource(task) {
+export async function taskInsightSource(task,options={}) {
+  if(options.knowledge){const dataset=(await knowledgeStore(options.dataDir).catalog()).find(d=>d.taskId===task.id);if(!dataset)throw new Error('当前任务尚无知识库岗位数据');return {taskId:task.id,role:task.label,dataset:{...dataset,collecting:task.status==='running'}};}
+  const latest=await latestDatasetSource(task);
+  if(latest)return latest;
   const directory = path.resolve(task.outputDir);
   let manifest;
   try { manifest = JSON.parse(await fs.readFile(path.join(directory, '最终交付清单.json'), 'utf8')); }

@@ -11,7 +11,7 @@ import { businessRules, businessLabels } from '../job_collector_ui/public/busine
 const configPath = path.resolve(process.argv[2] || '');
 if (!configPath || !fsSync.existsSync(configPath)) throw new Error('缺少AI打标配置文件');
 const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
-const inputFile = path.resolve(config.inputFile);
+const inputFile = String(config.inputFile).startsWith('kb://')?config.inputFile:path.resolve(config.inputFile);
 const outputDir = path.resolve(config.outputDir);
 const engine = String(config.platform || 'rules');
 const targetFamily = String(config.jobFamily || (engine === 'rules' ? '爬虫/数据采集' : '')).trim();
@@ -126,7 +126,8 @@ async function securityChallengeMessage(page) {
 function safeRecord(row, index) {
   return {
     row_no: index + 2,
-    job_id: valueText(row['岗位ID']) || `row-${index + 2}`,
+    job_id: valueText(row.knowledge_key)||valueText(row['岗位ID']) || `row-${index + 2}`,
+    knowledge_key:valueText(row.knowledge_key),knowledge_hash:valueText(row.knowledge_hash),source_job_id:valueText(row['岗位ID']),
     job_name: valueText(row['岗位名称']),
     source_platform: valueText(row['平台']),
     source_relevance: valueText(row['相关度分级']),

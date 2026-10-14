@@ -13,26 +13,20 @@ async function waitFor(fn){for(let i=0;i<100;i++){const result=await fn().catch(
 async function request(url,body){const response=await fetch(origin+url,body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}:{});const result=await response.json();assert.ok(response.ok,JSON.stringify(result));return result;}
 try{
  await waitFor(async()=>{if(server.exitCode!=null)throw Error(log);return (await fetch(origin+'/api/state')).ok;});
- assert.ok((await request('/api/state')).capabilities.bossCollection);
- assert.equal((await request('/api/platforms')).platforms.find(p=>p.key==='boss').status,'not_logged_in');
+ assert.equal((await request('/api/state')).capabilities.bossCollection,false);
+ assert.ok(!(await request('/api/platforms')).platforms.some(p=>p.key==='boss'));
  browser=await chromium.launch({headless:true,executablePath:'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'});
  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(origin+'/platforms');await page.locator('[data-platform-login="boss"]').waitFor();
- assert.match(await page.locator('[data-platform-login="boss"]').locator('..').locator('..').textContent(),/BOSS直聘/);
- await page.goto(origin+'/');assert.equal(await page.locator('#platformChecks input[value="boss"]').count(),1);
- assert.equal(await page.locator('#platformChecks input[value="boss"]').isChecked(),false);
- const {task}=await request('/api/tasks',{label:'爬虫工程师BOSS测试',primaryKeyword:'爬虫工程师',keywords:['爬虫工程师'],platforms:['boss'],cities:['北京'],targetRows:2,outputDir:path.join(testDir,'output')});
- assert.deepEqual(task.platforms,['boss']);
- const saved=JSON.parse(await fs.readFile(path.join(testDir,'tasks.json'),'utf8')).find(x=>x.id===task.id);
- const config=JSON.parse(await fs.readFile(saved.bossConfigPath,'utf8'));
- assert.equal(config.maxRows,4);assert.equal(config.minimumIntervalMs,6000);assert.equal(config.cities[0].code,'101010100');
- await page.goto(origin+'/tasks/'+task.id);await page.locator('[data-action="boss"]').waitFor();
- // With no saved session, the collector must pause before opening any real site.
- await request('/api/tasks/'+task.id+'/run',{stage:'boss'});
- const paused=await waitFor(async()=>{const t=(await request('/api/tasks/'+task.id)).task;return t.status==='paused'?t:null;});
- assert.match(paused.message,/BOSS采集暂停/);
- const cp=JSON.parse(await fs.readFile(path.join(task.outputDir,'断点数据/BOSS直聘/state.json'),'utf8'));
- assert.equal(cp.status,'paused');assert.match(cp.message,/人工登录/);assert.equal(cp.rows.length,0);
+ await page.goto(origin+'/platforms');await page.locator('[data-platform-login="zhaopin"]').waitFor();
+ assert.equal(await page.locator('[data-platform-login="boss"]').count(),0);
+ await page.goto(origin+'/');assert.equal(await page.locator('#platformChecks input[value="boss"]').count(),0);
+ const rejected=await fetch(origin+'/api/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'已停用渠道测试',platforms:['boss']})});
+ assert.equal(rejected.ok,false);
+ const {task}=await request('/api/tasks',{label:'爬虫工程师历史BOSS数据测试',primaryKeyword:'爬虫工程师',keywords:['爬虫工程师'],platforms:['shixiseng'],cities:['北京'],targetRows:2,outputDir:path.join(testDir,'output')});
+ await page.goto(origin+'/tasks/'+task.id);await page.locator('[data-action="finalize"]').waitFor();
+ assert.equal(await page.locator('[data-action="boss"]').count(),0);
+ const denied=await fetch(origin+'/api/tasks/'+task.id+'/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({stage:'boss'})});
+ assert.equal(denied.ok,false);
  // Use a separate page so application polling cannot mutate the DOM fixtures.
  const fixture=await browser.newPage();
  await fixture.setContent('<div class="job-card-wrapper"><a href="https://www.zhipin.com/job_detail/abc123.html?x=1"><span class="job-name">爬虫工程师</span><span class="salary">15-25K</span><span class="job-area">北京·海淀</span></a><span class="company-name">测试公司</span><ul class="tag-list"><li>3-5年</li><li>本科</li></ul></div>');
@@ -53,5 +47,5 @@ try{
  assert.equal(quality.output_rows,1);assert.equal(quality.duplicates_removed,1);
  const source=await request('/api/tasks/'+task.id+'/insight-source');assert.equal(source.dataset.expectedRows,1);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({ok:true,testDir,checks:['platform login card','task platform option','config and city mapping','missing session pauses without real-site access','DOM details','captcha guard','canonical URLs','CSV merge/dedup and insight transfer'],realBossSiteTested:false,pageErrors:errors}));
+ console.log(JSON.stringify({ok:true,testDir,checks:['retired platform hidden','new task rejects retired channel','retired run rejected before site access','legacy DOM details','captcha guard','canonical URLs','historical CSV merge/dedup and insight transfer'],realBossSiteTested:false,pageErrors:errors}));
 }finally{await browser?.close();server.kill();}

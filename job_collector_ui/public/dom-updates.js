@@ -12,7 +12,11 @@ function patchNode(current, desired) {
     if (current.nodeValue !== desired.nodeValue) current.nodeValue = desired.nodeValue;
     return current;
   }
-  for (const attr of [...current.attributes]) if (!desired.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+  for (const attr of [...current.attributes]) {
+    // Preserve the user's expanded channel details during live polling.
+    if (attr.name==='open' && current.matches('details.collection-channel-details')) continue;
+    if (!desired.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+  }
   for (const attr of [...desired.attributes]) if (current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
   // Live log and review content are owned by their own API requests, not metadata rendering.
   if (['labelLog', 'labelReview', 'taskLog'].includes(current.id)) return current;

@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { readJobDataset } from './job_dataset.mjs';
+import {normalizeSalary,normalizeEmploymentType,roleFamilies,skillRules} from './job_knowledge_schema.mjs';
+import {knowledgeStore} from './job_knowledge_store.mjs';
 import { approvedLabelsForWorkbook, consensusLabelsForWorkbook, prelabelsForWorkbook } from './reviewed_job_labels.mjs';
 import { cityName, summarizeCohort, experienceCohorts } from '../job_collector_ui/public/insight-cohorts.js';
 import { businessRules } from '../job_collector_ui/public/business-rules.js';
@@ -11,13 +13,16 @@ import { matchKeywordRole } from './keyword-role-matcher.mjs';
 import { learnRuleSeedModel, matchRuleSeedRole } from './rule-seed-keywords.mjs';
 import { learnUniversalRoleKeywords, matchUniversalRoleKeywords } from './universal-role-keywords.mjs';
 import { learnRoleEvidence, matchRoleEvidence } from './role-evidence-v2.mjs';
+import { learnEmbeddedEvidence, matchEmbeddedEvidence } from './embedded-role-evidence.mjs';
+import { buildKeywordCloudDisplay } from './keyword-cloud-display.mjs';
+import { fitSkillSalaryIncrements } from '../job_collector_ui/public/skill-salary-increments.js';
 
 const configPath = path.resolve(process.argv[2] || '');
 const outputPath = path.resolve(process.argv[3] || '');
 if (!configPath || !fsSync.existsSync(configPath)) throw new Error('缺少岗位洞察配置文件');
 if (!outputPath) throw new Error('缺少岗位洞察输出文件');
 const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
-const inputFile = path.resolve(String(config.inputFile || ''));
+const inputFile = String(config.inputFile||'').startsWith('kb://')?config.inputFile:path.resolve(String(config.inputFile || ''));
 const sampleSize = Math.max(50, Math.min(2000, Number(config.sampleSize || 300)));
 const analysisMode = String(config.analysisMode || 'preview') === 'full' ? 'full' : 'preview';
 const manualRole = String(config.role || '').trim();
@@ -44,60 +49,8 @@ function selectEvenSample(rows, limit) {
   return [...indexes].map((index) => rows[index]);
 }
 
-function normalizeSalary(rawValue) {
-  const raw = text(rawValue).replace(/,/g, '').replace(/\s+/g, '');
-  if (!raw || /面议|薪资面议|保密/.test(raw)) return null;
-  const range = raw.match(/(\d+(?:\.\d+)?)\s*[-~至到]\s*(\d+(?:\.\d+)?)/);
-  const first = raw.match(/\d+(?:\.\d+)?/);
-  if (!first) return null;
-  let min = Number(range?.[1] || first[0]);
-  let max = Number(range?.[2] || range?.[1] || first[0]);
-  if (/万/.test(raw)) { min *= 10000; max *= 10000; }
-  else if (/k/i.test(raw)) { min *= 1000; max *= 1000; }
-  if (/年|\/年/.test(raw)) { min /= 12; max /= 12; }
-  else if (/天|\/日|\/天/.test(raw)) { min *= 21.75; max *= 21.75; }
-  else if (/小时|\/时/.test(raw)) { min *= 174; max *= 174; }
-  if (min < 1000 || max > 300000 || min > max * 2) return null;
-  return { min, max, midpoint: (min + max) / 2, raw };
-}
 
-const roleFamilies = [
-  { name: 'AI漫剧创作', strict: true, filename: pattern(['AI\\s*漫\\s*剧', '^漫剧师$', '^漫剧制作师$']), query: pattern(['AI\\s*漫\\s*剧', '^漫剧师$', '^漫剧制作师$']), title: pattern(['漫\\s*剧']), content: pattern(['漫\\s*剧']) },
-  { name: '智能体/大模型应用', filename: pattern(['智能体', 'Agent', '大模型应用']), query: pattern(['智能体', 'Agent', '大模型应用']), title: pattern(['智能体', 'AI.?Agent', 'Agent开发', '大模型应用', 'AI应用']), content: pattern(['LangChain', '\\bRAG\\b', '大模型', '\\bLLM\\b', 'Prompt', 'Dify', '向量数据库', 'Function.?Calling']) },
-  { name: '大模型算法', filename: pattern(['大模型算法', '大模型研发']), query: pattern(['大模型算法', '大模型研发']), title: pattern(['大模型.*算法', '大模型.*研发', 'LLM.*算法']), content: pattern(['大模型训练', '模型微调', '\\bSFT\\b', '\\bLoRA\\b', 'Transformers', '预训练模型', '大模型评测']) },
-  { name: '机器学习/算法', filename: pattern(['机器学习', '算法工程']), query: pattern(['机器学习', '算法工程', '深度学习']), title: pattern(['机器学习工程师', '算法工程师', '深度学习工程师', 'NLP工程师', '计算机视觉工程师']), content: pattern(['机器学习', '深度学习', '特征工程', 'Scikit', 'XGBoost', 'LightGBM', '分类算法', '回归算法', '计算机视觉', '\\bNLP\\b']) },
-  { name: '大数据开发', filename: pattern(['大数据开发', '数据开发工程师']), query: pattern(['大数据开发', '数据开发', 'Hadoop开发', 'Spark开发']), title: pattern(['大数据.*(开发|工程)', '数据开发工程师', 'Hadoop.*工程师', 'Spark.*工程师']), content: pattern(['Hadoop', 'Spark', 'Flink', 'Hive', 'HBase', 'DataX', '数据仓库', '数仓', '离线计算', '实时计算']) },
-  { name: '爬虫/数据采集', filename: pattern(['爬虫', '数据采集', '数据抓取']), query: pattern(['爬虫', '数据采集', '数据抓取']), title: pattern(['爬虫', '数据采集', '数据抓取', '采集工程师']), content: pattern(['Scrapy', 'BeautifulSoup', '反爬', 'JS逆向', '数据抓取', '网页采集', '代理池', 'Selenium', 'Playwright', 'XPath', 'aiohttp', 'requests库', '网页解析', '协议逆向', '浏览器自动化']) },
-  { name: '全栈开发', filename: pattern(['全栈', '前后端']), query: pattern(['全栈', '前后端']), title: pattern(['全栈', '前后端']), content: pattern(['全栈', '前后端', 'React.{0,30}Spring', 'Vue.{0,30}Spring', 'Node\\.js.{0,30}(React|Vue)']) },
-  { name: '前端开发', filename: pattern(['前端']), query: pattern(['前端']), title: pattern(['前端', 'Web开发', 'H5开发']), content: pattern(['Vue', 'React', 'Angular', 'TypeScript', 'Webpack', 'Vite', 'HTML5', 'CSS3']) },
-  { name: '后端开发', filename: pattern(['后端', 'Java开发']), query: pattern(['后端', 'Java开发', '服务端']), title: pattern(['后端', '服务端', 'Java开发', 'Python开发', 'Go开发', 'PHP开发']), content: pattern(['Spring.?Boot', 'Spring.?Cloud', 'MyBatis', '微服务', 'Django', 'FastAPI', 'Gin框架', '分布式系统']) },
-  { name: '网络安全', filename: pattern(['网络安全', '安全工程']), query: pattern(['网络安全', '安全工程']), title: pattern(['安全工程师', '网络安全', '渗透测试', '安全运营']), content: pattern(['渗透测试', '漏洞扫描', '安全攻防', '\\bWAF\\b', '\\bSIEM\\b', '应急响应', '等保']) },
-  { name: '数据安全', filename: pattern(['数据安全']), query: pattern(['数据安全']), title: pattern(['数据安全', '安全治理']), content: pattern(['数据脱敏', '数据加密', '隐私计算', '数据合规', 'DLP', '访问控制']) },
-  { name: '网络运维', filename: pattern(['网络运维', '网络工程']), query: pattern(['网络运维', '网络工程']), title: pattern(['网络运维', '网络工程师', '网络管理员']), content: pattern(['TCP/IP', '交换机', '路由器', 'VLAN', 'OSPF', 'BGP', 'Cisco', '华为网络', '网络故障']) },
-  { name: 'Linux系统开发', filename: pattern(['Linux系统', '系统开发', '内核开发']), query: pattern(['Linux系统开发', 'Linux开发', '内核开发', '驱动开发']), title: pattern(['Linux.*开发', '系统软件工程师', '内核工程师', '驱动开发工程师']), content: pattern(['Linux内核', '内核开发', '系统调用', 'POSIX', '设备驱动', '驱动开发', '进程调度', '内存管理', '网络协议栈']) },
-  { name: '嵌入式开发', filename: pattern(['嵌入式']), query: pattern(['嵌入式']), title: pattern(['嵌入式', '单片机', '驱动开发']), content: pattern(['STM32', 'FreeRTOS', '\\bRTOS\\b', '\\bMCU\\b', 'Linux驱动', 'ARM', '串口']) },
-  { name: '测试工程', filename: pattern(['测试工程']), query: pattern(['测试工程', '软件测试']), title: pattern(['测试工程师', '软件测试', '测试开发']), content: pattern(['自动化测试', '性能测试', '接口测试', 'JMeter', 'Postman', 'PyTest', 'JUnit']) },
-  { name: '运维/云平台', filename: pattern(['运维', '云平台']), query: pattern(['运维', '云平台']), title: pattern(['运维工程师', 'SRE', 'DevOps', '云平台工程师']), content: pattern(['Ansible', 'Terraform', 'Jenkins', 'Prometheus', 'Grafana', 'Kubernetes', 'CI/CD']) },
-  { name: '数据运营', filename: pattern(['数据运营']), query: pattern(['数据运营']), title: pattern(['数据运营', '运营分析']), content: pattern(['用户运营', '数据分析', '指标体系', '用户增长', '活动运营', '转化率']) },
-  { name: '人力资源', filename: pattern(['人力资源', 'HR岗位']), query: pattern(['人力资源', 'HRBP', '招聘专员', '薪酬绩效']), title: pattern(['人力资源', 'HRBP', '招聘专员', '招聘经理', '薪酬绩效', '员工关系']), content: pattern(['人才招聘', '招聘渠道', '薪酬绩效', '员工关系', '劳动法', '人才盘点', '组织发展', '\\bATS\\b', '人力资源管理']) },
-  { name: '通用软件开发', filename: pattern(['通用软件开发', '软件工程师岗位']), query: pattern(['^软件开发$', '^开发工程师$']), title: pattern(['软件开发', '开发工程师', '研发工程师', '程序员']), content: pattern(['编程', '软件工程', '系统开发', '接口开发']) },
-];
 
-const skillRules = [
-  ['Midjourney', pattern(['Midjourney', '\\bMJ\\b'])], ['Stable Diffusion', pattern(['Stable\\s*Diffusion', '\\bSDXL\\b'])], ['ComfyUI', pattern(['ComfyUI'])], ['分镜设计', pattern(['分镜'])], ['视频剪辑', pattern(['视频剪辑', '剪映', 'Premiere', 'After Effects'])],
-  ['Python', pattern(['\\bPython\\b'])], ['Java', pattern(['\\bJava\\b(?!Script)'])], ['Go', pattern(['\\bGolang\\b', '\\bGo语言'])], ['C/C++', pattern(['C\\+\\+', '\\bC语言', 'C/C\\+\\+'])], ['C#', pattern(['C#', '\\.NET'])], ['PHP', pattern(['\\bPHP\\b'])],
-  ['JavaScript', pattern(['JavaScript', '\\bJS\\b'])], ['TypeScript', pattern(['TypeScript', '\\bTS\\b'])], ['HTML/CSS', pattern(['HTML5?', 'CSS3?'])], ['Vue', pattern(['Vue(?:\\.js)?'])], ['React', pattern(['React(?:\\.js)?'])], ['Angular', pattern(['Angular'])], ['Node.js', pattern(['Node\\.js', 'NodeJS'])], ['Webpack', pattern(['Webpack'])], ['Vite', pattern(['\\bVite\\b'])],
-  ['SQL', pattern(['\\bSQL\\b'])], ['MySQL', pattern(['MySQL'])], ['PostgreSQL', pattern(['PostgreSQL', 'Postgres'])], ['Oracle', pattern(['Oracle'])], ['Redis', pattern(['Redis'])], ['MongoDB', pattern(['MongoDB'])], ['Elasticsearch', pattern(['Elasticsearch', '\\bElasticSearch\\b'])], ['ClickHouse', pattern(['ClickHouse'])], ['Doris', pattern(['Apache Doris', '\\bDoris\\b'])],
-  ['Spring Boot', pattern(['Spring.?Boot'])], ['Spring Cloud', pattern(['Spring.?Cloud'])], ['MyBatis', pattern(['MyBatis'])], ['Django', pattern(['Django'])], ['Flask', pattern(['\\bFlask\\b'])], ['FastAPI', pattern(['FastAPI'])], ['微服务', pattern(['微服务', 'Microservices?'])], ['REST API', pattern(['RESTful', 'REST API'])],
-  ['Hadoop', pattern(['Hadoop'])], ['Spark', pattern(['Apache Spark', '\\bSpark\\b'])], ['Flink', pattern(['Flink'])], ['Hive', pattern(['Apache Hive', '\\bHive\\b'])], ['HBase', pattern(['HBase'])], ['Kafka', pattern(['Kafka'])], ['DataX', pattern(['DataX'])], ['Airflow', pattern(['Airflow'])], ['MaxCompute', pattern(['MaxCompute'])], ['Trino/Presto', pattern(['Trino', 'Presto'])],
-  ['Scrapy', pattern(['Scrapy'])], ['Selenium', pattern(['Selenium'])], ['Playwright', pattern(['Playwright'])], ['BeautifulSoup', pattern(['BeautifulSoup', 'Beautiful Soup'])], ['Requests', pattern(['Python.{0,8}Requests', '\\brequests库'])], ['Appium', pattern(['Appium'])], ['JS逆向', pattern(['JS逆向', 'JavaScript逆向'])], ['反爬虫', pattern(['反爬', '反爬虫'])],
-  ['LLM', pattern(['大语言模型', '大模型', '\\bLLM'])], ['RAG', pattern(['\\bRAG\\b', '检索增强生成'])], ['LangChain', pattern(['LangChain'])], ['LlamaIndex', pattern(['LlamaIndex'])], ['Dify', pattern(['\\bDify\\b'])], ['MCP', pattern(['\\bMCP\\b', 'Model Context Protocol'])], ['Prompt Engineering', pattern(['Prompt', '提示词工程', '提示工程'])], ['Embedding', pattern(['Embedding', '向量化', '文本嵌入'])], ['PyTorch', pattern(['PyTorch'])], ['TensorFlow', pattern(['TensorFlow'])], ['Transformers', pattern(['Transformers', 'Hugging.?Face'])], ['模型微调', pattern(['模型微调', '指令微调', 'Fine.?tuning', '\\bSFT\\b', '\\bLoRA\\b'])],
-  ['Linux', pattern(['\\bLinux\\b'])], ['Git', pattern(['\\bGit\\b'])], ['Docker', pattern(['Docker'])], ['Kubernetes', pattern(['Kubernetes', '\\bK8s\\b'])], ['Nginx', pattern(['Nginx'])], ['Jenkins', pattern(['Jenkins'])], ['Ansible', pattern(['Ansible'])], ['Terraform', pattern(['Terraform'])], ['Prometheus', pattern(['Prometheus'])], ['Grafana', pattern(['Grafana'])], ['CI/CD', pattern(['CI/CD', '持续集成', '持续交付'])],
-  ['TCP/IP', pattern(['TCP/IP'])], ['VLAN', pattern(['\\bVLAN\\b'])], ['BGP/OSPF', pattern(['\\bBGP\\b', '\\bOSPF\\b'])], ['Linux内核', pattern(['Linux内核', '内核开发'])], ['POSIX', pattern(['\\bPOSIX\\b'])], ['设备驱动', pattern(['设备驱动', '驱动开发'])],
-  ['Scikit-learn', pattern(['Scikit.?learn', 'sklearn'])], ['XGBoost', pattern(['XGBoost'])], ['LightGBM', pattern(['LightGBM'])], ['特征工程', pattern(['特征工程'])],
-  ['Excel', pattern(['\\bExcel\\b'])], ['ATS', pattern(['\\bATS\\b', '招聘系统'])], ['招聘管理', pattern(['人才招聘', '招聘管理', '招聘渠道'])], ['薪酬绩效', pattern(['薪酬绩效', '绩效管理'])], ['员工关系', pattern(['员工关系'])], ['劳动法', pattern(['劳动法', '劳动合同法'])],
-  ['STM32', pattern(['STM32'])], ['RTOS', pattern(['FreeRTOS', '\\bRTOS\\b'])], ['ARM', pattern(['\\bARM\\b'])], ['JMeter', pattern(['JMeter'])], ['Postman', pattern(['Postman'])], ['PyTest', pattern(['PyTest'])], ['JUnit', pattern(['JUnit'])],
-];
 
 const familyCoreSkills = {
   'AI漫剧创作': ['Midjourney', 'Stable Diffusion', 'ComfyUI', '分镜设计', '视频剪辑', 'Prompt Engineering'],
@@ -155,7 +108,7 @@ const cityCoordinates = {
 };
 
 async function readRows() {
-  if (!fsSync.existsSync(inputFile)) throw new Error(`找不到输入文件：${inputFile}`);
+  if (!inputFile.startsWith('kb://')&&!fsSync.existsSync(inputFile)) throw new Error(`找不到输入文件：${inputFile}`);
   return readJobDataset(inputFile, config.sheetName);
 }
 
@@ -324,7 +277,7 @@ function extractLabels(row, familyName) {
   const taskRules = [...(familyTaskRules[familyName] || []), ...generalTaskRules];
   const tasks = taskRules.filter(([, regex]) => regex.test(fullText)).map(([name]) => name);
   const domains = domainRules.filter(([, regex]) => regex.test(fullText)).map(([name]) => name);
-  return { fullText, skills, tasks: [...new Set(tasks)], domains };
+  return { fullText, skills:[...new Set([...skills,...(row.knowledge_approved_skills||[])])], tasks: [...new Set([...tasks,...(row.knowledge_approved_tasks||[])])], domains:[...new Set([...domains,...(row.knowledge_approved_domains||[])])] };
 }
 
 function salaryBenchmark(items, field, minCount = 5) {
@@ -341,13 +294,6 @@ function topCategoryValues(items, field, limit) {
   return countBy(items.map((item) => text(item.row[field]) || '未明确')).slice(0, limit).map((item) => item.name);
 }
 
-function normalizeEmploymentType(value) {
-  const raw = text(value);
-  if (/实习/.test(raw)) return '实习';
-  if (/兼职|临时|小时|日结/.test(raw)) return '兼职/临时';
-  if (/全职|社会招聘|校园招聘/.test(raw)) return '全职';
-  return '未明确';
-}
 
 function salaryModelWeight(item) {
   if (item.target_match.confidence_band === '高') return 1;
@@ -855,13 +801,14 @@ const jointModel = { seed_rows: 0, skills: [], tasks: [] };
 // must not be attached to this different algorithm or a different dataset.
 // Only the agent application profile has undergone the v2 offline review.
 // Preserve other role families until their own evidence profiles are evaluated.
-const evidenceV2 = targetFamily.name === '智能体/大模型应用';
-const keywordModel = (evidenceV2 ? learnRoleEvidence : learnUniversalRoleKeywords)(allRows, targetFamily, {
+const embeddedEvidence = targetFamily.name === '嵌入式开发';
+const evidenceV2 = targetFamily.name === '智能体/大模型应用' || embeddedEvidence;
+const keywordModel = (embeddedEvidence ? learnEmbeddedEvidence : evidenceV2 ? learnRoleEvidence : learnUniversalRoleKeywords)(allRows, targetFamily, {
   algorithm: config.keywordAlgorithm || 'tfidf', top_k: 40, minimum_hits: 2,
   threshold: 4,
 });
 if (keywordModel && (keywordModel.family !== targetFamily.name || (!keywordModel.cold_start && !keywordModel.keywords?.length) || !Number.isInteger(keywordModel.minimum_hits) || keywordModel.minimum_hits < 1)) throw new Error('岗位关键词模型无效，已停止分析');
-const classifiedSample = initialSample.map((row) => ({ row, classification: classifyRow(row), target_match: (evidenceV2 ? matchRoleEvidence : matchUniversalRoleKeywords)(row, keywordModel) }));
+const classifiedSample = initialSample.map((row) => ({ row, classification: classifyRow(row), target_match: (embeddedEvidence ? matchEmbeddedEvidence : evidenceV2 ? matchRoleEvidence : matchUniversalRoleKeywords)(row, keywordModel) }));
 const pendingReview = classifiedSample.filter(item => item.target_match.decision === 'review');
 // Same-file labels may have been produced for a different job family. For a
 // custom requested role, use their attributes, not their target/non-target vote.
@@ -930,11 +877,12 @@ const observations = enriched.map((item) => {
     const match = regex.exec(source);
     return { label, quote: match ? source.slice(Math.max(0, match.index - 25), match.index + match[0].length + 65).replace(/\s+/g, ' ') : '' };
   });
-  return { row_no: row.row_no, job_id: text(row['岗位ID']) || `row-${row.row_no}`, job_name: text(row['岗位名称']),
+  return { row_no: row.row_no, platform: text(row['平台']), job_id: text(row['岗位ID']) || `row-${row.row_no}`, job_name: text(row['岗位名称']),
     city: row['工作城市'], raw_city: text(row['原始工作城市']), district: text(row['区县'] || row['工作区域']) || text(row['原始工作城市']).split(/[-—]/).slice(1).join('-'),
     experience: text(row['经验要求']) || '未明确', education: text(row['学历要求']) || '未明确', company_size: text(row['公司规模']) || '未明确',
     employment_type: normalizeEmploymentType(row['用工类型']), salary_midpoint_k: item.salary ? item.salary.midpoint / 1000 : null,
     skills: [...new Set(item.labels.skills)], tasks: [...new Set(item.labels.tasks)], domains: [...new Set(item.labels.domains)],
+    knowledge_key:row.knowledge_key||'',knowledge_hash:row.knowledge_hash||'',
     industry: text(row['行业']) || '未明确', company_key: text(row['公司ID'] || row['公司名称']) ? `${text(row['平台'])}:${text(row['公司ID'] || row['公司名称'])}` : '',
     label_source: item.label_source, evidence: domainEvidence,
   };
@@ -965,7 +913,8 @@ if (salarySkillStats[0]?.median_salary_k) insights.push(`有至少5个薪资样�
 insights.push(`${detectedRole.mode === 'auto' ? '自动识别岗位族' : '手工指定岗位'}为“${detectedRole.name}”${detectedRole.confidence == null ? '；按手工关键词直接匹配，不报告自动识别置信度' : `，识别置信度 ${(detectedRole.confidence * 100).toFixed(1)}%`}；样本岗位契合率 ${(relevantRate * 100).toFixed(1)}%。`);
 
 const report = {
-  version: evidenceV2 ? 'job-market-insight-v9' : 'job-market-insight-v8', selection_contract: evidenceV2 ? 'role-evidence-v2' : 'universal-keywords-v1', role: detectedRole.name, detected_role: detectedRole, input_file: inputFile, sheet_name: workbookData.sheetName, generated_at: new Date().toISOString(),
+  version: evidenceV2 ? 'job-market-insight-v9' : 'job-market-insight-v8', selection_contract: embeddedEvidence ? 'embedded-evidence-v1' : evidenceV2 ? 'role-evidence-v2' : 'universal-keywords-v1', role: detectedRole.name, detected_role: detectedRole, input_file: config.displayInputFile || inputFile, sheet_name: workbookData.sheetName, generated_at: new Date().toISOString(),
+  knowledge_snapshot:inputFile.startsWith('kb://')?inputFile:'',knowledge_revision:workbookData.source?.revision??null,
   selection_review: evidenceV2 ? { included_rows: focused.length, pending_rows: pendingReview.length, excluded_rows: initialSample.length - focused.length - pendingReview.length,
     included_in_statistics: false, profile: keywordModel.profile, threshold: keywordModel.threshold,
     note: '待复核记录独立保留，不计入主报告薪资、城市或技能统计；证据纳入不是人工确认，仍可能误收',
@@ -983,6 +932,7 @@ const report = {
   skills: skillStats.slice(0, 24), skill_combinations: skillCombinations, frequent_skill_sets: frequentSkillSets, salary_by_skill: salarySkillStats, salary_model: salaryModel,
   profiles: { education: distribution('学历要求'), experience: distribution('经验要求'), employment_type: distribution('用工类型'), role_segments: roleSegments, typical: { education: distribution('学历要求')[0]?.name || '未明确', experience: distribution('经验要求')[0]?.name || '未明确', employment_type: distribution('用工类型')[0]?.name || '未明确' } },
   cities, industries: distribution('行业'), company_sizes: distribution('公司规模'), company_natures: distribution('公司性质'), tasks: labeledDistribution('tasks'), business_domains: labeledDistribution('domains'), benefits: countBy(sample.flatMap((row) => text(row['福利/标签']).split(/[|、,，]/).map((value) => value.trim()).filter(Boolean))).slice(0, 15), insights,
+  salary_increment_model: fitSkillSalaryIncrements(observations),
   cohort_observations: observations, experience_cohorts: experienceCohorts(observations), industry_positioning: { method: '按来源平台和公司ID/公司名称去重；同一公司存在多个行业时均分权重；占比为样本行业分布', ...cohortSummary },
   warnings: [...(relevantRate < 0.3 ? [`当前数据集岗位契合率仅 ${(relevantRate * 100).toFixed(1)}%，搜索召回噪声较高；结论应基于契合岗位并优先复核原始数据。`] : []), ...(sample.length < 30 ? [`契合岗位仅 ${sample.length} 条，薪资分层和技能组合稳定性不足，不建议直接用于对外报价或个体决策。`] : []), '本页反映企业招聘需求画像，不代表实际从业者供给画像。', '条件薪资模型按公司分组交叉验证选型；技能组合的正负差异是岗位样本关联，不是技能的因果价格或个人身价。', '自动岗位识别和职责抽取采用可解释规则；低置信度或低契合率数据集应先人工抽查，再用于对外咨询。', '少样本结果用于产品验证与方向发现；正式发布建议扩大样本并按岗位族、城市和经验分层验收。'],
 };
@@ -990,9 +940,16 @@ if (keywordModel) {
   report.sampling_method = `${analysisMode === 'full' ? '全量逐条匹配' : '等距抽样检查'}；${keywordModel.display_name}；${keywordModel.selection_policy}；查询关键词不作为纳入证据；外部标签仅补充属性`;
   report.topic_model.method = keywordModel.display_name;
   report.topic_model.seed_rows = keywordModel.training_seed_rows.length;
-  report.topic_model.discovered_terms = keywordModel.keywords.map(x => ({ name: x.term, seed_count: x.seed_df, score: x.score }));
-  report.warnings.unshift(evidenceV2 ? '智能体上下文方案在40条开发记录和32条隔离留出记录上做过模型原文复核，并非人工金标准；更保守但会漏选，英文及工业Agent语义仍有边界；待复核列表不纳入主统计。' : '统一关键词方案尚无本岗位独立人工准确率验证；自动纳入仍可能误收，需人工抽查。');
+  report.topic_model.discovered_terms = (keywordModel.display_keywords || keywordModel.keywords).map(x => ({ name: x.term, seed_count: x.seed_df, score: x.score, lift:x.lift, used_for_filter:keywordModel.keywords.some(k=>k.term===x.term) }));
+  report.topic_model.display_limit = 100;
+  const cloudDisplay = buildKeywordCloudDisplay(allRows, targetFamily, {seedRows:focused.map(item=>item.row.row_no)});
+  if(cloudDisplay){
+    report.topic_model.discovered_terms = cloudDisplay.terms;
+    report.topic_model.display_model = {...cloudDisplay,terms:undefined};
+  }
+  report.warnings.unshift(embeddedEvidence ? '嵌入式方案使用人工配置领域词表与软件职责证据；尚无独立人工准确率验证；待复核记录不计入主统计，简短或不规范正文可能漏选。' : evidenceV2 ? '智能体上下文方案在40条开发记录和32条隔离留出记录上做过模型原文复核，并非人工金标准；更保守但会漏选，英文及工业Agent语义仍有边界；待复核列表不纳入主统计。' : '统一关键词方案尚无本岗位独立人工准确率验证；自动纳入仍可能误收，需人工抽查。');
 }
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
 await fs.writeFile(outputPath, JSON.stringify(report, null, 2), 'utf8');
+if(inputFile.startsWith('kb://'))await knowledgeStore().publishAnalysis(report);
 console.log(JSON.stringify({ ok: true, output: outputPath, detected_role: detectedRole.name, confidence: detectedRole.confidence, total_rows: allRows.length, requested_sample_rows: initialSample.length, focused_rows: sample.length, salary_rows: monthlySalaryK.length }));
