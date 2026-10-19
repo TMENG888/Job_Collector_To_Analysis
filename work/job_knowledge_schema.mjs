@@ -1,23 +1,19 @@
+import {parseOriginalSalary} from './job_salary_parser.mjs';
 const text=value=>String(value??'').trim();
 const pattern=parts=>new RegExp(parts.join('|'),'i');
 export function normalizeSalary(rawValue) {
-  const raw = text(rawValue).replace(/,/g, '').replace(/\s+/g, '');
-  if (!raw || /面议|薪资面议|保密/.test(raw)) return null;
-  const range = raw.match(/(\d+(?:\.\d+)?)\s*[-~至到]\s*(\d+(?:\.\d+)?)/);
-  const first = raw.match(/\d+(?:\.\d+)?/);
-  if (!first) return null;
-  let min = Number(range?.[1] || first[0]);
-  let max = Number(range?.[2] || range?.[1] || first[0]);
-  if (/万/.test(raw)) { min *= 10000; max *= 10000; }
-  else if (/k/i.test(raw)) { min *= 1000; max *= 1000; }
-  if (/年|\/年/.test(raw)) { min /= 12; max /= 12; }
-  else if (/天|\/日|\/天/.test(raw)) { min *= 21.75; max *= 21.75; }
-  else if (/小时|\/时/.test(raw)) { min *= 174; max *= 174; }
-  if (min < 1000 || max > 300000 || min > max * 2) return null;
-  return { min, max, midpoint: (min + max) / 2, raw };
+  const parsed=parseOriginalSalary(rawValue);if(!parsed||parsed.period!=='month')return null;
+  const {min,max,midpoint,raw}=parsed;
+  return {min,max,midpoint,raw};
 }
 
 export const roleFamilies = [
+  {name:'新媒体运营',filename:pattern(['新媒体','短视频运营','内容运营']),query:pattern(['新媒体','短视频运营','内容运营']),title:pattern(['新媒体','短视频运营','内容运营']),content:pattern(['账号运营','内容运营','内容策划','小红书','抖音运营'])},
+  {name:'销售工程师',filename:pattern(['销售工程师','技术销售']),query:pattern(['销售工程师','技术销售']),title:pattern(['销售工程师','技术销售']),content:pattern(['客户开发','技术方案宣讲','商务谈判','产品销售','销售目标'])},
+  {name:'数据挖掘',filename:pattern(['数据挖掘']),query:pattern(['数据挖掘']),title:pattern(['数据挖掘']),content:pattern(['数据挖掘','特征工程','预测模型','统计建模'])},
+  // These expressions resolve the requested family only; actual admission is
+  // determined by the sealed supervised classifier, never by title alone.
+  { name:'数据分析',filename:pattern(['数据分析','商业分析','经营分析','统计分析','BI分析']),query:pattern(['数据分析','商业分析','经营分析','统计分析','BI分析']),title:pattern(['数据分析','商业分析','经营分析','统计分析','BI分析']),content:pattern(['数据分析','指标体系','分析报告','统计分析','业务洞察']) },
   { name: 'AI漫剧创作', strict: true, filename: pattern(['AI\\s*漫\\s*剧', '^漫剧师$', '^漫剧制作师$']), query: pattern(['AI\\s*漫\\s*剧', '^漫剧师$', '^漫剧制作师$']), title: pattern(['漫\\s*剧']), content: pattern(['漫\\s*剧']) },
   { name: '智能体/大模型应用', filename: pattern(['智能体', 'Agent', '大模型应用']), query: pattern(['智能体', 'Agent', '大模型应用']), title: pattern(['智能体', 'AI.?Agent', 'Agent开发', '大模型应用', 'AI应用']), content: pattern(['LangChain', '\\bRAG\\b', '大模型', '\\bLLM\\b', 'Prompt', 'Dify', '向量数据库', 'Function.?Calling']) },
   { name: '大模型算法', filename: pattern(['大模型算法', '大模型研发']), query: pattern(['大模型算法', '大模型研发']), title: pattern(['大模型.*算法', '大模型.*研发', 'LLM.*算法']), content: pattern(['大模型训练', '模型微调', '\\bSFT\\b', '\\bLoRA\\b', 'Transformers', '预训练模型', '大模型评测']) },

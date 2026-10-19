@@ -46,7 +46,8 @@ const headers = Object.keys(rows[0]).filter(key => key !== 'row_no');
 const csv = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
 await fs.writeFile(input, [headers.map(csv).join(','), ...rows.map(item => headers.map(key => csv(item[key])).join(','))].join('\n'));
 await fs.writeFile(config, JSON.stringify({ inputFile: input, role: '智能体开发', analysisMode: 'full' }));
-const child = spawn(process.execPath, ['work/analyze_job_market_sample.mjs', config, output], { windowsHide: true });
+// This test intentionally verifies the legacy fallback, not the LR contract.
+const child = spawn(process.execPath, ['work/analyze_job_market_sample.mjs', config, output], { windowsHide: true,env:{...process.env,JOB_ROLE_SCREENING:'legacy'} });
 let logs = '';
 child.stdout.on('data', chunk => logs += chunk);
 child.stderr.on('data', chunk => logs += chunk);

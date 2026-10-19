@@ -40,10 +40,11 @@ const tests = [
   'test_knowledge_native_analysis.mjs',
   'test_knowledge_console_api.mjs',
 ];
+const failures=[];
 for (const name of tests) {
   console.log(`\n[unit] ${name}`);
-  const result = spawnSync(process.execPath, [path.join('work', name)], { cwd: root, stdio: 'inherit' });
-  if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status || 1);
+  const result = spawnSync(process.execPath, [path.join('work', name)], { cwd: root, stdio: 'inherit',timeout:90000 });
+  if (result.error || result.status !== 0) failures.push(name);
 }
-console.log(`\n${tests.length} 个单元测试脚本通过。`);
+console.log(`\n${tests.length-failures.length}/${tests.length} 个单元测试脚本通过。`);
+if(failures.length){console.error('未通过：'+failures.join(', '));process.exitCode=1;}

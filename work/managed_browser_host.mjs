@@ -1,12 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {chromium} from 'playwright';
-import {browserProfileRoot,platformKeys,validBrowserProfile} from './managed_browser.mjs';
+import {browserProfileRoot,platformKeys,validBrowserProfile,assertBrowserPlatform} from './managed_browser.mjs';
 import {writeJsonAtomic} from './collector_storage.mjs';
 import {assertCollectorResources} from './collector_resources.mjs';
 import {resolveBrowserExecutable} from './browser_executables.mjs';
 import {initializeLocalBrowserProfile} from './browser_local_initialization.mjs';
 const [key,sessionId,requestedProfile,requestedFile,executableKind='standard']=process.argv.slice(2);
+assertBrowserPlatform(key);
 if(!platformKeys.includes(key)||!sessionId)throw Error('无效浏览器实例参数');
 const profile=requestedProfile||path.join(browserProfileRoot(),key),file=requestedFile||path.join(browserProfileRoot(),key+'.browser.json');
 if(!validBrowserProfile(key,profile)||path.dirname(path.resolve(file))!==path.resolve(browserProfileRoot()))throw Error('无效浏览器配置路径');

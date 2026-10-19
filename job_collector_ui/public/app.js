@@ -1,35 +1,29 @@
-import { summarizeCohort, cohortConditionValue, filterCohort, cohortFilterOptions, cohortSalaryStatistics } from './insight-cohorts.js';
+import {cohortConditionValue} from './insight-cohorts.js';
 import { patchHtml, updateLog } from './dom-updates.js';
-import {renderProfileCloud,renderDonut,renderSalaryExperienceLine} from './insight-profile-charts.js';
+import {renderInsightWorkspace} from './insight-dashboard.js?v=20261018-semantic-cloud';
 import {installWordCloudInteractions} from './insight-wordcloud.js';
 import {loadJobAssistant} from './job-assistant.js';
+import {installSkillTermReview} from './skill-term-review.js';
 installWordCloudInteractions();
 import {mergeLiveProgress, collectionProgress} from './collection-progress.js';
 import {renderCollectionDashboard} from './collection-dashboard.js';
 import { fetchJsonWithTimeout } from './http-client.js';
 import { localPathKey, finalDatasetCatalog, selectLegacyTaskDataset,resolveLatestInsightSource } from './insight-transfer.js';
-const state = { tasks: [], selectedId: null, platforms: [], labelJobs: [], selectedLabelId: null, insight: null, insightDatasets: [], insightRenderKey: null, insightFormInitialized: false, insightDatasetRequest: 0, insightLabelRequest: 0, view: 'tasks', timer: null, logTimer: null };
+import {loadInsightCatalog,populateInsightPickers} from './insight-dataset-picker.js';
+import {installInsightClassifier} from './insight-classifier.js?v=20261018-supervised-only';
+import {installSemanticCloud} from './insight-semantic.js?v=20261018-semantic-cloud';
+import {installJobBrowserWorkspace} from './browser-workspace.js?v=20261019-interaction-fix-9';
+const state = { tasks: [], selectedId: null, insight: null, insightDatasets: [], insightRenderKey: null, insightFormInitialized: false, insightDatasetRequest: 0, view: 'tasks', timer: null, logTimer: null };
 const normalizedLocalPath = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
 const $ = (selector) => document.querySelector(selector);
 const number = (value) => new Intl.NumberFormat('zh-CN').format(Number(value || 0));
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const stageLabel = { collection: '多平台采集', public: '多平台采集', zhaopin: '多平台采集', yupao: '多平台采集', boss: '多平台采集', login_boss: 'BOSS登录', login_zhaopin: '智联登录', login_yupao: '鱼泡验证', finalize: '导出交付', workbook: '导出交付' };
 const statusLabel = { ready: '就绪', running: '运行中', completed: '已完成', partial: '未达目标', failed: '需处理', paused: '已暂停', stopping: '停止中' };
-const platformLabel = { shixiseng: '实习僧', iguopin: '国聘', mohrss: '公共招聘网', job51: '前程无忧', jobonline: '就业在线', zhaopin: '智联招聘', yupao: '鱼泡直聘', boss: 'BOSS直聘' };
-const loginStatusLabel = { not_logged_in: '未保存', opening: '正在打开', saved: '会话已保存',browser_open:'共享浏览器已开启' };
+const platformLabel = { shixiseng: '实习僧', iguopin: '国聘', mohrss: '公共招聘网', job51: '前程无忧', jobonline: '就业在线', zhaopin: '智联招聘', liepin:'猎聘', yupao: '鱼泡直聘', boss: 'BOSS直聘' };
 const authLabels={unknown:'未确认',saved_unverified:'会话已保存，未验证登录',human_confirmed:'人工已确认',login_required:'需要登录'};
 const verificationLabels={unchecked:'未检查',waiting_human:'等待人工验证',clear:'当前页面通过',session_closed:'会话已关闭'};
 const pendingGets = new Map();
-const pendingPlatformLogins = new Set();
-let switchingYupaoBrowser = false;
-function browserSwitchReason(item){
-  if(typeof item.canSwitchBrowser!=='boolean')return '当前服务尚未加载浏览器切换功能，请重启 8788 控制台服务后刷新页面';
-  if(switchingYupaoBrowser)return '正在迁移 Cookie，请等待新浏览器打开';
-  if(!item.browserOpen)return '请先打开鱼泡登录浏览器，并保持窗口开启，再切换到新实例';
-  if(!item.canSwitchBrowser)return '鱼泡登录或采集正在运行，请等待登录完成或暂停采集后再切换';
-  return '';
-}
-
 async function api(url, options = {}) {
   const readOnly = !options.method || options.method === 'GET';
   if (readOnly && pendingGets.has(url)) return pendingGets.get(url);
@@ -62,11 +56,11 @@ function renderStats() {
   const rows = state.tasks.reduce((sum, task) => sum + (task.metrics.knowledgeRows??task.metrics.finalRows), 0);
   const candidates = state.tasks.reduce((sum, task) => sum + task.metrics.candidates, 0);
   patchHtml($('#stats'), [
-    ['任务总数', state.tasks.length, '独立配置与输出目录'],
+    ['任务总数', state.tasks.length, ''],
     ['正在运行', running, running ? '请勿同时启动多个登录渠道' : '当前无活动进程'],
-    ['已完成任务', completed, '数据直接入库，文件下载可选'],
+    ['已完成任务', completed, ''],
     ['去重入库量', number(rows), `采集候选 ${number(candidates)} 条`],
-  ].map(([label, value, note]) => `<div class="stat"><span>${label}</span><strong>${value}</strong><em>${note}</em></div>`).join(''));
+  ].map(([label, value, note]) => `<div class="stat"><span>${label}</span><strong>${value}</strong>${note?`<em>${note}</em>`:''}</div>`).join(''));
 }
 
 function renderList() {
@@ -78,9 +72,9 @@ function renderList() {
   patchHtml(list, state.tasks.map((task) => {
     const value = progress(task);
     return `<button class="task-item ${task.id === state.selectedId ? 'selected' : ''}" data-task="${escapeHtml(task.id)}">
-      <div class="task-row"><strong>${escapeHtml(task.label)}</strong><span class="badge ${task.status}">${statusLabel[task.status] || task.status}</span></div>
-      <div class="task-meta"><span>${task.metrics.hasFinalResult ? `${number(task.metrics.finalRows)} / ${number(task.targetRows)}` : '尚未生成最终结果'} · 候选 ${number(task.metrics.candidates)}</span><span>${escapeHtml(task.currentStage ? stageLabel[task.currentStage] : task.message)}</span></div>
-      <div class="mini-progress"><i style="width:${value}%"></i></div>
+      <div class="task-row"><strong>${escapeHtml(task.label)}</strong><span class="badge ${task.status}">${task.collectUntilExhausted&&task.status==='partial'?'本轮受阻或预算暂停':task.collectUntilExhausted&&task.status==='completed'?'本轮条件已处理':statusLabel[task.status] || task.status}</span></div>
+      <div class="task-meta"><span>${task.collectUntilExhausted?`已入库 ${number(task.metrics.knowledgeRows??0)} 条`:task.metrics.hasFinalResult ? `${number(task.metrics.finalRows)} / ${number(task.targetRows)}` : '尚未生成最终结果'} · 候选 ${number(task.metrics.candidates)}</span><span>${escapeHtml(task.currentStage ? stageLabel[task.currentStage] : String(task.message||'').split('；已取消原目标条数')[0])}</span></div>
+      ${value==null?'':`<div class="mini-progress"><i style="width:${value}%"></i></div>`}
     </button>`;
   }).join(''));
   list.querySelectorAll('[data-task]').forEach((button) => {
@@ -103,10 +97,11 @@ function renderDetail() {
   }
   if ($('#detail').dataset.taskId !== task.id) { $('#detail').replaceChildren(); $('#detail').dataset.taskId = task.id; }
   const isRunning = ['running', 'stopping'].includes(task.status);
+  const taskMessage = String(task.message || '').split('；已取消原目标条数')[0];
   const chips = [...task.platforms.map((key) => platformLabel[key]), ...task.cities.slice(0, 5), task.pace === 'safe' ? '稳健节奏' : task.pace === 'fast' ? '较快节奏' : '均衡节奏'];
   patchHtml($('#detail'), `
     <div class="detail-head">
-      <div class="detail-title"><div><h2>${escapeHtml(task.label)}</h2><p>${escapeHtml(task.status==='running' && task.currentStage ? `${stageLabel[task.currentStage]}进行中 · 自动归集去重` : task.message)}</p></div><span class="badge ${task.status}">${statusLabel[task.status] || task.status}</span></div>
+      <div class="detail-title"><div><h2>${escapeHtml(task.label)}</h2><p>${escapeHtml(task.status==='running' && task.currentStage ? `${stageLabel[task.currentStage]}进行中` : taskMessage)}</p></div><span class="badge ${task.status}">${statusLabel[task.status] || task.status}</span></div>
       <div class="detail-actions">
         ${task.browserSession?.verification_status==='waiting_human'?'<button class="primary" data-action="confirm-verification">已人工验证，继续当前会话</button>':''}
         <button class="primary" data-action="all" ${isRunning ? 'disabled' : ''}>${isRunning?'采集中':task.metrics.candidates?'▶ 断点续采全部平台':'▶ 开始采集全部平台'}</button>
@@ -114,11 +109,12 @@ function renderDetail() {
         <button class="danger" data-action="pause" ${!isRunning || task.status === 'stopping' ? 'disabled' : ''}>暂停</button>
         <button class="ghost" data-action="open">打开文件夹</button>
         <button class="secondary" data-action="insights">用于岗位洞察</button>
-        <button class="secondary" data-action="labels">创建AI打标</button>
       </div>
     </div>
     <div class="detail-body">
       ${task.browserSession?`<p>登录状态：${escapeHtml(authLabels[task.browserSession.login_status]||'未确认')} · 验证状态：${escapeHtml(verificationLabels[task.browserSession.verification_status]||'未检查')}</p>`:''}
+      ${task.hybridCollection?.results?.length?`<p role="status">本轮取数方式：${task.hybridCollection.results.map(row=>escapeHtml((platformLabel[row.platform]||row.platform)+'：'+(row.transport==='browser_dom'?'页面 RPA':row.transport==='http'?'HTTP':'暂停')+(row.reason?' · '+row.reason:''))).join('；')}</p>`:''}
+      ${task.pausedPlatforms?.length?'<p role="status">暂停渠道（数据与断点保留）：'+task.pausedPlatforms.map(item=>escapeHtml((platformLabel[item.key]||item.key)+'：'+item.reason)).join('；')+'</p>':''}
       ${renderCollectionDashboard(task,{number,escapeHtml})}
       ${task.latestExport?`<p class="latest-export-status">最新导出：${escapeHtml(task.latestExport.status==='running'?'正在处理':task.latestExport.status==='failed'?'失败':task.latestExport.status==='partial'?'CSV已更新，Excel未更新':'CSV／Excel已更新')} ${task.latestExport.rows?number(task.latestExport.rows)+' 条':''} ${escapeHtml(task.latestExport.updatedAt?new Date(task.latestExport.updatedAt).toLocaleString('zh-CN'):'')} ${escapeHtml(task.latestExport.warning||task.latestExport.error||'')}</p>`:''}
       <div class="task-config">${chips.filter(Boolean).map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join('')}</div>
@@ -138,7 +134,7 @@ function render() { renderStats(); renderList(); renderDetail(); }
 
 function routePath(view = state.view) {
   if (view === 'assistant') return '/?view=assistant';
-  const id = view === 'labels' ? state.selectedLabelId : view === 'tasks' ? state.selectedId : null;
+  const id = view === 'tasks' ? state.selectedId : null;
   return `/${view}${id ? `/${encodeURIComponent(id)}` : ''}`;
 }
 
@@ -149,9 +145,8 @@ function syncRoute(replace = false) {
 
 function restoreRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
-  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'platforms', 'labels', 'insights'].includes(parts[0]) ? parts[0] : 'tasks';
+  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'insights','browser'].includes(parts[0]) ? parts[0] : 'tasks';
   const id = parts[1] ? decodeURIComponent(parts[1]) : null;
-  if (view === 'labels') state.selectedLabelId = id;
   if (view === 'tasks') state.selectedId = id;
   switchView(view, { history: false });
 }
@@ -167,16 +162,15 @@ function switchView(view, options = {}) {
     if (link.dataset.view === view) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   });
-  const titles = { tasks: '采集任务', platforms: '平台登录', labels: 'AI打标', insights: '岗位洞察', assistant: '求职助手' };
+  const titles = { tasks: '采集任务', insights: '岗位洞察', assistant: '求职助手',browser:'求职浏览器' };
   $('#pageTitle').textContent = titles[view];
-  $('#newTaskBtn').classList.toggle('hidden', ['platforms', 'insights', 'assistant'].includes(view));
-  $('#newTaskBtn').innerHTML = view === 'labels' ? '<span>＋</span> 新建打标任务' : '<span>＋</span> 新建采集任务';
+  $('#newTaskBtn').classList.toggle('hidden', ['insights', 'assistant','browser'].includes(view));
+  $('#newTaskBtn').innerHTML = '<span>＋</span> 新建采集任务';
   if (options.history !== false) syncRoute();
   if (view === 'tasks') refresh(false);
-  if (view === 'platforms') loadPlatforms(false);
-  if (view === 'labels') loadLabels(false);
-  if (view === 'insights') { loadInsightDatasets(); loadInsightLabelJobs(); loadInsight(false); }
+  if (view === 'insights') { loadInsightDatasets(); loadInsight(false); }
   if (view === 'assistant') loadJobAssistant();
+  document.dispatchEvent(new CustomEvent('job-workspace-view',{detail:{view}}));
 }
 
 function percent(value) { return `${(Number(value || 0) * 100).toFixed(1)}%`; }
@@ -193,86 +187,32 @@ function selectOptions(values = [], selected = '') {
   return values.map((value) => `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(value)}</option>`).join('');
 }
 
-function cohortSalaryMarkup() {
-  return `<div class="salary-estimator" id="salaryEstimator">
-    <h4>同条件薪资统计</h4>
-    <div class="salary-estimate-results">
-      <div><span>招聘月薪中位数</span><strong id="salaryEstimateValue">—</strong><small id="salaryEstimateBasis"></small></div>
-      <div><span>招聘月薪平均值</span><strong id="salaryEstimateMean">—</strong><small>容易受高薪或低薪岗位影响</small></div>
-      <div><span>样本薪资 P25–P75</span><strong id="salaryEstimateRange">—</strong><small>匹配岗位薪资中点的四分位区间，不是预测区间</small></div>
-      <div><span>匹配的有效薪资样本</span><strong id="salaryEstimateSupport">—</strong><small id="salaryEstimateReliability"></small></div>
-    </div>
-    <p class="salary-disclaimer">薪资、技能和技术栈共用上方五项条件；薪资仅统计匹配岗位中3K–200K/月的有效薪资中点，未解析或超范围薪资不参与，但岗位仍计入画像。少于5条有效薪资不显示薪资统计，5–19条提示小样本；不使用技能过滤或模型估价。“不限（不筛选）”包含所有取值；“招聘要求：不限”仅匹配原文不限要求。仅统计当前报告纳入的岗位，不包括待复核或排除岗位；招聘开价不等于实际到手薪资。</p>
-  </div>`;
-}
-
-function updateCohortSalary(selected) {
-  const stats = cohortSalaryStatistics(selected);
-  const enough = stats.count >= 5;
-  $('#salaryEstimateValue').textContent = enough ? `${stats.median.toFixed(1)}K/月` : '样本不足';
-  $('#salaryEstimateMean').textContent = enough ? `${stats.mean.toFixed(1)}K/月` : '—';
-  $('#salaryEstimateRange').textContent = enough ? `${stats.p25.toFixed(1)}–${stats.p75.toFixed(1)}K` : '—';
-  $('#salaryEstimateSupport').textContent = `${number(stats.count)} 条`;
-  $('#salaryEstimateBasis').textContent = enough ? '实际岗位薪资中点中位数 · 同条件统计' : !selected.length ? '所选条件没有匹配岗位，请放宽或重置条件' : !stats.count ? '有匹配岗位，但没有有效薪资' : '有效薪资少于5条，不显示薪资统计';
-  $('#salaryEstimateReliability').textContent = `同条件岗位 ${number(selected.length)} 条；缺失、无法解析或超范围薪资 ${number(stats.excluded)} 条${stats.count >= 5 && stats.count < 20 ? '；小样本易受个别岗位影响' : ''}；不使用模型外推`;
-}
-
 async function loadInsightDatasets() {
   const select = $('#insightDataset');
   if (!select) return;
   const requestId = ++state.insightDatasetRequest;
+  const errorBox=$('#insightDatasetError'),retry=$('#retryInsightDatasets');
+  if(retry)retry.disabled=true;
   try {
-    const [data, taskData] = await Promise.all([api('/api/insights/datasets'), api('/api/tasks')]);
+    const datasets = await loadInsightCatalog(api);
     if (requestId !== state.insightDatasetRequest) return;
-    state.insightDatasets = finalDatasetCatalog(data.datasets || [], taskData.tasks || []);
-    const nativeCatalog = state.insightDatasets.some(item => item.resolution === 'knowledge');
-    if (nativeCatalog) state.insightDatasets.unshift({path:'kb://all',name:'全部岗位知识库',role:'自动识别',resolution:'knowledge',format:'sqlite'});
-    $('#insightCatalogNote').textContent = `当前 ${number(state.insightDatasets.filter(item=>item.taskId).length)} 个任务知识库范围，可选择全库；直接读数据库，不需要CSV导出。分析使用固定版本快照；助手读取全部岗位的最新知识库。历史文件保留。`;
-    const options = state.insightDatasets.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name)} · ${item.resolution==='knowledge'?'数据库直连':escapeHtml(item.format||'xlsx')}${item.collecting ? ' · 采集中' : ''}</option>`).join('');
-    select.innerHTML = `<option value="">手工输入 XLSX / CSV 路径</option>${options}`;
-    const labelSelection = $('#labelDataset').value;
-    $('#labelDataset').innerHTML = `<option value="">手工填写数据路径</option>${options}`;
-    if ([...$('#labelDataset').options].some((option) => option.value === labelSelection)) $('#labelDataset').value = labelSelection;
-    const current = $('#insightForm input[name="inputFile"]')?.value;
-    const matched = state.insightDatasets.find((item) => normalizedLocalPath(item.path) === normalizedLocalPath(current));
-    select.value = matched?.path || '';
-  } catch (error) { if (requestId === state.insightDatasetRequest) select.innerHTML = '<option value="">未能自动扫描，请手工输入Excel路径</option>'; }
+    state.insightDatasets = datasets;
+    populateInsightPickers(document,datasets);
+    if(errorBox){errorBox.hidden=true;errorBox.querySelector('span').textContent='';}
+  } catch (error) {
+    if(requestId!==state.insightDatasetRequest)return;
+    // Retain the last usable choices and the user's kb:// source on failure.
+    if(!state.insightDatasets.length)select.innerHTML='<option value="">数据源目录暂不可用</option>';
+    if(errorBox){errorBox.querySelector('span').textContent=`数据源加载失败：${error.message}`;errorBox.hidden=false;}
+  } finally {if(requestId===state.insightDatasetRequest&&retry)retry.disabled=false;}
 }
 
-async function loadInsightLabelJobs() {
-  const select = $('#insightLabelJob');
-  if (!select) return;
-  const requestId = ++state.insightLabelRequest;
-  const inputFile = normalizedLocalPath($('#insightForm input[name="inputFile"]')?.value);
-  if (String($('#insightForm input[name="inputFile"]')?.value).startsWith('kb://')) {
-    select.innerHTML = '<option value="auto">知识库自动使用同版本已批准标签</option>';
-    select.dataset.sourcePath = inputFile;
-    return;
-  }
-  if (select.dataset.sourcePath !== inputFile) {
-    const selected = select.value === '' ? '' : 'auto';
-    select.innerHTML = '<option value="auto">自动使用同源标签（推荐）</option><option value="">不使用外部标签（仅规则抽取）</option>';
-    select.value = selected;
-    select.dataset.sourcePath = inputFile;
-  }
-  try {
-    const data = await api('/api/labels');
-    if (requestId !== state.insightLabelRequest || inputFile !== normalizedLocalPath($('#insightForm input[name="inputFile"]')?.value)) return;
-    // Empty is an intentional "no external labels" choice, not an auto default.
-    const selected = select.value;
-    const compatible = (data.jobs || []).filter((job) => normalizedLocalPath(job.inputFile) === inputFile && job.metrics.completed && !job.resultsMissing && (job.platform !== 'rules' || job.status === 'completed'));
-    const pairs=[];
-    const ai=compatible.filter(job=>job.platform!=='rules');
-    for(let i=0;i<ai.length;i++)for(let j=i+1;j<ai.length;j++)if(ai[i].platform!==ai[j].platform)pairs.push(`<option value="consensus:${escapeHtml(ai[i].id)},${escapeHtml(ai[j].id)}">双平台一致：${escapeHtml(ai[i].platformName)} + ${escapeHtml(ai[j].platformName)}</option>`);
-    select.innerHTML = '<option value="auto">自动使用同源标签（推荐）</option><option value="">不使用外部标签（仅规则抽取）</option>' + pairs.join('') + compatible.map((job) => `<option value="${escapeHtml(job.id)}">${escapeHtml(job.name)} · ${number(job.metrics.completed)} 条${job.platform === 'rules' ? '预标注' : '结果'}</option>`).join('');
-    select.value = [...select.options].some((option) => option.value === selected) ? selected : 'auto';
-  } catch { if (requestId === state.insightLabelRequest && inputFile === normalizedLocalPath($('#insightForm input[name="inputFile"]')?.value)) select.innerHTML = '<option value="">标签任务暂不可读取</option>'; }
-}
+$('#retryInsightDatasets')?.addEventListener('click',()=>loadInsightDatasets());
 
 function renderInsightStatus() {
   const transfer = state.insightTransfer;
-  $('#insightTransferSource').textContent = transfer ? `来源采集任务：${transfer.role} · ${transfer.expectedRows ? `${transfer.resolution==='latest_snapshot'?'候选快照':'交付'} ${number(transfer.expectedRows)} 条` : '条数待读取'} · ${transfer.requiresManualSource?'已选择任务目录中的最新数据.csv；旧服务兼容模式，生成分析时校验文件，不使用最终交付接口':transfer.resolution==='latest_snapshot'?'按任务归属及文件摘要验证，未最终交付'+(transfer.updatedAt?'；更新于 '+new Date(transfer.updatedAt).toLocaleString('zh-CN'):''):/legacy$/.test(transfer.resolution || '') ? '旧服务：按任务目录及交付信息验证，后端清单校验需重启后生效' : '按任务交付清单验证'}。全量分析会逐条筛选，不代表全部记录都属于目标岗位。` : '';
-  if(transfer?.resolution==='knowledge')$('#insightTransferSource').textContent=`来源：${transfer.role}知识库 · ${number(transfer.expectedRows||0)} 条候选。生成分析时固定数据库快照，原始候选由岗位规则再次筛选；不依赖CSV导出。`;
+  $('#insightRoleSource').textContent = '';
+  $('#insightTransferSource').textContent = transfer ? `来源：${transfer.role} · ${transfer.expectedRows ? `${number(transfer.expectedRows)} 条` : '条数待读取'}${transfer.collecting?' · 采集中':''}` : '';
   const insight = state.insight || { status: 'empty', message: '尚未生成岗位市场洞察' };
   const status = $('#insightStatus');
   const report = insight.report;
@@ -280,16 +220,16 @@ function renderInsightStatus() {
   const updatedAt = report?.generated_at || insight.updatedAt;
   status.innerHTML = `<div class="insight-run-state ${escapeHtml(insight.status)}"><span class="pulse"></span><div><b>${escapeHtml(completedMessage)}</b><small>${insight.status === 'running' ? `已运行 ${number(insight.runningSeconds)} 秒` : updatedAt ? `最近更新 ${new Date(updatedAt).toLocaleString('zh-CN')}` : '选择数据后生成分析'}</small></div></div>`;
   if (report) {
-    const selectedRole = $('#insightForm input[name="role"]').value.trim();
-    const reportRole = report.detected_role?.manual_label || report.role;
-    const changed = normalizedLocalPath($('#insightForm input[name="inputFile"]').value) !== normalizedLocalPath(report.input_file) || (!/^(自动|自动识别|auto)?$/i.test(selectedRole) && selectedRole !== reportRole);
+    const changed = normalizedLocalPath($('#insightForm input[name="inputFile"]').value) !== normalizedLocalPath(report.input_file);
     const historicalManual = report.detected_role?.mode === 'manual_override' && !report.selection_contract;
-    status.insertAdjacentHTML('beforeend', `<p class="insight-report-source">当前报告来源：${escapeHtml(report.input_file)}${insight.status === 'failed' ? ' · 本次分析失败，下方保留上次成功报告，不是本次结果' : changed ? ' · 选择已更改，下方仍是上次报告，请重新生成分析' : historicalManual ? ' · 历史手工覆盖报告，请重新生成以验证指定岗位' : ''}</p>`);
+    const sourceLabel=String(report.input_file||'').startsWith('kb://')?`${report.detected_role?.name||report.role||'全部岗位'} · 知识库`:String(report.input_file||'').split(/[/\\]/).at(-1);
+    status.insertAdjacentHTML('beforeend', `<p class="insight-report-source" title="${escapeHtml(report.input_file)}">报告：${escapeHtml(sourceLabel)}${insight.status === 'failed' ? ' · 本次失败，保留上次报告' : changed ? ' · 数据源已更改，请重新生成' : historicalManual ? ' · 历史报告，建议重新生成' : ''}</p>`);
   }
   const button = $('#runInsight');
   if (button) {
-    button.disabled = insight.status === 'running';
-    button.textContent = insight.status === 'running' ? '分析运行中…' : '生成全量分析';
+    const ready=button.dataset.supervisedReady==='true'&&button.dataset.classifierSource===$('#insightForm input[name="inputFile"]').value;
+    button.disabled = insight.status === 'running'||!ready;
+    button.textContent = insight.status === 'running' ? '分析运行中…' : ready?'生成全量分析':'请先训练分类器';
   }
 }
 
@@ -312,6 +252,7 @@ function logInsightFilterAudit(report) {
     relevance_rate: report.relevance_rate,
     low_match_rate: report.relevance_rate < 0.1,
     keyword_selection: report.keyword_selection,
+    role_classifier: report.role_classifier,
     joint_expansion: report.joint_expansion,
     topic_model: report.topic_model,
     pending_included_in_statistics: false,
@@ -320,96 +261,18 @@ function logInsightFilterAudit(report) {
   return audit;
 }
 
+let disposeInsightWorkspace=null;
 function renderInsightDashboard() {
   const report = state.insight?.report;
   const container = $('#insightDashboard');
+  disposeInsightWorkspace?.();disposeInsightWorkspace=null;
   if (!report) {
-    container.innerHTML = '<div class="insight-empty card"><b>从一小批真实数据开始</b><p>系统将读取岗位名称、薪资、城市、经验、学历、技能、行业和岗位描述，生成可解释的市场洞察。</p></div>';
+    container.innerHTML = '<div class="insight-empty card"><b>暂无分析结果</b></div>';
     return;
   }
   logInsightFilterAudit(report);
-  const salary = report.salary || {};
-  const topCity = report.cities?.[0];
-  const detectedRole = report.detected_role || { name: report.role || '待识别', confidence: 0, evidence: {} };
-  const roleEvidence = detectedRole.evidence || {};
-  container.innerHTML = `
-    <section class="stats insight-kpis">
-      <div class="stat"><span>有效分析样本</span><strong>${number(report.sample_rows)}</strong><em>${report.analysis_mode === 'full' ? '全量逐条匹配' : `抽样 ${number(report.requested_sample_rows || report.sample_rows)} 条`} · 原始 ${number(report.total_rows)} 条</em></div>
-      <div class="stat"><span>月薪中位数</span><strong>${salary.median == null ? '—' : `${salary.median}K`}</strong><em>P25 ${salary.p25 ?? '—'}K · P75 ${salary.p75 ?? '—'}K</em></div>
-      <div class="stat"><span>薪资可用率</span><strong>${percent(report.quality?.salary_coverage)}</strong><em>${number(report.quality?.salary_rows)} 条有效薪资样本</em></div>
-      <div class="stat"><span>最大需求城市</span><strong>${escapeHtml(topCity?.name || '—')}</strong><em>${topCity ? `${number(topCity.count)} 条样本岗位` : '缺少城市信息'}</em></div>
-    </section>
-    <section class="card insight-role-summary">
-      <div><span>${detectedRole.mode === 'auto' ? '自动识别岗位族' : '指定分析岗位'}</span><strong>${escapeHtml(detectedRole.name)}</strong><small>${detectedRole.mode === 'manual_keyword' ? '手工名称按字面关键词匹配；不回退到其他岗位族' : detectedRole.mode === 'manual_override' ? '已使用手工岗位族覆盖' : '由文件名、查询词、标题、技能和岗位描述综合识别'}</small></div>
-      <div><span>${detectedRole.mode === 'manual_keyword' ? '关键词匹配证据' : '识别置信度'}</span><strong>${detectedRole.mode === 'manual_keyword' ? `${number(roleEvidence.matching_rows)} 条` : percent(detectedRole.confidence)}</strong><small>${detectedRole.mode === 'manual_keyword' ? `检查 ${number(roleEvidence.inspected_rows)} 条；不是模型置信度` : `${roleEvidence.query_rows ?? '—'} / ${roleEvidence.inspected_rows ?? '—'} 条查询词支持`}</small></div>
-      <div><span>岗位匹配率</span><strong>${percent(report.relevance_rate)}</strong><small>保留 ${number(report.relevant_sample_rows)} 条 · 移除 ${number(report.filtered_out_rows)} 条</small></div>
-      <div><span>标签覆盖率</span><strong>${percent(report.quality?.skill_coverage)}</strong><small>职责主题 ${percent(report.quality?.task_coverage)}</small></div>
-    </section>
-    <section class="card insight-explorer" id="cohortExplorer"></section>
-    <section class="card insight-label-provenance">标签来源：${escapeHtml(report.label_provenance?.mode || '规则抽取')}${report.label_provenance?.total != null ? ` · 已预标注 ${number(report.label_provenance.total)} 条` : ''} · 已用于分析 ${number(report.label_provenance?.used_in_focused_rows)} 条${report.label_provenance?.included_by_external_label ? ` · 标签补充纳入 ${number(report.label_provenance.included_by_external_label)} 条` : ''}${report.label_provenance?.non_target != null ? ` · 规则判为非目标 ${number(report.label_provenance.non_target)} 条（待复核）` : ''}${report.label_provenance?.excluded_by_prelabel ? ` · 从关键词匹配样本排除 ${number(report.label_provenance.excluded_by_prelabel)} 条` : ''}${report.label_provenance?.human_approved != null ? ` · 人工批准 ${number(report.label_provenance.human_approved)} 条` : ''}</section>
-    <section class="insight-grid">
-      <article class="card insight-panel"><div class="insight-panel-head"><div><h3>样本纳入依据</h3><p>${report.selection_contract === 'role-evidence-v2' ? '学习关键词＋领域工程上下文；职责与任职要求分别取证，待复核独立保留' : report.selection_contract === 'universal-keywords-v1' ? '标题建立种子，学习关键词筛选全部岗位；规则结果待复核' : '历史报告：直接匹配与技能＋业务职责联合匹配'}</p></div></div>${insightBars(report.topic_model?.match_methods)}</article>
-    </section>
-    ${report.selection_review ? `<section class="card insight-label-provenance" id="insightPendingReview"><details><summary>待复核岗位 ${number(report.selection_review.pending_rows)} 条（不计入主报告）</summary><p>${escapeHtml(report.selection_review.note)}</p><p>预览前20条；完整记录包含源行号、平台岗位ID、原文依据和证据位置。<button type="button" id="downloadInsightReview">下载完整复核清单（JSON）</button></p>${report.selection_review.rows.slice(0,20).map(r => `<p>第 ${number(r.row_no)} 行 · ${escapeHtml(r.title)} · ${escapeHtml(r.platform)}<br/>${r.keyword_evidence.quotes.slice(0,3).map(q=>`${escapeHtml(q.location === 'requirements' ? '任职要求' : q.location === 'duties' ? '职责' : '未分节')}：${escapeHtml(q.quote)}`).join('<br/>')}</p>`).join('')}</details></section>` : ''}
-    <section class="insight-grid map-layout">
-      <article class="card insight-panel map-panel"><div class="insight-panel-head"><div><h3>城市行政分布</h3><p>圆点大小代表岗位样本数；边界使用公开行政区GeoJSON</p></div></div><div id="cityMap" class="city-map" aria-label="中国城市岗位样本分布图"></div></article>
-      <article class="card insight-panel"><div class="insight-panel-head"><div><h3>城市排名</h3><p>同时显示各城市样本薪资中位数</p></div></div>${insightBars(report.cities, 'count', (value, item) => `${value} · ${item.median_salary_k == null ? '—' : `${item.median_salary_k}K`}`)}</article>
-    </section>
-    `;
-  bindCohortExplorer(report);
-  $('#downloadInsightReview')?.addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify({ input_file: report.input_file, generated_at: report.generated_at, selection_contract: report.selection_contract, ...report.selection_review }, null, 2)], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a'); link.href = url; link.download = '岗位待复核清单.json'; link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  });
-  drawCityMap(report.cities || []);
-}
-
-function bindCohortExplorer(report) {
-  const root = $('#cohortExplorer');
-  const rows = report.cohort_observations || [];
-  // Older reports have aggregates only: show them once in the same profile panel.
-  if (!rows.length) {
-    root.innerHTML = '<div class="insight-panel-head"><div><h3>岗位画像</h3><p>历史报告仅有汇总，没有逐条岗位；重新生成洞察后可按五项条件联动查看薪资和技术栈。行业按岗位计数，与新报告的公司去重口径不同。</p></div></div><div class="insight-grid two-col">' +
-      [['高频技能', report.skills], ['高频工作内容', report.tasks], ['业务工作方向', report.business_domains], ['公司行业定位', report.industries]]
-        .map(([title, items]) => '<article class="profile-cloud-panel"><h4>' + title + '</h4>' + renderProfileCloud(items,title) + '</article>').join('') + '</div><p>经验薪资折线及占比环图需要逐条岗位数据，请重新生成报告。</p>';
-    return;
-  }
-  const filterSpecs = [['city','城市','cohortCity'],['experience','经验','cohortExperience'],['education','学历','cohortEducation'],['company_size','公司规模','cohortCompanySize'],['employment_type','用工类型','cohortEmployment']];
-  root.innerHTML = `<div class="insight-panel-head"><div><h3>条件岗位画像与薪资统计</h3><p>五项条件共用同一批匹配岗位，同步统计薪资、技能与技术栈、工作内容及行业。选项来自当前报告实际岗位，随其他已选条件联动；每个标签在同一岗位只计一次。</p></div></div>
-    <div class="cohort-filters">${filterSpecs.map(([field,label,id])=>`<label>${label}<select id="${id}" data-cohort-filter="${field}"><option value="">不限（不筛选）</option></select></label>`).join('')}<button type="button" class="ghost" id="resetCohort">全部不限</button></div>
-    <div id="cohortSummary" aria-live="polite"></div>${cohortSalaryMarkup()}<div class="insight-grid two-col profile-cloud-grid"><article class="profile-cloud-panel"><h4>技能与技术栈词云</h4><div id="cohortSkills"></div></article><article class="profile-cloud-panel"><h4>工作内容词云</h4><div id="cohortTasks"></div></article><article class="profile-cloud-panel"><h4>业务方向词云</h4><div id="cohortDomains"></div></article><article class="profile-cloud-panel"><h4>公司行业词云</h4><div id="cohortIndustries"></div></article></div>
-    <article class="profile-chart-panel"><h4>经验与招聘月薪中位数</h4><div id="cohortSalaryExperience"></div></article>
-    <div class="insight-grid two-col"><article class="profile-chart-panel"><h4>学历要求占比</h4><div id="cohortEducationDonut"></div></article><article class="profile-chart-panel"><h4>城市岗位占比</h4><div id="cohortCityDonut"></div></article></div>
-    <details><summary>查看业务判断原文依据</summary><div id="cohortEvidence"></div></details>`;
-  const update = () => {
-    const profile = Object.fromEntries(filterSpecs.map(([field,,id])=>[field,$('#'+id).value]));
-    for (const [field,,id] of filterSpecs) {
-      const available = cohortFilterOptions(rows,profile,field);
-      const current = profile[field];
-      const select = $('#'+id);
-      select.innerHTML = '<option value="">不限（不筛选）</option>' + available.map(item=>`<option value="${escapeHtml(item.value)}">${escapeHtml(item.value === '不限' ? '招聘要求：不限' : item.value)} · ${number(item.count)} 条</option>`).join('') +
-        (current && !available.some(item=>item.value===current) ? `<option value="${escapeHtml(current)}" disabled>${escapeHtml(current)} · 当前组合0条</option>` : '');
-      select.value = current;
-    }
-    const city = profile.city;
-    const selected = filterCohort(rows,profile);
-    const summary = summarizeCohort(selected);
-    const salary = cohortSalaryStatistics(selected);
-    $('#cohortSummary').innerHTML = `<p><b>${number(summary.count)} 条匹配岗位</b> · 有效薪资 ${number(salary.count)} 条 · ${number(summary.count-salary.count)} 条岗位薪资缺失、无法解析或超范围，仍参与技能画像${summary.count && summary.count < 20 ? ' · 小样本，统计波动较大' : ''}${!summary.count ? ' · 当前条件组合没有岗位，请改为不限或点击全部不限；不会自动借用其他样本' : ''}</p>`;
-    updateCohortSalary(selected);
-    for (const [id,key,title] of [['cohortSkills','skills','技能与技术栈词云'],['cohortTasks','tasks','工作内容词云'],['cohortDomains','business_domains','业务方向词云']]) $('#'+id).innerHTML = renderProfileCloud(summary[key],title);
-    $('#cohortIndustries').innerHTML = renderProfileCloud(summary.industries,'公司行业词云',true);
-    $('#cohortSalaryExperience').innerHTML = renderSalaryExperienceLine(selected);
-    $('#cohortEducationDonut').innerHTML = renderDonut(selected,'education','学历要求占比');
-    $('#cohortCityDonut').innerHTML = renderDonut(selected,'city','城市岗位占比');
-    $('#cohortEvidence').innerHTML = summary.business_domains.slice(0,6).map(d=>`<p><b>${escapeHtml(d.name)}</b> · ${number(d.count)} 条岗位<br>${d.evidence.map(e=>`#${number(e.row_no)} ${escapeHtml(e.job_name)}：${escapeHtml(e.quote || '标签来源有证据，未提取业务片段')}`).join('<br>')}</p>`).join('') || '<p>当前筛选没有明确业务方向证据。</p>';
-    if (city) drawCityDetail(city,selected); else { $('#cityMapDetail')?.remove(); }
-  };
-  root.querySelectorAll('select').forEach(el=>el.addEventListener('change',update));
-  $('#resetCohort').addEventListener('click',()=>{root.querySelectorAll('select').forEach(el=>el.value='');update();});
-  update();
+  container.innerHTML='<div id="cohortExplorer"></div>';
+  disposeInsightWorkspace=renderInsightWorkspace($('#cohortExplorer'),report,{drawCityMap,drawCityDetail});
 }
 
 const cityMapCodes = {北京:110000,天津:120000,上海:310000,重庆:500000,广州:440100,深圳:440300,杭州:330100,成都:510100,武汉:420100,南京:320100,苏州:320500,西安:610100,长沙:430100,合肥:340100,郑州:410100,济南:370100,青岛:370200,厦门:350200,福州:350100,无锡:320200,宁波:330200,东莞:441900,佛山:440600,珠海:440400,昆明:530100,沈阳:210100,大连:210200};
@@ -418,12 +281,12 @@ async function drawCityDetail(city, rows) {
   const revision = ++cityDetailRevision;
   $('#cityMapDetail')?.remove();
   const host = document.createElement('section');host.id='cityMapDetail';host.className='card insight-panel';
-  $('#cohortExplorer').after(host);
+  ($('#insightCityDetail')||$('#cohortExplorer')).append(host);
   host.innerHTML = `<h3>${escapeHtml(city)}行政区分布</h3><p>正在读取市级行政区边界…</p>`;
   try {
     if (!cityMapCodes[city]) throw new Error('当前城市暂无已缓存的行政边界');
     const res=await fetch(`/maps/${cityMapCodes[city]}.geojson`);if(!res.ok)throw new Error('边界暂不可用');
-    const geo=await res.json();if(revision!==cityDetailRevision || $('#cohortCity').value!==city)return;
+    const geo=await res.json();if(revision!==cityDetailRevision || !host.isConnected || $('#cohortCity')?.value!==city)return;
     orientMap(geo);
     const districtRows=rows.filter(r=>r.district);
     const districtCounts = new Map();
@@ -439,21 +302,35 @@ async function drawCityDetail(city, rows) {
 }
 
 function orientMap(geo) {
-  for(const f of geo.features || []) {
-    const g=f.geometry;
-    if(g?.type==='Polygon')g.coordinates.forEach(r=>r.reverse());
-    if(g?.type==='MultiPolygon')g.coordinates.forEach(p=>p.forEach(r=>r.reverse()));
-  }
+  // Normalize each ring rather than blindly reversing a whole feature. Cached
+  // city boundaries contain mixed windings (notably Tianjin's coastal islands).
+  // A reversed small ring covers the rest of the globe in d3's spherical model.
+  const polygon=rings=>rings.forEach((ring,index)=>{
+    const coversGlobe=window.d3.geoArea({type:'Polygon',coordinates:[ring]})>2*Math.PI;
+    if(coversGlobe===(index===0))ring.reverse();
+  });
+  const geometry=g=>{
+    if(g?.type==='Polygon')polygon(g.coordinates);
+    if(g?.type==='MultiPolygon')g.coordinates.forEach(polygon);
+    if(g?.type==='GeometryCollection')g.geometries.forEach(geometry);
+  };
+  for(const feature of geo.features||[])geometry(feature.geometry);
 }
 
+let cityMapRevision=0,cityMapGeometryPromise=null;
+function cityMapGeometry(){
+  if(!cityMapGeometryPromise)cityMapGeometryPromise=Promise.all(['/china-provinces.geojson','/maps/cities.geojson'].map(async url=>{const response=await fetch(url);if(!response.ok){if(url.includes('cities'))return {features:[]};throw new Error('行政区边界数据不可用');}return response.json();})).catch(error=>{cityMapGeometryPromise=null;throw error;});
+  return cityMapGeometryPromise;
+}
 async function drawCityMap(cities) {
+  const revision=++cityMapRevision;
   const container = $('#cityMap');
   if (!container) return;
   if (!window.d3) { container.textContent = '地图组件未加载，城市排名仍可正常使用。'; return; }
   try {
-    const response = await fetch('/china-provinces.geojson');
-    if (!response.ok) throw new Error('行政区边界数据不可用');
-    const geo = await response.json();
+    const geometry=await cityMapGeometry();
+    if(revision!==cityMapRevision||!container.isConnected)return;
+    const [geo,cityGeo]=structuredClone(geometry);container.replaceChildren();
     // DataV follows the GeoJSON right-hand winding convention, while d3-geo
     // interprets spherical polygon winding in the opposite direction.
     orientMap(geo);
@@ -462,24 +339,22 @@ async function drawCityMap(cities) {
     const projection = window.d3.geoMercator().fitExtent([[18, 18], [width - 18, height - 18]], geo);
     const pathGenerator = window.d3.geoPath(projection);
     svg.selectAll('path').data(geo.features).join('path').attr('class', 'map-region').attr('d', pathGenerator);
-    const cityResponse=await fetch('/maps/cities.geojson');
-    if(cityResponse.ok){const cityGeo=await cityResponse.json();orientMap(cityGeo);svg.selectAll('path.city-boundary').data(cityGeo.features.filter(f=>cities.some(c=>c.name===f.properties.name))).join('path').attr('class','map-region city-boundary').attr('d',pathGenerator).attr('tabindex',0).attr('role','button').attr('aria-label',f=>`查看${f.properties.name}岗位`).on('click',(_,f)=>selectMapCity(f.properties.name)).on('keydown',(event,f)=>{if(event.key==='Enter')selectMapCity(f.properties.name);});}
+    orientMap(cityGeo);svg.selectAll('path.city-boundary').data(cityGeo.features.filter(f=>cities.some(c=>c.name===f.properties.name))).join('path').attr('class','map-region city-boundary').attr('d',pathGenerator).attr('tabindex',0).attr('role','button').attr('aria-label',f=>`查看${f.properties.name}岗位`).on('click',(_,f)=>selectMapCity(f.properties.name)).on('keydown',(event,f)=>{if(event.key==='Enter')selectMapCity(f.properties.name);});
     const visible = cities.filter((item) => Number.isFinite(item.longitude) && Number.isFinite(item.latitude));
     const radius = window.d3.scaleSqrt().domain([1, window.d3.max(visible, (item) => item.count) || 1]).range([4, 18]);
     const marks = svg.selectAll('g.city-mark').data(visible).join('g').attr('class', 'city-mark').attr('transform', (item) => `translate(${projection([item.longitude, item.latitude]).join(',')})`);
     marks.attr('tabindex',0).attr('role','button').attr('aria-label',item=>`查看${item.name}岗位`).on('click',(_,item)=>selectMapCity(item.name)).on('keydown',(event,item)=>{if(event.key==='Enter')selectMapCity(item.name);});
     marks.append('circle').attr('r', (item) => radius(item.count)).append('title').text((item) => `${item.name}：${item.count} 条；薪资中位数 ${item.median_salary_k == null ? '样本不足' : `${item.median_salary_k}K/月`}`);
     marks.filter((item, index) => index < 8).append('text').attr('x', (item) => radius(item.count) + 4).attr('y', 4).text((item) => item.name);
-  } catch (error) { container.textContent = `地图暂不可用：${error.message}`; }
+  } catch (error) { if(revision===cityMapRevision&&container.isConnected)container.textContent = `地图暂不可用：${error.message}`; }
 }
 
 function selectMapCity(city) {
   const select=$('#cohortCity');if(!select)return;
-  // A map click chooses a new city scope, not an impossible old filter tuple.
-  $('#resetCohort')?.click();
+  // Map and ranking operate inside the current linked filter scope.
   const value=cohortConditionValue({city},'city');
   if(![...select.options].some(option=>option.value===value))return;
-  select.value=value;select.dispatchEvent(new Event('change'));$('#cohortExplorer').scrollIntoView({behavior:'smooth',block:'start'});
+  select.value=value;select.dispatchEvent(new Event('change'));$('#insightOverviewSection')?.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 function insightReportKey(report) {
@@ -502,242 +377,11 @@ async function loadInsight(silent = true) {
       const report=state.insight.report;
       // The previous report is a result, not the default source for a new analysis.
       $('#insightForm input[name="inputFile"]').value='kb://all';
-      $('#insightForm input[name="role"]').value='自动识别';
       state.insightFormInitialized=true;
-      await loadInsightDatasets();await loadInsightLabelJobs();
+      await loadInsightDatasets();
     }
     renderInsight();
   } catch (error) { if (!silent) toast(error.message, true); }
-}
-
-async function loadPlatforms(silent = true) {
-  if (state.platformsLoading) return;
-  state.platformsLoading = true;
-  try {
-    const data = await api('/api/platforms');
-    state.platforms = data.platforms.filter(item=>!['yupao','boss'].includes(item.key));
-    const groups = [...new Set(state.platforms.map((item) => item.group))];
-    patchHtml($('#platformGroups'), groups.map((group) => `<div class="platform-section"><div class="section-heading"><h2>${escapeHtml(group)}</h2><p>${group === '招聘平台' ? '用于岗位详情采集' : '用于人工登录后的结构化打标'}</p></div><div class="platform-grid">${state.platforms.filter((item) => item.group === group).map((item) => `<article class="platform-card card"><div class="platform-card-head"><div class="platform-logo">${escapeHtml(item.name.slice(0, 2))}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.description)}</p></div><span class="session-badge ${item.status}">${loginStatusLabel[item.status] || item.status}</span></div><div class="session-message">登录状态：${escapeHtml(authLabels[item.loginStatus]||'未确认')} · 验证状态：${escapeHtml(verificationLabels[item.verificationStatus]||'未检查')}<br>${escapeHtml(item.message)}${item.key === 'yupao' && item.browserExecutable ? `<details class="browser-instance-info"><summary>浏览器实例 · PID ${escapeHtml(item.browserPid)}</summary><small>程序：${escapeHtml(item.browserExecutable)}<br>配置目录：${escapeHtml(item.browserProfile)}${item.browserInitialization?.source_profile ? `<br>初始化：${item.browserInitialization.mode === 'full' ? '本机完整配置快照' : '本机常用设置'}（${escapeHtml(item.browserInitialization.source_profile)}）${item.browserInitialization.mode === 'full' ? '<br>加密登录数据已复制，登录态请在新实例人工确认' : ''}` : ''}${item.browserProxy ? `<br>代理：${escapeHtml(item.browserProxy)}` : ''}</small></details>` : ''}${item.key === 'yupao' && browserSwitchReason(item) ? `<br><span class="browser-switch-reason">${escapeHtml(browserSwitchReason(item))}</span>` : ''}</div><div class="platform-actions"><small>${item.updatedAt ? `最近会话 ${new Date(item.updatedAt).toLocaleString('zh-CN')}` : '尚无本机登录记录'}</small><div class="platform-browser-actions"><button class="secondary" data-platform-login="${escapeHtml(item.key)}" ${item.status === 'opening' ? 'disabled' : ''}>${item.browserOpen ? '显示共享浏览器' : '打开登录浏览器'}</button>${item.key === 'yupao' ? `<button class="secondary" data-platform-switch="yupao" ${!item.canSwitchBrowser ? 'disabled' : ''} title="将当前 Cookie 迁入独立的新实例，后续采集自动复用；请先暂停鱼泡采集">携带 Cookie 切换新浏览器</button>` : ''}</div></div></article>`).join('')}</div></div>`).join(''));
-    document.querySelectorAll('[data-platform-login]').forEach((button) => {
-      if (pendingPlatformLogins.has(button.dataset.platformLogin)) button.disabled = true;
-      if (button._platformLoginBound) return;
-      button._platformLoginBound = true;
-      button.addEventListener('click', async () => {
-      if (button.disabled) return;
-      pendingPlatformLogins.add(button.dataset.platformLogin);
-      button.disabled = true;
-      try {
-        const data = await api(`/api/platforms/${encodeURIComponent(button.dataset.platformLogin)}/login`, { method: 'POST', body: '{}' });
-        toast(data.message); await loadPlatforms();
-      } catch (error) { toast(error.message, true); }
-      finally {
-        pendingPlatformLogins.delete(button.dataset.platformLogin);
-        button.disabled = state.platforms.find(p=>p.key===button.dataset.platformLogin)?.status === 'opening';
-      }
-    }); });
-    $('#refreshPlatforms').title = '本地服务连接正常';
-    const switchButton=document.querySelector('[data-platform-switch="yupao"]');
-    if(switchButton){
-      switchButton.disabled=switchingYupaoBrowser||!state.platforms.find(p=>p.key==='yupao')?.canSwitchBrowser;
-      if(!switchButton._switchBound){
-        switchButton._switchBound=true;
-        switchButton.addEventListener('click',async()=>{
-          if(switchButton.disabled)return;
-          switchingYupaoBrowser=true;switchButton.disabled=true;
-          toast('正在打开新浏览器并迁移 Cookie…');
-          try{
-            const data=await api('/api/platforms/yupao/switch-browser',{method:'POST',body:'{}',timeoutMs:180000});
-            toast(data.message);
-          }catch(error){toast(error.message,true);}
-          finally{switchingYupaoBrowser=false;await loadPlatforms(false);}
-        });
-      }
-    }
-  } catch (error) { $('#refreshPlatforms').title = error.message; if (!silent) toast(error.message, true); }
-  finally { state.platformsLoading = false; }
-}
-
-function labelProgress(job) {
-  return Math.min(100, Math.round((job.metrics.completed / Math.max(1, job.metrics.total)) * 100));
-}
-
-function labelResultMissing(job) { return Boolean(job?.resultsMissing || job?.status === 'completed' && job?.metrics?.completed === 0); }
-
-function renderLabelStats() {
-  const total = state.labelJobs.reduce((sum, job) => sum + job.metrics.total, 0);
-  const completed = state.labelJobs.reduce((sum, job) => sum + job.metrics.completed, 0);
-  const running = state.labelJobs.filter((job) => ['running', 'stopping'].includes(job.status)).length;
-  const confidence = state.labelJobs.filter((job) => job.metrics.averageConfidence).map((job) => job.metrics.averageConfidence);
-  const average = confidence.length ? confidence.reduce((sum, value) => sum + value, 0) / confidence.length : 0;
-  patchHtml($('#labelStats'), [
-    ['打标任务', state.labelJobs.length, '独立配置与输出目录'],
-    ['正在运行', running, running ? '请勿重复启动同一聊天平台' : '当前无活动任务'],
-    ['已完成标签', number(completed), `计划 ${number(total)} 条`],
-    ['模型自报置信度', average ? `${(average * 100).toFixed(1)}%` : '—', '仅作复核线索，不等同真实准确率'],
-  ].map(([label, value, note]) => `<div class="stat"><span>${label}</span><strong>${value}</strong><em>${note}</em></div>`).join(''));
-}
-
-function renderLabelList() {
-  const list = $('#labelList');
-  if (!state.labelJobs.length) {
-    patchHtml(list, '<div class="empty-list">还没有打标任务<br />点击右上角创建测试任务</div>');
-    return;
-  }
-  patchHtml(list, state.labelJobs.map((job) => `<button class="task-item ${job.id === state.selectedLabelId ? 'selected' : ''}" data-label-job="${escapeHtml(job.id)}"><div class="task-row"><strong>${escapeHtml(job.name)}</strong><span class="badge ${labelResultMissing(job) ? 'failed' : job.status}">${labelResultMissing(job) ? '结果缺失' : statusLabel[job.status] || job.status}</span></div><div class="task-meta"><span>${number(job.metrics.completed)} / ${number(job.metrics.total)}</span><span>${escapeHtml(job.platformName)}</span></div><div class="mini-progress"><i style="width:${labelProgress(job)}%"></i></div></button>`).join(''));
-  list.querySelectorAll('[data-label-job]').forEach((button) => {
-    if (button._labelClickBound) return; button._labelClickBound = true;
-    button.addEventListener('click', () => {
-    state.selectedLabelId = button.dataset.labelJob;
-    syncRoute();
-    renderLabels();
-    loadLabelLog();
-    });
-  });
-}
-
-function setText(element, value) { if (element && element.textContent !== String(value)) element.textContent = String(value); }
-function setDisabled(element, value) { if (element.disabled !== value) element.disabled = value; }
-
-function updateLabelDetail(job) {
-  const root = $('#labelDetail');
-  const running = ['running', 'stopping'].includes(job.status);
-  setText(root.querySelector('h2'), job.name);
-  setText(root.querySelector('.detail-title p'), `${job.message} · ${job.platformName}`);
-  const badge = root.querySelector('.detail-title .badge');
-  setText(badge, labelResultMissing(job) ? '结果缺失' : statusLabel[job.status] || job.status);
-  const badgeClass = `badge ${labelResultMissing(job) ? 'failed' : job.status}`;
-  if (badge.className !== badgeClass) badge.className = badgeClass;
-  setText(root.querySelector('.progress-info span:last-child'), `${number(job.metrics.completed)} / ${number(job.metrics.total)}`);
-  const progress = labelProgress(job);
-  const bar = root.querySelector('.progress i'); if (bar.style.width !== `${progress}%`) bar.style.width = `${progress}%`;
-  setText(root.querySelector('.progress-number'), `${progress}%`);
-  const metrics = [number(job.metrics.total), number(job.metrics.completed), number(job.metrics.failed), job.metrics.averageConfidence ? `${(job.metrics.averageConfidence * 100).toFixed(1)}%` : '—', number(job.metrics.riskRows), job.metrics.schemaSuccessRate ? `${(job.metrics.schemaSuccessRate * 100).toFixed(1)}%` : '—', job.metrics.rowsPerMinute ? `${job.metrics.rowsPerMinute.toFixed(2)} 条/分` : '—'];
-  root.querySelectorAll('.label-metrics b').forEach((element, i) => setText(element, metrics[i]));
-  const run = root.querySelector('[data-label-action="run"]'); setDisabled(run, running);
-  setText(run, `▶ ${job.metrics.completed ? '继续打标' : '开始打标'}`);
-  setDisabled(root.querySelector('[data-label-action="pause"]'), !running || job.status === 'stopping');
-  setDisabled(root.querySelector('[data-label-action="archive"]'), running);
-  setDisabled(root.querySelector('[data-label-insights]'), labelResultMissing(job) || !job.metrics.completed);
-  setText(root.querySelector('.log-head span'), running ? `已运行 ${job.runningSeconds || 0} 秒 · 日志独立刷新` : '最近输出');
-  const runtime = root.querySelector('#labelRuntime');
-  if (job.runtime && job.platform !== 'rules') {
-    const target = runtime || document.createElement('p');
-    if (!runtime) { target.id = 'labelRuntime'; target.className = 'safety compact-safety'; }
-    setText(target, `平台阶段：${job.runtime.stage || '未明确'}。${job.runtime.nextActionAt ? `下一步不早于 ${new Date(job.runtime.nextActionAt).toLocaleString('zh-CN')}。` : ''}${job.runtime.retryAfter ? `冷却至 ${new Date(job.runtime.retryAfter).toLocaleString('zh-CN')}。` : ''}${job.runtime.recovery || ''}`);
-    if (!runtime) root.querySelector('.detail-body').prepend(target);
-  } else runtime?.remove();
-}
-
-function renderLabelDetail() {
-  const job = state.labelJobs.find((item) => item.id === state.selectedLabelId);
-  if (!job) {
-    $('#labelDetail').dataset.jobId = '';
-    patchHtml($('#labelDetail'), '<div class="empty-state"><h2>未找到打标任务</h2><p>请选择一个现存任务，或检查链接中的任务 ID。</p></div>');
-    return;
-  }
-  if ($('#labelDetail').dataset.jobId === job.id) { updateLabelDetail(job); return; }
-  $('#labelDetail').dataset.jobId = job.id;
-  const isRunning = ['running', 'stopping'].includes(job.status);
-  const value = labelProgress(job);
-  $('#labelDetail').innerHTML = `<div class="detail-head"><div class="detail-title"><div><h2>${escapeHtml(job.name)}</h2><p>${escapeHtml(job.message)} · ${escapeHtml(job.platformName)}</p></div><span class="badge ${job.status}">${statusLabel[job.status] || job.status}</span></div><div class="detail-actions"><button class="primary" data-label-action="run" ${isRunning ? 'disabled' : ''}>▶ ${job.metrics.completed ? '继续打标' : '开始打标'}</button><button class="danger" data-label-action="pause" ${!isRunning || job.status === 'stopping' ? 'disabled' : ''}>暂停</button><button class="ghost" data-label-action="open">打开结果目录</button></div></div><div class="detail-body"><div class="progress-wrap"><div><div class="progress-info"><span>打标完成度</span><span>${number(job.metrics.completed)} / ${number(job.metrics.total)}</span></div><div class="progress"><i style="width:${value}%"></i></div></div><div class="progress-number">${value}%</div></div><div class="metric-grid label-metrics"><div class="metric"><small>计划标注</small><b>${number(job.metrics.total)}</b></div><div class="metric"><small>已完成</small><b>${number(job.metrics.completed)}</b></div><div class="metric"><small>失败</small><b>${number(job.metrics.failed)}</b></div><div class="metric"><small>模型自报置信度</small><b>${job.metrics.averageConfidence ? `${(job.metrics.averageConfidence * 100).toFixed(1)}%` : '—'}</b></div><div class="metric"><small>风险信号</small><b>${number(job.metrics.riskRows)}</b></div><div class="metric"><small>结构通过率</small><b>${job.metrics.schemaSuccessRate ? `${(job.metrics.schemaSuccessRate * 100).toFixed(1)}%` : '—'}</b></div><div class="metric"><small>实测速度</small><b>${job.metrics.rowsPerMinute ? `${job.metrics.rowsPerMinute.toFixed(2)} 条/分` : '—'}</b></div></div><div class="task-config"><span class="chip">${escapeHtml(job.sheetName)}</span><span class="chip">每批 ${job.batchSize} 条</span><span class="chip">数据最小化</span><span class="chip">验证码即停</span></div><div class="log-head"><h3>实时打标日志</h3><span>${isRunning ? `已运行 ${job.runningSeconds || 0} 秒 · 2秒刷新` : '最近输出'}</span></div><pre class="log" id="labelLog">正在读取日志…</pre><div class="path"><span>输入</span><code title="${escapeHtml(job.inputFile)}">${escapeHtml(job.inputFile)}</code></div><div class="path"><span>输出</span><code title="${escapeHtml(job.outputDir)}">${escapeHtml(job.outputDir)}</code></div><div class="detail-actions"><button class="ghost" data-label-action="archive" ${isRunning ? 'disabled' : ''}>从列表移除</button></div></div>`;
-  if (labelResultMissing(job)) {
-    const badge = $('#labelDetail .detail-title .badge');
-    badge.textContent = '结果缺失';
-    badge.className = 'badge failed';
-  }
-  const review = document.createElement('section');
-  review.id = 'labelReview';
-  review.className = 'label-review';
-  review.textContent = labelResultMissing(job) ? '结果文件缺失，无法复核。请用现存 Excel 创建新任务。' : '正在读取待复核标签…';
-  $('#labelDetail .detail-body').prepend(review);
-  $('#labelDetail').querySelectorAll('[data-label-action]').forEach((button) => button.addEventListener('click', () => handleLabelAction(state.labelJobs.find(item => item.id === job.id) || job, button.dataset.labelAction)));
-  const insightButton=document.createElement('button');insightButton.type='button';insightButton.className='secondary';insightButton.textContent='用于岗位洞察';
-  insightButton.dataset.labelInsights = '';
-  insightButton.disabled=labelResultMissing(job) || !job.metrics.completed;
-  insightButton.addEventListener('click',async()=>{
-    state.insightFormInitialized=true;
-    $('#insightForm input[name="inputFile"]').value=job.inputFile;
-    $('#insightForm input[name="role"]').value=job.jobFamily || '自动识别';
-    switchView('insights');
-    $('#insightForm').scrollIntoView({behavior:'smooth'});
-  });
-  $('#labelDetail .detail-actions').append(insightButton);
-  if (job.runtime && job.platform !== 'rules') {
-    const runtime = document.createElement('p'); runtime.className = 'safety compact-safety'; runtime.id = 'labelRuntime';
-    const stages = { starting: '启动', checking_page: '检查页面', entering_prompt: '填写任务', waiting_response: '等待回复', cooldown: '批次冷却', retry_backoff: '异常退避', stopped: '已停止', completed: '完成' };
-    runtime.textContent = `平台阶段：${stages[job.runtime.stage] || job.runtime.stage || '未明确'}。${job.runtime.nextActionAt ? `下一步不早于 ${new Date(job.runtime.nextActionAt).toLocaleString('zh-CN')}。` : ''}${job.runtime.retryAfter ? `冷却至 ${new Date(job.runtime.retryAfter).toLocaleString('zh-CN')}。` : ''}${job.runtime.recovery || ''}`;
-    $('#labelDetail .detail-body').prepend(runtime);
-  }
-  updateLabelDetail(job);
-}
-
-function renderLabels() { renderLabelStats(); renderLabelList(); renderLabelDetail(); loadLabelReview(); }
-
-async function loadLabelReview() {
-  const id = state.selectedLabelId;
-  const root = $('#labelReview');
-  if (!id || !root || labelResultMissing(state.labelJobs.find((job) => job.id === id))) return;
-  try {
-    const data = await api(`/api/labels/${encodeURIComponent(id)}/review`);
-    if (state.view !== 'labels' || id !== state.selectedLabelId || root !== $('#labelReview')) return;
-    const signature = JSON.stringify(data);
-    if (root._reviewSignature === signature) return;
-    root._reviewSignature = signature;
-    patchHtml(root, `<h3>人工复核</h3><p>已批准 ${number(data.approved)} · 已驳回 ${number(data.rejected)} · 待复核 ${number(data.pending)}。列表覆盖不同用工类型与置信度；核对原文证据后再批准。</p>${data.rows.map((row) => `<article class="label-review-row" data-review-row="${escapeHtml(`${row.row_no}:${row.job_id}`)}"><b>${escapeHtml(row.job_name)} · #${number(row.row_no)}</b><small>AI岗位判断：${escapeHtml(row.relevance_grade || '未明确')} / ${escapeHtml(row.label_status || '未明确')}${row.relevance_grade === '非目标' ? '；若岗位实际属于目标族，请特别核查后再批准' : ''}</small><small>用工类型：${escapeHtml(row.employment_type || '未明确')}；模型自报置信度：${percent(row.confidence)}；证据覆盖：${percent(row.evidence_coverage)}</small><small>标注技能：${escapeHtml((row.skills || []).join('、') || '无')}；职责：${escapeHtml((row.tasks || []).join('、') || '无')}</small><small>原始技能字段：${escapeHtml(row.skills_text || '无')}</small><small>岗位描述：${escapeHtml(row.job_description || '无')}</small><small>标注证据：${escapeHtml((row.evidence_json || []).map((item) => item.quote).filter(Boolean).join('；').slice(0, 360) || '无证据，请驳回')}</small><div><button class="secondary" data-review="approved" data-row-no="${number(row.row_no)}" data-job-id="${escapeHtml(row.job_id)}">批准</button><button class="ghost" data-review="rejected" data-row-no="${number(row.row_no)}" data-job-id="${escapeHtml(row.job_id)}">驳回</button></div></article>`).join('') || '<p>暂无待复核记录。</p>'}`);
-    root.querySelectorAll('[data-review]').forEach((button) => {
-      if (button._reviewBound) return; button._reviewBound = true;
-      button.addEventListener('click', async () => {
-      try {
-        await api(`/api/labels/${encodeURIComponent(id)}/review`, { method: 'POST', body: JSON.stringify({ row_no: Number(button.dataset.rowNo), job_id: button.dataset.jobId, decision: button.dataset.review }) });
-        await loadLabelReview();
-      } catch (error) { toast(error.message, true); }
-      });
-    });
-  } catch { if (state.view === 'labels' && root === $('#labelReview') && !root._reviewSignature) setText(root, '当前没有可复核的标注结果。'); }
-}
-
-async function loadLabels(silent = true) {
-  if (state.labelsLoading) return;
-  state.labelsLoading = true;
-  try {
-    const data = await api('/api/labels');
-    state.labelJobs = data.jobs;
-    if (state.view !== 'labels') return;
-    if (!state.selectedLabelId && state.labelJobs.length) state.selectedLabelId = state.labelJobs[0].id;
-    syncRoute(true);
-    renderLabels();
-    if (state.selectedLabelId && !$('#labelLog')?._logLoaded) loadLabelLog();
-  } catch (error) { if (!silent) toast(error.message, true); }
-  finally { state.labelsLoading = false; }
-}
-
-async function loadLabelLog() {
-  const id = state.selectedLabelId;
-  const log = $('#labelLog');
-  if (state.view !== 'labels' || !id || !log || log._logLoading) return;
-  log._logLoading = true;
-  try {
-    const data = await api(`/api/labels/${encodeURIComponent(id)}/logs`);
-    if (state.view !== 'labels' || id !== state.selectedLabelId || log !== $('#labelLog')) return;
-    updateLog(log, data.content || '尚无运行日志。'); log._logLoaded = true;
-  } catch {}
-  finally { log._logLoading = false; }
-}
-
-async function handleLabelAction(job, action) {
-  try {
-    if (action === 'archive' && !confirm('仅从列表移除任务，结果文件不会删除。继续吗？')) return;
-    const body = {};
-    if (action === 'run' && job.runtime?.requiresHuman) {
-      if (job.runtime.retryAfter && Date.parse(job.runtime.retryAfter) > Date.now()) throw new Error(`平台仍在冷却，请等到 ${new Date(job.runtime.retryAfter).toLocaleString('zh-CN')} 后再恢复`);
-      if (!confirm(`${job.runtime.recovery}\n已在平台页面人工处理完成，并确认平台允许继续使用吗？`)) return;
-      body.confirmedHumanResolution = true;
-    }
-    const data = await api(`/api/labels/${encodeURIComponent(job.id)}/${action}`, { method: 'POST', body: JSON.stringify(body) });
-    toast(data.message || '操作完成');
-    if (action === 'archive') state.selectedLabelId = null;
-    loadLabels();
-  } catch (error) { toast(error.message, true); }
 }
 
 async function refresh(silent = true) {
@@ -789,25 +433,17 @@ async function handleAction(task, action) {
       const data=await api(`/api/tasks/${encodeURIComponent(task.id)}/export-latest`,{method:'POST',body:'{}'});
       toast(data.message);return refresh();
     }
-    if (['insights', 'labels'].includes(action)) {
+    if (action === 'insights') {
       await loadInsightDatasets();
       let dataset;
-      try { dataset = action==='insights'?await resolveLatestInsightSource(task,api):(await api(`/api/tasks/${encodeURIComponent(task.id)}/insight-source`)).dataset; }
+      try { dataset = await resolveLatestInsightSource(task,api); }
       catch (error) { if (error.status !== 404) throw error; dataset = selectLegacyTaskDataset(task, state.insightDatasets); }
-      if (action === 'labels') {
-        $('#labelForm input[name="inputFile"]').value = dataset.path;
-        $('#labelForm input[name="jobFamily"]').value = task.label;
-        $('#labelDataset').value = dataset.path;
-        switchView('labels'); $('#labelDialog').showModal();
-      } else {
-        state.insightFormInitialized = true;
-        state.insightTransfer = { taskId: task.id, role: task.label, ...dataset };
-        $('#insightForm input[name="inputFile"]').value = dataset.path;
-        $('#insightForm input[name="role"]').value = task.label;
-        switchView('insights');
-        $('#insightForm').scrollIntoView({ behavior: 'smooth' });
-      }
-      toast(dataset.requiresManualSource?`已对接 ${task.label} 的最新导出CSV；点击“生成全量分析”时校验并读取文件`:`已选择 ${task.label} 的${dataset.resolution==='latest_snapshot'?'最新候选':'交付'}数据${dataset.expectedRows ? ` ${number(dataset.expectedRows)} 条` : ''}${dataset.updatedAt?'；更新于 '+new Date(dataset.updatedAt).toLocaleString('zh-CN'):''}${dataset.collecting ? '；采集更新后需重新生成' : ''}`);
+      state.insightFormInitialized = true;
+      state.insightTransfer = { taskId: task.id, role: task.label, ...dataset };
+      $('#insightForm input[name="inputFile"]').value = dataset.path;
+      switchView('insights');
+      $('#insightForm').scrollIntoView({ behavior: 'smooth' });
+      toast(dataset.requiresManualSource?`已对接 ${task.label} 的最新导出CSV；点击“生成全量分析”时校验并读取文件`:`已选择 ${task.label} 的${dataset.resolution==='knowledge'?'已入库中间':dataset.resolution==='latest_snapshot'?'最新候选':'交付'}数据${dataset.expectedRows ? ` ${number(dataset.expectedRows)} 条` : ''}${dataset.updatedAt?'；更新于 '+new Date(dataset.updatedAt).toLocaleString('zh-CN'):''}${dataset.collecting ? '；采集更新后需重新生成' : ''}`);
       return;
     }
     if (action === 'pause') {
@@ -817,11 +453,6 @@ async function handleAction(task, action) {
     if(action==='confirm-verification') {
       const data=await api(`/api/tasks/${encodeURIComponent(task.id)}/confirm-verification`,{method:'POST',body:'{}'});
       toast(data.message);return refresh();
-    }
-    if (action === 'login-zhaopin' || action === 'login-yupao') {
-      const platform = action === 'login-yupao' ? 'yupao' : 'zhaopin';
-      const data = await api(`/api/tasks/${encodeURIComponent(task.id)}/login`, { method: 'POST', body: JSON.stringify({ platform }) });
-      toast(data.message); return refresh();
     }
     if (action === 'open') {
       await api(`/api/tasks/${encodeURIComponent(task.id)}/open`, { method: 'POST', body: '{}' }); return;
@@ -844,44 +475,34 @@ document.querySelectorAll('[data-view]').forEach((button) => button.addEventList
   event.preventDefault(); switchView(button.dataset.view);
 }));
 window.addEventListener('popstate', restoreRoute);
-$('#newTaskBtn').addEventListener('click', () => { if (state.view === 'labels') { loadInsightDatasets(); $('#labelDialog').showModal(); } else $('#taskDialog').showModal(); });
-$('#labelDataset').addEventListener('change', event => { if (event.currentTarget.value) $('#labelForm input[name="inputFile"]').value = event.currentTarget.value; });
-$('#labelForm select[name="platform"]').addEventListener('change', event => {
-  const kimi = event.currentTarget.value === 'kimi';
-  $('#labelForm input[name="batchSize"]').max = kimi ? '1' : '5';
-  if (kimi) $('#labelForm input[name="batchSize"]').value = '1';
-  $('#labelForm input[name="cooldownSeconds"]').min = kimi ? '30' : '15';
-  if (kimi) $('#labelForm input[name="cooldownSeconds"]').value = Math.max(30, Number($('#labelForm input[name="cooldownSeconds"]').value));
-});
+$('#newTaskBtn').addEventListener('click', () => $('#taskDialog').showModal());
 document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $('#taskDialog').close()));
-document.querySelectorAll('[data-close-label]').forEach((button) => button.addEventListener('click', () => $('#labelDialog').close()));
 $('#showGuide').addEventListener('click', () => $('#guideDialog').showModal());
 document.querySelectorAll('[data-close-guide]').forEach((button) => button.addEventListener('click', () => $('#guideDialog').close()));
 $('#refreshBtn').addEventListener('click', () => refresh(false));
-$('#refreshPlatforms').addEventListener('click', () => loadPlatforms(false));
-$('#refreshLabels').addEventListener('click', () => loadLabels(false));
 // Mark edits immediately, before any delayed initial report can restore fields.
 for (const eventName of ['input', 'change']) $('#insightForm').addEventListener(eventName, () => {
   state.insightFormInitialized = true;
-  if (state.insightTransfer && (localPathKey($('#insightForm input[name="inputFile"]').value) !== localPathKey(state.insightTransfer.path) || $('#insightForm input[name="role"]').value.trim() !== state.insightTransfer.role)) state.insightTransfer = null;
+  if (state.insightTransfer && localPathKey($('#insightForm input[name="inputFile"]').value) !== localPathKey(state.insightTransfer.path)) state.insightTransfer = null;
   renderInsightStatus();
 });
 $('#insightDataset').addEventListener('change', (event) => {
   if (event.currentTarget.value) $('#insightForm input[name="inputFile"]').value = event.currentTarget.value;
   const selected=state.insightDatasets.find(item=>item.path===event.currentTarget.value);
+  state.insightTransfer=null;
   if(['latest_snapshot','knowledge'].includes(selected?.resolution)){
-    $('#insightForm input[name="role"]').value=selected.role;
     state.insightTransfer={...selected,role:selected.role};
     renderInsightStatus();
   }
-  loadInsightLabelJobs();
-});
-$('#insightForm input[name="inputFile"]').addEventListener('change', () => {
-  const inputFile = normalizedLocalPath($('#insightForm input[name="inputFile"]').value);
-  $('#insightDataset').value = state.insightDatasets.find((item) => normalizedLocalPath(item.path) === inputFile)?.path || '';
-  loadInsightLabelJobs();
 });
 
+function updateCollectionMode(){
+  const hybrid=$('#taskForm select[name="transportMode"]').value==='http_preferred_browser_fallback';
+  for(const input of document.querySelectorAll('#platformChecks input'))if(['jobonline','job51','liepin'].includes(input.value)){input.disabled=!hybrid;if(!hybrid)input.checked=false;}
+  for(const input of document.querySelectorAll('#taskForm input[name="browserMaxPages"],#taskForm input[name="browserMaxRows"]'))input.disabled=!hybrid;
+}
+$('#taskForm select[name="transportMode"]').addEventListener('change',updateCollectionMode);
+updateCollectionMode();
 $('#taskForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
@@ -889,30 +510,18 @@ $('#taskForm').addEventListener('submit', async (event) => {
   body.platforms = form.getAll('platforms');
   body.cities = form.getAll('cities');
   try {
-    if (body.platforms.includes('boss') && !(await api('/api/state')).capabilities?.bossCollection) throw new Error('BOSS接入需要更新服务，请在当前采集和打标停止后重启控制台');
+    if (body.platforms.includes('boss') && !(await api('/api/state')).capabilities?.bossCollection) throw new Error('BOSS接入需要更新服务，请在当前采集停止后重启控制台');
+    if(body.transportMode==='http_preferred_browser_fallback'&&!(await api('/api/state')).capabilities?.hybridCollection)throw new Error('请先更新并重启采集服务，当前服务不支持浏览器回退');
+    if (body.platforms.includes('liepin') && body.transportMode!=='http_preferred_browser_fallback' && !(await api('/api/state')).capabilities?.liepinCollection) throw new Error('猎聘独立 HTTP 尚未验证，请改用浏览器页面试验模式');
     const data = await api('/api/tasks', { method: 'POST', body: JSON.stringify(body) });
     state.selectedId = data.task.id;
     $('#taskDialog').close();
     event.currentTarget.reset();
-    document.querySelectorAll('#platformChecks input').forEach((input) => { input.checked = !['job51', 'yupao', 'boss'].includes(input.value); });
+    document.querySelectorAll('#platformChecks input').forEach((input) => { input.checked = ['shixiseng','iguopin','mohrss','zhaopin'].includes(input.value); });
+    updateCollectionMode();
     document.querySelectorAll('#cityChecks input').forEach((input) => { input.checked = !['天津', '重庆', '苏州'].includes(input.value); });
     toast('任务已创建');
     refresh();
-  } catch (error) { toast(error.message, true); }
-});
-
-$('#labelForm').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  const body = Object.fromEntries(form.entries());
-  try {
-    if (!(await api('/api/state')).capabilities?.labelPacing) throw new Error('请先更新服务以启用限速与原生数据接入');
-    body.cooldownMs = Number(body.cooldownSeconds) * 1000;
-    const data = await api('/api/labels', { method: 'POST', body: JSON.stringify(body) });
-    state.selectedLabelId = data.job.id;
-    $('#labelDialog').close();
-    toast('打标任务已创建');
-    await loadLabels();
   } catch (error) { toast(error.message, true); }
 });
 
@@ -920,27 +529,28 @@ $('#insightForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const body = Object.fromEntries(new FormData(event.currentTarget).entries());
   body.analysisMode = 'full';
-  body.labelJobId = 'auto';
   body.sheetName = '岗位数据';
-  if (state.insightTransfer && !state.insightTransfer.requiresManualSource && localPathKey(body.inputFile) === localPathKey(state.insightTransfer.path) && body.role === state.insightTransfer.role) body.sourceTaskId = state.insightTransfer.taskId;
+  if (state.insightTransfer && !state.insightTransfer.requiresManualSource && localPathKey(body.inputFile) === localPathKey(state.insightTransfer.path) && state.insightTransfer.taskId) body.sourceTaskId = state.insightTransfer.taskId;
   try {
-    if (body.labelJobId && !(await api('/api/state')).capabilities?.labelReview) throw new Error('请先更新服务以接入复核标签');
+    if($('#runInsight').dataset.supervisedReady!=='true'||$('#runInsight').dataset.classifierSource!==body.inputFile)throw new Error('请先为当前岗位标注并训练合格的监督分类器');
+    if (!(await api('/api/state')).capabilities?.insightSourceRole) throw new Error('岗位来源自动识别需要重启更新后的服务；本轮尚未启动分析');
     const data = await api('/api/insights/run', { method: 'POST', body: JSON.stringify(body) });
     toast(data.message || '岗位分析已启动');
     await loadInsight(false);
   } catch (error) { toast(error.message, true); }
 });
 
+installSkillTermReview({api,toast});
+installInsightClassifier({api,toast,onActivated:()=>{const form=$('#insightForm');form.requestSubmit();}});
+installJobBrowserWorkspace({api,toast});
+installSemanticCloud({api,toast,onApply:()=>$('#insightForm').requestSubmit()});
 restoreRoute();
 state.timer = setInterval(() => {
   if (document.hidden) return;
   if (state.view === 'tasks') refresh(true);
-  if (state.view === 'platforms') loadPlatforms(true);
-  if (state.view === 'labels') loadLabels(true);
   if (state.view === 'insights') loadInsight(true);
 }, 3000);
 state.logTimer = setInterval(() => {
   if (document.hidden) return;
-  if (state.view === 'labels') loadLabelLog();
   if (state.view === 'tasks') loadLog();
 }, 2000);

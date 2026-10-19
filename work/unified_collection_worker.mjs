@@ -20,17 +20,21 @@ catch(error) {
 }
 const reports={};let failures=0;
 while(true) {
+  let serverReached=false;
   try {
     const response=await fetch(`${base}/api/tasks`,{signal:AbortSignal.timeout(10000)});
     if(!response.ok)throw new Error(`HTTP ${response.status}`);
+    serverReached=true;
     const {tasks}=await response.json();
     for(const task of tasks) {
       if(!['running','stopping'].includes(task.status) && !reports[task.id])continue;
       try {reports[task.id]=await updateUnifiedDataset(task);}
       catch(error){reports[task.id]={...reports[task.id],task_id:task.id,error:error.message};console.error(task.id,error.message);}
     }
-    await knowledgeStore().sync({tasks,refresh:false});
-    await writeJsonAtomic(snapshotPath,{updatedAt:new Date().toISOString(),tasks:reports});failures=0;
-  }catch(error){console.error(error.message);if(++failures>=3)break;}
-  await new Promise(resolve=>setTimeout(resolve,15000));
+    const sync=await knowledgeStore().sync({tasks,refresh:false});
+    await writeJsonAtomic(snapshotPath,{updatedAt:new Date().toISOString(),knowledgeRevision:sync.revision,syncErrors:sync.sync_errors,tasks:reports});failures=0;
+  }catch(error){console.error(error.message);failures++;if(!serverReached&&failures>=3)break;}
+  // A transient ingestion/disk failure must not permanently disable live data.
+  // Still exit when the owning console is no longer reachable.
+  await new Promise(resolve=>setTimeout(resolve,Math.min(60000,15000*Math.max(1,failures))));
 }

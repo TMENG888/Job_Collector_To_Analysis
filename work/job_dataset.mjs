@@ -23,7 +23,6 @@ export async function readJobDataset(inputFile, requestedSheet = '岗位数据')
   }
   const ext = path.extname(inputFile).toLowerCase();
   if (!['.xlsx', '.csv'].includes(ext)) throw new Error('仅支持 XLSX 或 UTF-8 标准化 CSV 数据');
-  // Database-native use does not require the optional spreadsheet runtime.
   const { Workbook, SpreadsheetFile, FileBlob } = await import('@oai/artifact-tool');
   const before = await fs.stat(inputFile);
   const workbook = ext === '.csv'

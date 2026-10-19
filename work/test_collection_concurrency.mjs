@@ -5,6 +5,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {runChannels,withAccountLock,loadShixiDetailCache,reuseShixiDetails} from './collection_concurrency.mjs';
+import {writeNativeChannelRows} from './collector_native_sink.mjs';
 
 let active=0,peak=0,release;
 const gate=new Promise(resolve=>release=resolve),started=[];
@@ -37,9 +38,11 @@ assert.equal(reuseShixiDetails([{uuid:'one'}],details,cache),0);
 // Run the actual coordinator + actual collectors without platform requests:
 // public channel already blocked, and the zero-target login collector is done.
 const output=path.join(dir,'output');await fs.mkdir(output);
+await fs.writeFile(path.join(output,'任务归属.json'),JSON.stringify({task_id:'fixture'}));
 const publicConfigPath=path.join(dir,'public.json'),zhaopinConfigPath=path.join(dir,'zhaopin.json');
 await fs.writeFile(publicConfigPath,JSON.stringify({task_id:'fixture',keywords:['test'],platforms:{jobonline:{enabled:true,cities:[]}}}));
-await fs.writeFile(zhaopinConfigPath,JSON.stringify({task_id:'fixture',keywords:[],cities:[]}));
+await fs.writeFile(zhaopinConfigPath,JSON.stringify({task_id:'fixture',taskTargetRows:1,keywords:['test'],cities:[{name:'北京',code:'530'}]}));
+await writeNativeChannelRows(output,'fixture',[{platform:'智联招聘',job_id:'kept',job_name:'测试工程师',company_name:'验收公司',city:'北京',job_url:'https://jobs.zhaopin.com/kept.htm',job_description:'负责软件质量验证、测试用例设计和自动化回归测试，维护测试环境与缺陷流程。'}]);
 await fs.writeFile(path.join(output,'采集清单.json'),JSON.stringify({task_id:'fixture',platforms:{jobonline:{errors:[{stopChannel:true,code:'layout_changed'}]}}}));
 await fs.writeFile(path.join(output,'jobonline_标准化数据.csv'),'platform,query_keyword,job_id\n就业在线,test,kept');
 const child=spawn(process.execPath,[fileURLToPath(new URL('./collect_parallel_channels.mjs',import.meta.url)),JSON.stringify({public:true,zhaopin:true,publicConfigPath,zhaopinConfigPath,outputDir:output,candidateTarget:0,lockDir:dir})],{env:{...process.env,JOB_COLLECTOR_TASK_ID:'fixture',JOB_COLLECTOR_BLOCKED_POLICY:'skip'},windowsHide:true});
@@ -49,5 +52,6 @@ assert.equal(exit,44,logs);
 const report=JSON.parse(await fs.readFile(path.join(output,'并发渠道状态.json'),'utf8'));
 assert.equal(report.results.find(row=>row.platform==='public').code,44);
 assert.equal(report.results.find(row=>row.platform==='zhaopin').code,0);
+assert.equal(report.results.find(row=>row.platform==='zhaopin').transport_paused,undefined);
 assert.equal(JSON.parse(await fs.readFile(path.join(output,'采集清单.json'),'utf8')).total_rows,1);
 console.log('PASS: bounded parallel channels, failure isolation, pause stops new work, account serialization/release, task-scoped successful detail reuse');

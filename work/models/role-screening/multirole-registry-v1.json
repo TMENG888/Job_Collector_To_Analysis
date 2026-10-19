@@ -1,0 +1,23 @@
+{
+  "version": "multirole-tfidf-lr-v1",
+  "models": {
+    "嵌入式开发": {
+      "file": "embedded-tfidf-lr-v1.json",
+      "sha256": "95542a045f9c2d6881c304d2cffd749113776135cd394a11057d36a488242eeb",
+      "version": "embedded-tfidf-lr-v1",
+      "threshold": 0.5
+    },
+    "测试工程": {
+      "file": "software-testing-tfidf-lr-v1.json",
+      "sha256": "0974fb5b7bc9ef83d34107b837a8261f8abfbc90cc79126017332f7719e819d1",
+      "version": "software-testing-tfidf-lr-v1",
+      "threshold": 0.6
+    },
+    "智能体/大模型应用": {
+      "file": "agent-app-tfidf-lr-v1.json",
+      "sha256": "82eae6bb24fc61d1c32d7157776ee00930cef57752a531ed8b313e88180ee4d1",
+      "version": "agent-app-tfidf-lr-v1",
+      "threshold": 0.5
+    }
+  }
+}

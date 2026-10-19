@@ -1,34 +1,39 @@
 import fs from 'node:fs/promises';
 import {assertCollectorResources} from './collector_resources.mjs';
 import {writeJsonAtomic} from './collector_storage.mjs';
-import {connectManagedContext} from './managed_browser.mjs';
+import {connectManagedContext,assertBrowserPlatform} from './managed_browser.mjs';
+import {blockedReason} from './access_block_reason.mjs';
+export {blockedReason} from './access_block_reason.mjs';
 
 export class ChannelError extends Error {
   constructor(message, code='layout_changed') { super(message); this.code=code; this.stopChannel=true; }
 }
 
-export function blockedReason(text) {
-  if (/访问验证|请按住滑块|拖动到最右边|人机验证|安全验证|验证码/.test(text)) return '检测到网站安全验证，请通过平台登录入口人工完成验证后再续采；不会自动处理滑块';
-  if (/登录后.{0,8}(查看|搜索)|请先登录|登录已失效|账号.{0,8}(异常|保护|限制)/.test(text)) return '登录或账号状态需要人工处理，请重新登录后续采';
-  return '';
-}
-
 export async function guard(page) {
   const visible=page.locator('#WAF_NC_WRAPPER, .aliyunCaptcha-sliding-body, .nc-container, .geetest_panel, .verify-wrap, .captcha-dialog').filter({visible:true});
   const challengeText=(await visible.allInnerTexts()).join('\n');
-  const text=await page.locator('body').innerText({timeout:2000}).catch(()=>'');
+  const bodyText=await page.locator('body').innerText({timeout:2000}).catch(()=>'');
+  // Jobonline's public search footer advertises optional personalized recommendations.
+  // This observed standalone CTA does not gate the public list or detail APIs.
+  // Remove only that exact auxiliary line; real dialogs and login prompts still stop.
+  const text=bodyText.replace(/^[ \t]*登录后查看更多推荐内容\s*>>[ \t]*$/gm,'');
   const prompt=/请按住滑块|拖动到最右边|请进行如下验证|请先登录|登录后.{0,8}(查看|搜索)|登录已失效|账号.{0,8}(异常|保护|限制)/.test(text)?text:'';
   const reason=blockedReason(challengeText||prompt);
   if(reason)throw new ChannelError(reason,'verification_required');
 }
 
 export async function openContext(key) {
+  assertBrowserPlatform(key);
   await assertCollectorResources();
   return connectManagedContext(key);
 }
 
 export async function readCheckpoint(file) {
-  try{return JSON.parse(await fs.readFile(file,'utf8'));}
+  try{
+    const saved=JSON.parse(await fs.readFile(file,'utf8'));
+    if(saved.task_id&&process.env.JOB_COLLECTOR_TASK_ID&&saved.task_id!==process.env.JOB_COLLECTOR_TASK_ID)throw new ChannelError('断点任务 ID 不匹配，拒绝混入其他任务','TASK_OUTPUT_OWNERSHIP');
+    return saved;
+  }
   catch(error){if(error.code==='ENOENT')return {};throw error;}
 }
 

@@ -57,7 +57,7 @@ summary.getRange('A2').format = {
 summary.getRange('A2:Q2').format.rowHeight = 34;
 
 summary.getRange('A4:H4').values = [[
-  '最终岗位数', rows.length, '', '目标数量', Number(profile.target_rows || rows.length), '', '是否达标', quality.target_reached ? '已达标' : '未达标',
+  '最终岗位数', rows.length, '', '目标数量', profile.target_rows?Number(profile.target_rows):'不设目标条数', '', '是否达标', profile.target_rows?(quality.target_reached ? '已达标' : '未达标'):'不适用',
 ]];
 for (const address of ['A4', 'D4', 'G4']) summary.getRange(address).format.font = { name: 'Microsoft YaHei', size: 10, bold: true, color: '#526579' };
 for (const address of ['B4', 'E4', 'H4']) {
@@ -100,7 +100,7 @@ summary.getRange('J7').values = [['任务说明']];
 summary.getRange('J7:Q7').format = { fill: '#155E75', font: { name: 'Microsoft YaHei', size: 10, bold: true, color: '#FFFFFF' } };
 summary.getRange('J8:Q14').merge();
 summary.getRange('J8').values = [[
-  `岗位：${label}\n目标：${profile.target_rows || rows.length} 条\n关键词：${(profile.keywords || []).join('、')}\n` +
+  `岗位：${label}\n目标：${profile.target_rows?profile.target_rows+' 条':'按渠道可访问范围采集'}\n关键词：${(profile.keywords || []).join('、')}\n` +
   '去重键：平台 + 岗位ID。相关度按标题、职责、技术栈、平台关键词依次排序。',
 ]];
 summary.getRange('J8:Q14').format.wrapText = true;

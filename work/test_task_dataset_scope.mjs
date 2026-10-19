@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {ownedReport,isolatedDirectory,isolateLegacyTask} from './task_dataset_scope.mjs';
+import {ownedReport,isolatedDirectory,isolateLegacyTask,assertTaskOutputOwnership} from './task_dataset_scope.mjs';
 import {taskInsightSource} from './task-insight-source.mjs';
 import {writeJsonAtomic,writeAtomic} from './collector_storage.mjs';
 const base=await fs.mkdtemp(path.join(os.tmpdir(),'task-scope-test-'));
@@ -18,7 +18,9 @@ assert.equal(ownedReport({task_id:'different',dataset_label:task.label},task),fa
 assert.equal(ownedReport({task_id:task.id,output_rows:0},task),true);
 assert.notEqual(isolatedDirectory(base,'scope-one'),isolatedDirectory(base,'scope-two'));
 assert.throws(()=>isolatedDirectory(base,'../escape'));
+await assert.rejects(assertTaskOutputOwnership({id:'missing',outputDir:path.join(base,'missing')}),/归属标记缺失/);
 assert.equal(await isolateLegacyTask(task),true);
+await assertTaskOutputOwnership(task);
 assert.equal(await isolateLegacyTask(task),false);
 assert.equal(await fs.readFile(old,'utf8'),original);
 await assert.rejects(()=>taskInsightSource(task),/尚未生成/);
@@ -37,4 +39,4 @@ assert.ok(rows.some(r=>r.job_name==='销售'));assert.ok(rows.every(r=>r.task_id
 assert.equal((await taskInsightSource(task)).taskId,task.id);
 run();assert.equal(JSON.parse(await fs.readFile(path.join(task.outputDir,'数据质量报告.json'),'utf8')).input_rows,4);
 assert.equal(await fs.readFile(old,'utf8'),original);
-console.log(JSON.stringify({ok:true,checks:['cross-task and same-label report rejected','valid zero accepted','isolated paths','migration idempotent and history preserved','unrelated jobs retained','no target truncation','dedupe and invalid key removal','repeated merge does not absorb old deliveries','insight ownership'],base}));
+console.log(JSON.stringify({ok:true,checks:['cross-task and same-label report rejected','valid zero accepted','isolated paths','missing task ownership blocks collection','migration idempotent and history preserved','unrelated jobs retained','no target truncation','dedupe and invalid key removal','repeated merge does not absorb old deliveries','insight ownership'],base}));

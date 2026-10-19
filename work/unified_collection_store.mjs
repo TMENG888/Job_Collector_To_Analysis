@@ -5,11 +5,11 @@ import {parseChannelCsv} from './public_channel_csv.mjs';
 import {writeAtomic,writeJsonAtomic} from './collector_storage.mjs';
 import {publishLatestCsv} from './latest_dataset.mjs';
 
-const channels=['shixiseng','iguopin','mohrss','jobonline','job51','zhaopin','yupao','boss'];
+const channels=['shixiseng','iguopin','mohrss','jobonline','job51','zhaopin','liepin','yupao','boss'];
 const text=value=>String(value||'').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').trim();
 const join=value=>Array.isArray(value)?value.join(' | '):String(value||'');
 export function checkpointRows(data,name) {
-  if(name.startsWith('jobonline_'))return data.records||[];
+  if(name.startsWith('jobonline_')||name.startsWith('liepin_'))return data.records||[];
   if(!name.startsWith('shixiseng_'))return [];
   return (data.list||[]).flatMap(row=>{
     const saved=data.details?.[row.uuid];
@@ -34,14 +34,14 @@ export async function updateUnifiedDataset(task,{publishCsv=false}={}) {
   const database=path.join(task.outputDir,'统一采集数据.sqlite');
   const db=new DatabaseSync(database);
   try {
-    db.exec('PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS jobs(platform TEXT, job_id TEXT, data TEXT NOT NULL, PRIMARY KEY(platform,job_id)); CREATE TABLE IF NOT EXISTS sources(file TEXT PRIMARY KEY, signature TEXT); CREATE TABLE IF NOT EXISTS metadata(task_id TEXT PRIMARY KEY);');
+    db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS jobs(platform TEXT, job_id TEXT, data TEXT NOT NULL, PRIMARY KEY(platform,job_id)); CREATE TABLE IF NOT EXISTS sources(file TEXT PRIMARY KEY, signature TEXT); CREATE TABLE IF NOT EXISTS metadata(task_id TEXT PRIMARY KEY);');
     const existing=db.prepare('SELECT task_id FROM metadata').get();
     if(existing && existing.task_id!==task.id)throw new Error('数据库属于其他任务');
     db.prepare('INSERT OR IGNORE INTO metadata VALUES (?)').run(task.id);
     const sources=channels.map(channel=>path.join(task.outputDir,`${channel}_标准化数据.csv`));
     const checkpointDir=path.join(task.outputDir,'断点数据');
     const names=await fs.readdir(checkpointDir).catch(()=>[]);
-    sources.push(...names.filter(name=>/^(shixiseng|jobonline)_.*\.json$/.test(name)&&!name.endsWith('.diagnostic.json')).map(name=>path.join(checkpointDir,name)));
+    sources.push(...names.filter(name=>/^(shixiseng|jobonline|liepin)_.*\.json$/.test(name)&&!name.endsWith('.diagnostic.json')).map(name=>path.join(checkpointDir,name)));
     let changed=false;
     for(const file of sources) {
       const stat=await fs.stat(file).catch(()=>null);if(!stat)continue;

@@ -7,6 +7,9 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%2383ded0%22/><text x=%2214%22 y=%2241%22 font-size=%2226%22 font-family=%22Arial%22 font-weight=%22700%22 fill=%22%230d3735%22>JC</text></svg>" />
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/design-system.css" />
+  <link rel="stylesheet" href="/insight-layout.css?v=20261017-layout" />
+  <link rel="stylesheet" href="/insight-classifier.css?v=20261018-qwen" />
+  <link rel="stylesheet" href="/browser-workspace.css?v=20261019-interactive-8" />
 </head>
 <body>
   <div class="shell">
@@ -17,15 +20,14 @@
       </div>
       <nav aria-label="主导航">
         <a class="nav-item active" href="/tasks" data-view="tasks" aria-label="任务中心" title="任务中心"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg></span> 任务中心</a>
-        <a class="nav-item" href="/platforms" data-view="platforms" aria-label="平台登录" title="平台登录"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M8 10l3 3 5-5"/></svg></span> 平台登录</a>
-        <a class="nav-item" href="/labels" data-view="labels" aria-label="AI打标" title="AI打标"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 13l-7 7a2 2 0 0 1-3 0l-7-7V4h9l8 7a1.5 1.5 0 0 1 0 2Z"/><circle cx="7.5" cy="8" r="1"/></svg></span> AI打标</a>
         <a class="nav-item" href="/insights" data-view="insights" aria-label="岗位洞察" title="岗位洞察"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4v16h16M8 15l4-5 4 2 4-7"/></svg></span> 岗位洞察</a>
+        <a class="nav-item" href="/browser" data-view="browser" aria-label="求职浏览器" title="求职浏览器"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg></span> 求职浏览器</a>
         <a class="nav-item" href="/?view=assistant" data-view="assistant" aria-label="求职助手" title="求职助手"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/></svg></span> 求职助手</a>
         <button class="nav-item" id="showGuide" aria-label="使用与安全" title="使用与安全"><span aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4 2l-1.5 1v1M12 16h.01"/></svg></span> 使用与安全</button>
       </nav>
       <div class="sidebar-note">
         <span class="pulse" role="img" aria-label="本地运行，仅监听127.0.0.1，登录态不会上传" title="本地运行 · 登录态不会上传"></span>
-        <div><strong>本地运行</strong><small>仅监听 127.0.0.1<br />登录态不会上传</small></div>
+        <div><strong>本地运行</strong></div>
       </div>
     </aside>
 
@@ -44,7 +46,7 @@
         <section class="workspace">
           <div class="task-panel card">
             <div class="panel-head">
-              <div><h2>任务列表</h2><p>同一输出目录可自动续爬</p></div>
+              <div><h2>任务列表</h2></div>
               <button class="icon-button" id="refreshBtn" title="刷新">↻</button>
             </div>
             <div class="task-list" id="taskList"></div>
@@ -54,25 +56,8 @@
             <div class="empty-state">
               <div class="empty-icon">⌁</div>
               <h2>选择一个任务</h2>
-              <p>查看进度、运行日志并管理采集流程</p>
             </div>
           </div>
-        </section>
-      </div>
-
-      <div id="platformsView" class="app-view hidden">
-        <section class="page-intro card"><div><h2>平台登录状态</h2><p>招聘平台与AI聊天平台使用独立本机配置目录。登录、验证码和安全验证均由人工完成。</p></div><button class="ghost" id="refreshPlatforms">刷新状态</button></section>
-        <section class="platform-groups" id="platformGroups"></section>
-      </div>
-
-      <div id="labelsView" class="app-view hidden">
-        <section class="label-stats stats" id="labelStats"></section>
-        <section class="workspace">
-          <div class="task-panel card">
-            <div class="panel-head"><div><h2>打标任务</h2><p>支持断点续标与结果复核</p></div><button class="icon-button" id="refreshLabels" title="刷新">↻</button></div>
-            <div class="task-list" id="labelList"></div>
-          </div>
-          <div class="detail card" id="labelDetail"><div class="empty-state"><div class="empty-icon">◇</div><h2>选择一个打标任务</h2><p>查看标注进度、质量指标和日志</p></div></div>
         </section>
       </div>
 
@@ -85,54 +70,59 @@
           <label class="assistant-history-search"><span aria-hidden="true">⌕</span><input id="assistantSessionSearch" type="search" placeholder="搜索会话" aria-label="搜索会话" autocomplete="off" /></label>
           <div class="assistant-history-list" id="assistantSessionList" aria-label="会话列表"><p class="assistant-history-empty">正在读取历史…</p></div>
           <p id="assistantHistoryNotice" class="assistant-history-notice" role="status"></p>
-          <div class="assistant-history-footer"><span class="pulse"></span><div><b>本机加密保存</b><small>独立上下文 · 最近80轮记录</small></div></div>
+          <div class="assistant-history-footer"><span class="pulse"></span><div><b>本机加密保存</b></div></div>
         </aside>
         <section class="assistant-chat-shell assistant-is-empty">
-          <div class="assistant-chat-header"><div class="assistant-header-title"><button type="button" class="ghost assistant-history-toggle" id="assistantHistoryToggle" aria-label="展开会话栏" aria-controls="assistantHistory" aria-expanded="true">☰</button><span class="assistant-brand-icon" aria-hidden="true">✧</span><div><h2 id="assistantConversationTitle">新对话</h2><span class="assistant-header-caption">从岗位证据出发，找到下一步</span></div></div><div class="assistant-header-actions"><button type="button" class="ghost" id="assistantModelOpen" aria-haspopup="dialog" aria-controls="assistantModelDialog">⚙ 模型设置</button></div></div>
+          <div class="assistant-chat-header"><div class="assistant-header-title"><button type="button" class="ghost assistant-history-toggle" id="assistantHistoryToggle" aria-label="展开会话栏" aria-controls="assistantHistory" aria-expanded="true">☰</button><span class="assistant-brand-icon" aria-hidden="true">✧</span><div><h2 id="assistantConversationTitle">新对话</h2></div></div><div class="assistant-header-actions"><button type="button" class="ghost" id="assistantModelOpen" aria-haspopup="dialog" aria-controls="assistantModelDialog">⚙ 模型设置</button></div></div>
           <details class="assistant-context-details"><summary>当前岗位证据库 <span>· 本地数据</span></summary><p id="assistantContext" class="assistant-muted">正在读取证据库…</p></details>
-          <div id="assistantConditions" class="assistant-condition-bar">条件会随对话更新，不会自动放宽</div>
+          <div id="assistantConditions" class="assistant-condition-bar" hidden></div>
           <div class="assistant-chat-stage"><section id="assistantMessages" class="assistant-messages" role="log" aria-label="求职助手对话" aria-live="polite"></section>
           <div class="assistant-chat-examples"><button type="button" data-assistant-example="requirements"><span>⌁ 岗位要求</span><small>这个岗位需要哪些技能？</small></button><button type="button" data-assistant-example="search"><span>⌕ 找到机会</span><small>北京 · 三年经验 · 本科</small></button><button type="button" data-assistant-example="compare"><span>⇄ 岗位对比</span><small>对比前两个岗位</small></button><button type="button" data-assistant-example="collection"><span>▦ 采集中心</span><small>查看任务与最新进度</small></button></div></div>
-          <form id="assistantForm" class="assistant-composer"><label class="assistant-chat-label" for="assistantMessage">给求职助手发消息</label><textarea id="assistantMessage" name="message" rows="2" maxlength="40000" placeholder="说说你想找的工作，或粘贴、上传简历…"></textarea>
+          <div class="assistant-scroll-tools"><button type="button" id="assistantScrollLatest" class="assistant-scroll-latest" hidden aria-label="回到最新消息">↓ 回到最新</button></div>
+          <form id="assistantForm" class="assistant-composer"><div id="assistantEditNotice" class="assistant-edit-notice" hidden><span>编辑为新消息 · 原消息与后续记录保留</span><button type="button" id="assistantEditCancel" class="ghost">取消编辑</button></div><label class="assistant-chat-label" for="assistantMessage">给求职助手发消息</label><textarea id="assistantMessage" name="message" rows="2" maxlength="40000" placeholder="说说你想找的工作，或粘贴、上传简历…"></textarea>
             <div id="assistantAttachment" class="assistant-attachment hidden" aria-live="polite"></div><input id="assistantResumeFile" type="file" accept=".txt,.md,.pdf,.docx" hidden />
             <div class="assistant-composer-footer"><div class="assistant-composer-tools"><button type="button" id="assistantAttach" class="ghost" title="上传简历：TXT、Markdown、文字PDF、DOCX；最多3MB">＋ 附件</button><span id="assistantModelBadge" class="assistant-model-badge">本地模式</span></div><div class="assistant-send-tools"><span>Enter 发送 · Shift + Enter 换行</span><button class="primary" type="submit" id="assistantSubmit" aria-label="发送消息">↑</button></div></div><p id="assistantNotice" class="assistant-chat-label" role="status" aria-live="polite"></p>
-          </form><p class="assistant-chat-disclaimer">历史会话本机加密保存；新对话不删除旧记录。简历原文仅存内存，闲置30分钟或重启后需重新提供。发送默认调用已配置模型。</p>
+          </form>
         </section>
         </div>
         <dialog id="assistantSessionDialog" class="assistant-session-dialog" aria-labelledby="assistantSessionDialogTitle">
           <form id="assistantSessionForm"><div class="assistant-session-dialog-head"><h3 id="assistantSessionDialogTitle">管理会话</h3><button type="button" class="ghost" id="assistantSessionDialogClose" aria-label="关闭会话管理">×</button></div><label>会话名称<input name="title" maxlength="80" required autocomplete="off" /></label><p>删除后会从列表移除，可在提示栏撤销。不会影响岗位知识库。</p><p id="assistantSessionDialogNotice" role="status"></p><div class="assistant-session-dialog-actions"><button type="button" class="assistant-delete-session" id="assistantSessionDelete">删除会话</button><button type="submit" class="primary" id="assistantSessionRename">保存名称</button></div></form>
         </dialog>
       </div>
+      <div id="browserView" class="app-view hidden"><section id="jobBrowserWorkspace" aria-label="求职浏览器工作区"></section></div>
       <div id="insightsView" class="app-view hidden">
         <section class="insight-toolbar card">
           <div class="insight-toolbar-copy">
-            <p class="eyebrow">JOB MARKET INTELLIGENCE</p>
-            <h2>岗位市场洞察</h2>
-            <p>全量匹配岗位数据，分析技能组合、薪资关联、需求画像、城市分布、行业和工作内容。结果属于招聘需求分析，不构成涨薪承诺。</p>
+            <span class="insight-source-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg></span>
+            <h2>分析数据</h2>
           </div>
           <form id="insightForm" class="insight-form">
-            <label class="wide">已发现的岗位数据集<select id="insightDataset"><option value="">正在扫描测试采集数据集…</option></select></label>
-            <small class="wide insight-report-source" id="insightCatalogNote">直接选择岗位知识库范围，无需导出中转；兼容手工文件导入。</small>
-            <label class="wide">分析数据源（知识库 / 可选文件导入）<input name="inputFile" required value="kb://all" /></label>
+            <label class="wide">岗位数据集<select id="insightDataset"><option value="">正在读取数据集…</option></select></label>
+            <div id="insightDatasetError" class="wide insight-dataset-error" role="status" hidden><span></span><button type="button" class="ghost" id="retryInsightDatasets">重试连接</button></div>
+            <input type="hidden" name="inputFile" value="kb://all" />
             <small class="wide insight-report-source" id="insightTransferSource"></small>
-            <label>指定岗位 / 岗位族（可选）<input name="role" value="自动识别" placeholder="如爬虫工程师、ai漫剧师" /><small>已知岗位按岗位族匹配；其他名称按字面关键词匹配，不会自动换成其他岗位。</small></label>
-            <small class="wide insight-report-source">默认全量匹配，自动识别工作表并使用同源标签；筛选后生成分析，不修改原始数据。</small>
+            <p class="wide insight-report-source" id="insightRoleSource" role="status" hidden></p>
             <button class="primary" id="runInsight" type="submit">生成全量分析</button>
           </form>
         </section>
         <section id="insightStatus" class="insight-status"></section>
+        <section id="insightClassifier" class="card insight-classifier" aria-label="大模型辅助分类"></section>
         <section id="insightDashboard" class="insight-dashboard"></section>
+        <details id="skillTermReview" class="card skill-term-review">
+          <summary>新技术词候选 · 本机模型辅助审核</summary>
+          <div class="skill-term-controls"><label>扫描范围<select data-term-scope><option value="">全岗位知识库</option></select></label><label>审核状态<select data-term-filter><option value="pending">待审核</option><option value="approved">已批准</option><option value="rejected">已拒绝</option></select></label><button type="button" class="secondary" data-term-scan>扫描下一批20条</button><button type="button" class="ghost" data-term-refresh>刷新</button></div>
+          <p data-term-status role="status" aria-live="polite"></p><p data-term-notice role="status" aria-live="polite"></p>
+          <div data-term-list></div><div class="skill-term-actions"><button type="button" class="ghost" data-term-prev disabled>上一页</button><span data-term-page>第1页</span><button type="button" class="ghost" data-term-next disabled>下一页</button></div>
+        </details>
       </div>
     </main>
   </div>
 
-  <dialog id="assistantModelDialog" class="assistant-model-dialog" aria-labelledby="assistantModelTitle" aria-describedby="assistantModelDescription">
+  <dialog id="assistantModelDialog" class="assistant-model-dialog" aria-labelledby="assistantModelTitle">
     <form id="assistantModelForm">
       <div class="dialog-head"><div><p class="eyebrow">MODEL SETTINGS</p><h2 id="assistantModelTitle">模型设置</h2></div><button type="button" class="close" data-close-assistant-model aria-label="关闭模型设置">×</button></div>
-      <p id="assistantModelDescription" class="assistant-muted">选择聊天使用的文本模型。模型可查询岗位与采集任务；采集写操作必须由你核对卡片并确认执行。</p>
       <div class="assistant-form-grid"><label>供应商<select name="provider" autofocus><option value="deepseek">DeepSeek</option><option value="qwen">通义千问 DashScope</option></select></label><label>模型 ID<input name="model" value="deepseek-flash" required maxlength="120" placeholder="填写账户可用的模型 ID" /></label><label>新 API 密钥<input name="apiKey" type="password" required autocomplete="off" spellcheck="false" maxlength="512" placeholder="仅在本机填写，保存后清空" /></label></div>
-      <div class="assistant-security-note"><strong>本机加密保存</strong><p>密钥由当前 Windows 账户加密，不回显、不写入源码。聊天中发过的密钥请先撤销重建；简历原文不发送给模型。</p></div>
-      <p id="assistantModelNotice" role="status" aria-live="polite">保存时不发起模型调用；之后聊天可能产生调用费用。</p>
+      <p id="assistantModelNotice" role="status" aria-live="polite"></p>
       <div class="dialog-actions"><button type="button" class="ghost" data-close-assistant-model>取消</button><button type="submit" class="primary" id="assistantModelSave">加密保存配置</button></div>
     </form>
   </dialog>
@@ -152,30 +142,35 @@
         <label>岗位名称<input name="label" required placeholder="例如：Java开发工程师" /></label>
         <label>主关键词<input name="primaryKeyword" required placeholder="例如：Java开发" /></label>
         <label class="wide">扩展关键词 <small>换行或逗号分隔</small><textarea name="keywords" rows="2" placeholder="Java工程师, Java后端, Spring Boot开发"></textarea></label>
-        <label>目标数据量<input name="targetRows" type="number" min="1" max="100000" value="5000" /></label>
-        <label>候选池目标<input name="candidateTarget" type="number" min="1" max="150000" value="7800" /></label>
+        <label>目标数据量（可选）<input name="targetRows" type="number" min="1" max="100000" placeholder="不设目标" /></label>
+        <label>候选池预算（指定目标时可选）<input name="candidateTarget" type="number" min="1" max="150000" placeholder="自动设置；不是交付数量" /></label>
       </div>
 
-      <div class="section-title"><span>采集渠道</span><small>公开渠道与登录渠道可并行补充</small></div>
+      <div class="form-grid compact">
+        <label class="wide">取数方式<select name="transportMode"><option value="http_preferred_browser_fallback" selected>接口优先，必要时浏览器页面采集（试验）</option><option value="direct_http_validated_data">仅 HTTP，不启动采集浏览器</option></select></label>
+        <label>浏览器每条件页数预算<input name="browserMaxPages" type="number" min="1" max="50" value="3" /></label>
+        <label>浏览器每渠道单轮条数预算<input name="browserMaxRows" type="number" min="1" max="10000" value="200" /></label>
+      </div>
+      <div class="section-title"><span>采集渠道</span></div>
       <div class="check-grid" id="platformChecks">
-        <label class="check-card"><input type="checkbox" name="platforms" value="shixiseng" checked /><span><b>实习僧</b><small>公开详情 · 实习岗位</small></span></label>
-        <label class="check-card"><input type="checkbox" name="platforms" value="iguopin" checked /><span><b>国聘</b><small>公开接口 · 字段完整</small></span></label>
-        <label class="check-card"><input type="checkbox" name="platforms" value="mohrss" /><span><b>公共招聘网</b><small>公开页面 · 可选补充 · 需筛选相邻岗位</small></span></label>
-        <label class="check-card"><input type="checkbox" name="platforms" value="zhaopin" checked /><span><b>智联招聘</b><small>需人工登录 · 主力渠道</small></span></label>
-        <label class="check-card"><input type="checkbox" name="platforms" value="jobonline" checked /><span><b>就业在线</b><small>公开列表与详情 · 全国检索 · 首轮最多1000条</small></span></label>
-        <label class="check-card"><input type="checkbox" name="platforms" value="job51" /><span><b>前程无忧</b><small>本地浏览器会话 · 验证即停 · 可断点续采</small></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="shixiseng" checked /><span><b>实习僧</b></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="iguopin" checked /><span><b>国聘</b></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="mohrss" checked /><span><b>公共招聘网</b></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="zhaopin" checked /><span><b>智联招聘</b></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="jobonline" /><span><b>就业在线</b></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="job51" /><span><b>前程无忧</b></span></label>
+        <label class="check-card"><input type="checkbox" name="platforms" value="liepin" /><span><b>猎聘</b></span></label>
       </div>
 
-      <div class="section-title"><span>智联采集城市</span><small>批量关键词 × 城市</small></div>
+      <div class="section-title"><span>采集城市</span></div>
       <div class="city-grid" id="cityChecks"></div>
 
       <div class="form-grid compact">
         <label>采集节奏<select name="pace"><option value="safe">稳健（最低频）</option><option value="balanced" selected>均衡（推荐）</option><option value="fast">较快（公开渠道）</option></select></label>
-        <label>输出目录 <small>留空则保存到桌面</small><input name="outputDir" placeholder="C:\Users\...\Desktop\岗位数据" /></label>
-        <label class="wide">附加结果目录 <small>仅接受带相同任务 ID 的源目录；历史数据请在岗位洞察中单独选择</small><textarea name="sourceDirectories" rows="2" placeholder="可选：同一任务的源目录"></textarea></label>
+        <label>输出目录<input name="outputDir" placeholder="默认目录" /></label>
+        <label class="wide">附加结果目录<textarea name="sourceDirectories" rows="2" placeholder="同一任务的源目录"></textarea></label>
       </div>
 
-      <p>采集交付不做岗位相关性过滤，保留有效去重候选。目标岗位由岗位洞察的关键词规则与扩展算法筛选。</p>
 
       <div class="dialog-actions">
         <button type="button" class="ghost" data-close>取消</button>
@@ -184,32 +179,13 @@
     </form>
   </dialog>
 
-  <dialog id="labelDialog">
-    <form id="labelForm">
-      <div class="dialog-head"><div><p class="eyebrow">NEW LABELING JOB</p><h2>新建AI打标任务</h2></div><button type="button" class="close" data-close-label>×</button></div>
-      <div class="form-grid label-form-grid">
-        <label class="wide">选择已有采集数据<select id="labelDataset"><option value="">手工填写数据路径</option></select></label>
-        <label class="wide">输入数据（知识库 / XLSX / 标准化 CSV）<input name="inputFile" required value="kb://all" /></label>
-        <label>工作表<input name="sheetName" value="岗位数据" /></label>
-        <label>目标岗位族<input name="jobFamily" required placeholder="例如：爬虫/数据采集或智能体/大模型应用" /></label>
-        <label>标注平台<select name="platform"><option value="rules">本地规则预标注（不联网测试）</option><option value="deepseek">DeepSeek</option><option value="kimi">Kimi</option><option value="tongyi">通义</option><option value="zhipu">智谱清言</option><option value="doubao">豆包</option></select></label>
-        <label>测试/标注数量<input name="sampleSize" type="number" min="1" max="20000" value="20" /></label>
-        <label>每批岗位数<input name="batchSize" type="number" min="1" max="5" value="3" /></label>
-        <label>批次最短冷却（秒）<input name="cooldownSeconds" type="number" min="15" max="300" value="30" /><small>Kimi 强制单条且至少 30 秒，另有错峰与定期休息</small></label>
-        <label class="wide">输出目录 <small>留空则在源文件旁自动创建独立目录；指定时须为空</small><input name="outputDir" placeholder="可选：C:\...\AI打标结果" /></label>
-      </div>
-      <div class="safety compact-safety"><b>限速与数据最小化</b><p>不提交公司名称、招聘者、电话或链接。每平台仅一个任务；容量不足、额度限制或安全验证即暂停，断点续标。不伪装指纹或添加无关问题规避限制。</p></div>
-      <div class="dialog-actions"><button type="button" class="ghost" data-close-label>取消</button><button class="primary" type="submit">创建任务</button></div>
-    </form>
-  </dialog>
-
   <dialog id="guideDialog" class="guide-dialog">
     <div class="dialog-head"><div><p class="eyebrow">QUICK GUIDE</p><h2>使用与安全</h2></div><button class="close" data-close-guide>×</button></div>
     <div class="guide-content">
       <ol>
-        <li><b>创建任务</b><span>填写岗位关键词、目标数量、城市与渠道。每个岗位使用独立输出目录。</span></li>
-        <li><b>登录一次</b><span>打开对应平台的共享浏览器，人工登录和验证后保持窗口开启；采集复用同一实例。各平台使用独立配置目录，不接管日常浏览器。</span></li>
-        <li><b>开始或分步运行</b><span>“全部运行”依次采集、合并、导出；也可单独运行公开渠道或智联。</span></li>
+        <li><b>创建任务</b><span>填写岗位关键词、城市与渠道，目标数量可留空。采集中已入库数据可随时用于洞察，无需导出。</span></li>
+        <li><b>HTTP 采集</b><span>使用已核验 JSON 接口或公共招聘网内嵌数据，不启动浏览器、不执行网页脚本；访问受限立即停止冷却。</span></li>
+        <li><b>开始或分步运行</b><span>“全部运行”依次采集、合并、导出；也可单独运行已验证的公开接口。</span></li>
         <li><b>暂停与续爬</b><span>暂停后再次运行同一阶段即可续爬。当前未落盘的小段可能重采，最终会自动去重。</span></li>
         <li><b>合并结果</b><span>“合并去重”读取任务目录及附加目录中的标准化 CSV，以“平台 + 岗位ID”去重并做相关度排序。</span></li>
       </ol>
@@ -219,6 +195,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/vendor/d3.min.js"></script>
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v=20261019-interaction-fix-9"></script>
 </body>
 </html>

@@ -26,8 +26,8 @@ try{
   agent.close();
   const secondRepo=createAssistantSessionStore(directory,{protect});second=createChatAgent({repository:secondRepo});
   const follow=await second.run(index,{conversationId:first.conversationId,message:'继续看岗位',useModel:false});
-  assert.equal(follow.filters.city,'北京');assert.equal(follow.filters.education,'本科');assert.equal(follow.filters.years,3);assert.equal(follow.has_resume,false);
-  const alternate=await second.run(index,{conversationId:other.conversationId,message:'继续看岗位',useModel:false});assert.equal(alternate.filters.city,'上海');assert.equal(alternate.filters.education,undefined);
+  assert.equal(follow.filters.city,'北京');assert.equal(follow.filters.candidate_education,'本科');assert.equal(follow.filters.years,3);assert.equal(follow.has_resume,false);
+  const alternate=await second.run(index,{conversationId:other.conversationId,message:'继续看岗位',useModel:false});assert.equal(alternate.filters.city,'上海');assert.equal(alternate.filters.candidate_education,undefined);
   assert.equal((await second.view(first.conversationId)).turns.length,3);
   await secondRepo.withLock(first.conversationId,async()=>{await assert.rejects(repo.withLock(first.conversationId,()=>Promise.resolve()),/正在处理/);});
   await assert.rejects(repo.read('../model'),/编号无效/);await assert.rejects(second.rename(first.conversationId,''),/1–80/);

@@ -3,8 +3,8 @@ import path from 'node:path';
 import {parseChannelCsv} from './public_channel_csv.mjs';
 
 const cache = new Map();
-const publicChannels = ['shixiseng', 'iguopin', 'mohrss', 'jobonline', 'job51'];
-const rawNames = {'实习僧':'shixiseng','国聘':'iguopin','中国公共招聘网':'mohrss','就业在线':'jobonline','前程无忧':'job51'};
+const publicChannels = ['shixiseng', 'iguopin', 'mohrss', 'jobonline', 'job51', 'liepin'];
+const rawNames = {'实习僧':'shixiseng','国聘':'iguopin','中国公共招聘网':'mohrss','就业在线':'jobonline','前程无忧':'job51','猎聘':'liepin'};
 const idOf = row => row?.uuid ?? row?.job_id ?? row?.jobId ?? row?.acb200;
 
 // Cache compact IDs/counters, never the full descriptions. Atomic checkpoint

@@ -25,12 +25,13 @@ export function labelFrequency(rows, field) {
 
 export function summarizeCohort(rows) {
   const salaries = rows.map((row) => row.salary_midpoint_k).filter(Number.isFinite);
+  const cloudRows=rows.some(row=>Object.hasOwn(row,'semantic_labeled'))?rows.filter(row=>row.semantic_labeled):rows;
   const companies = new Map();
-  for (const row of rows) {
+  for (const row of cloudRows) {
     // Without an identifiable company, company-level shares cannot be inferred.
     if (!row.company_key) continue;
     if (!companies.has(row.company_key)) companies.set(row.company_key, new Set());
-    if (row.industry && !/^(未明确|其他|不限|未知)$/.test(row.industry)) companies.get(row.company_key).add(row.industry);
+    for(const industry of row.industries||[row.industry])if(industry&&!/^(未明确|其他|不限|未知)$/.test(industry))companies.get(row.company_key).add(industry);
   }
   const industryWeights = new Map();
   let knownCompanies = 0;
@@ -41,7 +42,7 @@ export function summarizeCohort(rows) {
   }
   const industries = [...industryWeights].map(([name, weight]) => ({ name, company_weight: Number(weight.toFixed(2)), share: knownCompanies ? weight / knownCompanies : 0 })).sort((a, b) => b.share - a.share);
   return { count: rows.length, salary_count: salaries.length, salary: { median: quantile(salaries, .5), p25: quantile(salaries, .25), p75: quantile(salaries, .75) },
-    skills: labelFrequency(rows, 'skills'), tasks: labelFrequency(rows, 'tasks'), business_domains: labelFrequency(rows, 'domains'),
+    skills: labelFrequency(cloudRows, 'skills'), tasks: labelFrequency(cloudRows, 'tasks'), business_domains: labelFrequency(cloudRows, 'domains'),semantic_sample_rows:cloudRows.length,
     industries, company_count: companies.size, industry_known_companies: knownCompanies, industry_coverage: companies.size ? knownCompanies / companies.size : 0,
     employment_types: [...new Set(rows.map((r) => r.employment_type))].map((name) => ({ name, count: rows.filter((r) => r.employment_type === name).length })),
   };

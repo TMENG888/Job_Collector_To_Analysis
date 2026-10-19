@@ -11,6 +11,7 @@ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const base=`http://127.0.0.1:${server.address().port}`;
 try{
   const meta=await (await fetch(base+'/api/assistant/context')).json();assert.equal(meta.indexed_jobs,1);assert.equal(meta.verified_sources,1);
+  assert.equal(meta.assistant_flow_version,6);assert.ok(meta.features.includes('salary_benchmark'));assert.ok(meta.features.includes('flexible_query_scope'));assert.ok(meta.features.includes('role_scope_edits'));assert.ok(meta.features.includes('tool_failure_recovery'));
   let response=await fetch(base+'/api/assistant/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'match',resume:'我有Python项目经验',question:'北京岗位'})});
   assert.equal(response.status,200);let result=await response.json();assert.equal(result.sources[0].coverage,.5);assert.equal(result.statistics.median_salary_k,null);assert.ok(!JSON.stringify(result).includes('我有Python项目经验'));
   response=await fetch(base+'/api/assistant/ask',{method:'POST',body:'{}'});assert.equal(response.status,415);
@@ -24,7 +25,7 @@ try{
   response=await fetch(base+'/api/assistant/model',{method:'POST',headers:{'content-type':'application/json'},body:'invalid-secret-placeholder'});assert.equal(response.status,400);assert.ok(!(await response.text()).includes('secret-placeholder'));
   const send=async body=>{const response=await fetch(base+'/api/assistant/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});assert.equal(response.status,200);return response.json();};
   const first=await send({message:'找北京本科岗位'});assert.equal(first.filters.city,'北京');assert.equal(first.result.scope.matched_jobs,1);
-  const next=await send({message:'换成上海',conversationId:first.conversationId});assert.equal(next.filters.city,'上海');assert.equal(next.filters.education,'本科');assert.equal(next.result.scope.matched_jobs,0);
+  const next=await send({message:'换成上海',conversationId:first.conversationId});assert.equal(next.filters.city,'上海');assert.equal(next.filters.candidate_education,'本科');assert.equal(next.result.scope.matched_jobs,0);
   response=await fetch(base+'/api/assistant/reset',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({conversationId:first.conversationId})});assert.equal(response.status,200);
   response=await fetch(base+'/api/assistant/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:'继续',conversationId:first.conversationId})});assert.equal(response.status,400);
   response=await fetch(base+'/api/assistant/attachment',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({filename:'test.txt',base64:Buffer.from('简历：Python项目经验').toString('base64')})});assert.equal(response.status,200);assert.match((await response.json()).text,/Python/);

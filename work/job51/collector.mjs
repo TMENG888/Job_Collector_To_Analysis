@@ -1,80 +1,44 @@
 import {assertCollectorResources} from '../collector_resources.mjs';
-import {checkedJsonResponse} from '../collection_policy.mjs';
 import {ChannelError,evidence,guard,openContext,readCheckpoint,saveCheckpoint} from '../browser_channel_common.mjs';
-
+import {gotoWithRetries} from '../browser_navigation_retry.mjs';
+import {job51SessionPage,assertBusinessResponse,waitWebsiteClient} from '../website_session_api.mjs';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-
 export function parse51Payload(body) {
-  const job=body?.resultbody?.job;
-  if(!job||!Array.isArray(job.items))throw new ChannelError('前程无忧响应无有效岗位列表：可能需要登录、验证或接口结构已变更','invalid_response');
-  return {items:job.items,total:Number(job.totalCount??job.totalcount??job.items.length)};
+  if(!body?.resultbody?.job||!Array.isArray(body.resultbody.job.items))throw new ChannelError('前程无忧响应无有效岗位列表：可能需要登录、验证或接口结构已变更','invalid_response');
+  assertBusinessResponse(body,'前程无忧','1');
+  const job=body.resultbody.job;
+  const rawTotal=job.totalCount??job.totalcount,total=Number(rawTotal);
+  if(rawTotal==null||!Number.isSafeInteger(total)||total<0)throw new ChannelError('前程无忧接口缺失有效分页总数，已停止并保留断点','invalid_response');
+  return {items:job.items,total};
 }
-
-export async function collect51Records(keyword,city,{checkpointPath,request={},maxPages=100,contextFactory=openContext}) {
-  const saved=await readCheckpoint(checkpointPath);
-  if(saved.completed)return {records:saved.records||[],total:saved.total||0};
-  const records=new Map((saved.records||[]).map(record=>[String(record.jobId),record]));
-  let context,page,total=saved.total||0,pageNo=1,completed=false;
+export async function collect51Records(keyword,city,{checkpointPath,request={},maxPages=100,maxRows=Infinity,contextFactory=openContext,wait=sleep}) {
+  const saved=await readCheckpoint(checkpointPath);if(saved.completed)return {records:saved.records||[],total:saved.total||0};
+  const records=new Map((saved.records||[]).filter(r=>r.jobId).map(r=>[String(r.jobId),r]));
+  let context,page,total=Number(saved.total||0),completed=false;
   let lastCompletedPage=Number((saved.lastCompletedPage??(saved.error?0:saved.pageNo))||0);
+  let pageNo=Math.max(1,Number(saved.nextPageNo||lastCompletedPage+1)),nextCardIndex=Number(saved.nextCardIndex||0),pageSignature=saved.pageSignature||'';
+  const limit=Math.max(0,Number(maxRows)),save=(extra={})=>saveCheckpoint(checkpointPath,{records:[...records.values()],total,pageNo,nextPageNo:pageNo,nextCardIndex,pageSignature,lastCompletedPage,completed,acquisition_mode:'browser_session_api',...extra});
   try {
-    context=await contextFactory('job51');
-    page=await context.newPage();
-    let pending=null,lastError=null;
-    const responses=new Map();
-    const listener=response=>{
-      let url;
-      try{url=new URL(response.url());}catch{return;}
-      if(!url.pathname.endsWith('/api/job/search-pc'))return;
-      const pageNumber=Number(url.searchParams.get('pageNum')||1);
-      pending=(async()=>{
-        const parsed=parse51Payload(await checkedJsonResponse(response,'前程无忧'));
-        responses.set(pageNumber,parsed);
-      })().catch(error=>{lastError=error;});
-    };
-    page.on('response',listener);
-    await page.goto(`https://we.51job.com/pc/search?jobArea=${encodeURIComponent(city.code)}&keyword=${encodeURIComponent(keyword)}&searchType=2`,{waitUntil:'domcontentloaded',timeout:30000});
-    async function awaitPage(pageNumber) {
-      const deadline=Date.now()+30000;
-      while(Date.now()<deadline){
-        await guard(page);
-        if(lastError)throw lastError;
-        if(responses.has(pageNumber))return responses.get(pageNumber);
-        await sleep(250);
-      }
-      throw new ChannelError(`前程无忧第${pageNumber}页未返回岗位数据：已记录页面诊断，请人工检查登录、验证或网络`,'response_timeout');
-    }
-    let parsed=await awaitPage(1);
-    total=parsed.total;
-    const pages=Math.min(Math.ceil(total/20)||1,maxPages);
-    for(pageNo=1;pageNo<=pages;pageNo++){
+    if(records.size>=limit){await save();return {records:[...records.values()],total}}
+    context=await contextFactory('job51');page=await context.newPage();
+    await gotoWithRetries(page,'https://we.51job.com/pc/search?jobArea='+encodeURIComponent(city.code)+'&keyword='+encodeURIComponent(keyword)+'&searchType=2',{waitUntil:'domcontentloaded',timeout:30000,attempts:3});
+    await guard(page);
+    await waitWebsiteClient(page,'job51');
+    for(;pageNo<=Math.max(1,Number(maxPages)||1)&&records.size<limit;){
       if(pageNo%5===0&&contextFactory===openContext)await assertCollectorResources();
-      if(pageNo>1){
-        await sleep(Math.max(1200,request.minimumIntervalMs||0));
-        await guard(page);
-        const next=page.locator('.btn-next');
-        if(!await next.count()||!await next.isEnabled())throw new ChannelError('前程无忧分页控件不可用，保留已有记录；请复核页面结构');
-        await next.click({timeout:5000});
-        parsed=await awaitPage(pageNo);
+      await wait(Math.max(1200,request.minimumIntervalMs||0));
+      const parsed=parse51Payload(await job51SessionPage(page,pageNo));total=parsed.total;
+      if(!parsed.items.length){completed=true;await save();break}
+      const signature=JSON.stringify(parsed.items.map(x=>String(x.jobId)));if(signature!==pageSignature)nextCardIndex=0;pageSignature=signature;
+      for(let i=nextCardIndex;i<parsed.items.length&&records.size<limit;i++){
+        const row=parsed.items[i];if(row.jobId&&row.jobName)records.set(String(row.jobId),{...row,acquisition_mode:'browser_session_api',access_level:'本地会话接口完整列表字段与岗位描述'});
+        nextCardIndex=i+1;await save();
       }
-      if(pageNo<=lastCompletedPage)continue;
-      for(const record of parsed.items)if(record.jobId)records.set(String(record.jobId),record);
-      lastCompletedPage=pageNo;
-      completed=pageNo===pages&&pages>=Math.ceil(total/20);
-      await saveCheckpoint(checkpointPath,{records:[...records.values()],total,pageNo,lastCompletedPage,completed});
-      console.log(`job51 ${keyword}/${city.name}: ${pageNo}/${pages}，${records.size}条`);
+      console.log('job51 '+keyword+'/'+city.name+': 接口第'+pageNo+'页，'+records.size+'条');
+      if(nextCardIndex<parsed.items.length)break;
+      lastCompletedPage=pageNo;completed=pageNo*20>=total||parsed.items.length<20;pageNo++;nextCardIndex=0;pageSignature='';await save();if(completed)break;
     }
-    page.off('response',listener);
-    if(pending)await pending;
     return {records:[...records.values()],total};
-  }catch(error){
-    error.stopChannel=true;
-    error.records=[...records.values()];
-    error.total=total;
-    await saveCheckpoint(checkpointPath,{records:error.records,total,pageNo,lastCompletedPage,completed:false,error:error.message});
-    if(page)await evidence(page,checkpointPath,error);
-    throw error;
-  }finally{
-    if(page)await page.close().catch(()=>{});
-    if(context)await context.close();
-  }
+  }catch(error){error.stopChannel=true;error.records=[...records.values()];error.total=total;completed=false;await save({error:error.message});if(page)await evidence(page,checkpointPath,error);throw error}
+  finally{if(page)await page.close().catch(()=>{});if(context)await context.close()}
 }

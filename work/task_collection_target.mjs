@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {parseChannelCsv} from './public_channel_csv.mjs';
 import {readNativeTaskRows,nativeChannelNames} from './collector_native_sink.mjs';
-export const channelKeys=['shixiseng','iguopin','mohrss','job51','jobonline','zhaopin','yupao','boss'];
+export const channelKeys=['shixiseng','iguopin','mohrss','job51','jobonline','zhaopin','liepin','yupao','boss'];
 export function validJobRecord(row) {
   if(!['platform','job_id','job_name','company_name','city','job_url','job_description'].every(key=>String(row[key]||'').trim()))return false;
   const description=String(row.job_description).trim();

@@ -10,6 +10,8 @@ export function mergeLiveProgress(tasks, snapshot, now = Date.now()) {
 }
 
 export function collectionProgress(task) {
+  if(task.collectUntilExhausted)return {label:'已入库岗位',count:task.metrics.validRows??task.metrics.knowledgeRows??task.metrics.candidates??0,percent:null,note:''};
+  if(Number.isSafeInteger(task.metrics.validRows))return {label:'有效去重进度',count:task.metrics.validRows,percent:Math.min(100,Math.round(task.metrics.validRows/Math.max(1,task.targetRows)*100)),note:`已入库 ${task.metrics.knowledgeRows} 条候选；其中 ${task.metrics.validRows} 条满足完整字段要求，岗位相关性仍需筛选`};
   if(Number.isFinite(task.metrics.knowledgeRows))return {label:'知识库入库进度',count:task.metrics.knowledgeRows,percent:Math.min(100,Math.round(task.metrics.knowledgeRows/Math.max(1,task.targetRows)*100)),note:'按平台岗位ID去重入库；无需导出即可分析，岗位相关性仍需筛选'};
   const final = Boolean(task.metrics.hasFinalResult);
   const count = final ? task.metrics.finalRows : task.metrics.candidates;

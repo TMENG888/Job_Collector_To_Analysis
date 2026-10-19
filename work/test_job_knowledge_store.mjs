@@ -11,7 +11,7 @@ import {readJobDataset} from './job_dataset.mjs';
 import {labelDigest} from './reviewed_job_labels.mjs';
 const dir=await fs.mkdtemp(path.join(os.tmpdir(),'job-knowledge-test-'));
 const tasks=[];
-for(const [role,title,desc]of [['agent','智能体开发工程师','岗位职责：开发智能体应用与RAG知识库。任职要求：Python LangChain LLM。'],['embedded','嵌入式软件工程师','岗位职责：开发STM32固件与实时驱动。任职要求：C++ Linux RTOS。']]){
+for(const [role,title,desc]of [['agent','智能体开发工程师','岗位职责：负责构建智能体与RAG知识库，开发多智能体编排服务；搭建检索增强生成系统，开发工具调用接口和多轮对话流程，将大模型能力集成到业务应用中，负责应用部署及效果评估。任职要求：本科，Python LangChain LLM。'],['embedded','嵌入式软件工程师','岗位职责：开发STM32固件与实时驱动，负责嵌入式软件设计和开发，完成外设驱动开发和系统移植，进行软硬件联调和接口协议适配，分析设备异常并修复底层驱动故障，维护固件版本和设计文档。任职要求：C++ Linux RTOS。']]){
   const out=path.join(dir,role);await fs.mkdir(out);await fs.writeFile(path.join(out,'任务归属.json'),JSON.stringify({task_id:role}));
   const task={id:role,label:title,outputDir:out};tasks.push(task);
   const db=new DatabaseSync(path.join(out,'统一采集数据.sqlite'));db.exec('CREATE TABLE metadata(task_id TEXT); CREATE TABLE jobs(platform TEXT,job_id TEXT,data TEXT,PRIMARY KEY(platform,job_id));');db.prepare('INSERT INTO metadata VALUES(?)').run(role);
@@ -40,4 +40,7 @@ await fs.writeFile(path.join(labelDir,'标注结果.jsonl'),JSON.stringify(label
 await fs.writeFile(path.join(dir,'label_jobs.json'),JSON.stringify([{id:'label',platform:'deepseek',outputDir:labelDir}]));await store.sync({refresh:false});
 const labeled=(await store.assistantData()).jobs.find(j=>j.key===job.knowledge_key);assert.match(labeled.label_source,/人工批准/);assert.ok(!labeled.skills.includes('虚构技术'));
 tasks[1].archived=true;await fs.writeFile(path.join(dir,'tasks.json'),JSON.stringify(tasks));await store.sync({refresh:false});assert.equal((await store.read('kb://all')).rows.length,12);assert.equal((await store.read(snapshot.uri)).rows.length,12,'archiving does not delete historical analysis snapshots');
+await fs.unlink(path.join(tasks[0].outputDir,'任务归属.json'));
+const missingOwner=await store.sync({refresh:false});assert.ok(missingOwner.sync_errors.length);
+assert.equal((await store.sync({refresh:false})).revision,missingOwner.revision,'a still-missing directory must not churn revisions and rebuild the assistant index');
 console.log('PASS: native all-task ingestion, no automatic CSV export, identity dedup, pinned snapshots, direct dataset reads, cross-role statistics, shared strata, stable citations, conversation retention, approved-label evidence, archival isolation');

@@ -1,0 +1,6 @@
+# Optional: Qwen-assisted TF-IDF/LR training and original-layout PDF resumes.
+numpy>=1.26,<3
+scikit-learn>=1.5,<2
+pypdf>=5,<7
+pypdfium2>=4,<6
+Pillow>=10.4,<13

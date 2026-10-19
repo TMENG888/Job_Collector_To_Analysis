@@ -6,18 +6,18 @@ import { savePlatformLoginStatus } from './platform_login_status.mjs';
 import {connectManagedContext,browserProfileRoot} from './managed_browser.mjs';
 import {navigatePlatformLogin} from './platform_login_navigation.mjs';
 
-const outputDir = path.resolve(process.argv[2] || 'outputs/login');
+const outputDir = path.resolve(process.argv[2] || 'outputs/platform-sessions');
 const requested = String(process.argv[3] || 'all').toLowerCase();
 const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const profileRoot = browserProfileRoot();
 const statusPath = path.join(outputDir, '登录会话状态.json');
 
 const targets = [
-  { key: 'jobonline', platform: '就业在线', host: 'jobonline.cn', url: 'https://www.jobonline.cn/' },
-  { key: 'job51', platform: '前程无忧', host: '51job.com', url: 'https://we.51job.com/pc/search' },
   { key: 'boss', platform: 'BOSS直聘', host: 'zhipin.com', url: 'https://www.zhipin.com/' },
-  { key: 'liepin', platform: '猎聘', host: 'liepin.com', url: 'https://www.liepin.com/' },
+  { key: 'liepin', platform: '猎聘', host: 'liepin.com', url: 'https://c.liepin.com/' },
   { key: 'zhaopin', platform: '智联招聘', host: 'zhaopin.com', url: 'https://www.zhaopin.com/' },
+  { key: 'job51', platform: '前程无忧', host: '51job.com', url: 'https://we.51job.com/pc/search' },
+  { key: 'jobonline', platform: '就业在线', host: 'jobonline.cn', url: 'https://www.jobonline.cn/' },
   { key: 'yupao', platform: '鱼泡直聘', host: 'yupao.com', url: 'https://www.yupao.com/zhaogong/' },
   { key: 'deepseek', platform: 'DeepSeek', host: 'chat.deepseek.com', url: 'https://chat.deepseek.com/' },
   { key: 'kimi', platform: 'Kimi', host: 'kimi.com', url: 'https://kimi.com/' },

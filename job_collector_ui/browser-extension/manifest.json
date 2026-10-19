@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "本机岗位助手",
+  "version": "1.2.1",
+  "description": "连接本机求职工作台，授权招聘页镜像交互；按需筛选岗位，确认后单次或有界批次沟通。",
+  "permissions": ["scripting", "tabs", "storage", "alarms", "activeTab"],
+  "host_permissions": ["http://127.0.0.1:8788/*", "https://*.zhipin.com/*", "https://*.liepin.com/*", "https://*.zhaopin.com/*", "https://*.51job.com/*", "https://*.iguopin.com/*", "https://*.shixiseng.com/*"],
+  "background": {"service_worker": "background.mjs", "type": "module"},
+  "action": {"default_popup": "popup.html", "default_title": "连接本机岗位助手"},
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"}
+}

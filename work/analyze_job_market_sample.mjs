@@ -6,15 +6,15 @@ import {normalizeSalary,normalizeEmploymentType,roleFamilies,skillRules} from '.
 import {knowledgeStore} from './job_knowledge_store.mjs';
 import { approvedLabelsForWorkbook, consensusLabelsForWorkbook, prelabelsForWorkbook } from './reviewed_job_labels.mjs';
 import { cityName, summarizeCohort, experienceCohorts } from '../job_collector_ui/public/insight-cohorts.js';
-import { businessRules } from '../job_collector_ui/public/business-rules.js';
 import { literalRoleFamily, selectManualRole } from './insight-role-selection.mjs';
 import { learnJointExpansion, matchJointExpansion, publicJointExpansion } from './joint-job-expansion.mjs';
 import { matchKeywordRole } from './keyword-role-matcher.mjs';
 import { learnRuleSeedModel, matchRuleSeedRole } from './rule-seed-keywords.mjs';
 import { learnUniversalRoleKeywords, matchUniversalRoleKeywords } from './universal-role-keywords.mjs';
-import { learnRoleEvidence, matchRoleEvidence } from './role-evidence-v2.mjs';
-import { learnEmbeddedEvidence, matchEmbeddedEvidence } from './embedded-role-evidence.mjs';
-import { buildKeywordCloudDisplay } from './keyword-cloud-display.mjs';
+import {roleClassifier,roleInsightModel} from './role-classifier-registry.mjs';
+import {createRoleClassifierMatcher} from './data-analysis-classifier.mjs';
+import {scopedClassifierRow} from './insight-classifier-input.mjs';
+import {loadSemanticCloud,semanticRowKey} from './insight-semantic-cloud.mjs';
 import { fitSkillSalaryIncrements } from '../job_collector_ui/public/skill-salary-increments.js';
 
 const configPath = path.resolve(process.argv[2] || '');
@@ -101,7 +101,6 @@ const familyTaskRules = {
   '人力资源': [['招聘与人才获取', pattern(['招聘', '人才获取', '招聘渠道', '面试'])], ['薪酬绩效管理', pattern(['薪酬', '绩效', '激励'])], ['员工关系与合规', pattern(['员工关系', '劳动法', '劳动合同'])], ['组织发展与人才盘点', pattern(['组织发展', '人才盘点', '培训发展'])]],
 };
 
-const domainRules = businessRules;
 
 const cityCoordinates = {
   '北京': [116.4074, 39.9042], '上海': [121.4737, 31.2304], '广州': [113.2644, 23.1291], '深圳': [114.0579, 22.5431], '杭州': [120.1551, 30.2741], '成都': [104.0665, 30.5723], '武汉': [114.3054, 30.5931], '南京': [118.7969, 32.0603], '苏州': [120.5853, 31.2989], '西安': [108.9398, 34.3416], '天津': [117.2008, 39.0842], '重庆': [106.5516, 29.5630], '长沙': [112.9388, 28.2282], '合肥': [117.2272, 31.8206], '郑州': [113.6254, 34.7466], '济南': [117.1201, 36.6512], '青岛': [120.3826, 36.0671], '厦门': [118.0894, 24.4798], '福州': [119.2965, 26.0745], '无锡': [120.3119, 31.4912], '宁波': [121.5503, 29.8746], '东莞': [113.7518, 23.0207], '佛山': [113.1214, 23.0215], '珠海': [113.5767, 22.2707], '昆明': [102.8329, 24.8801], '沈阳': [123.4315, 41.8057], '大连': [121.6147, 38.9140],
@@ -269,15 +268,6 @@ function inferDatasetRole(rows) {
   const margin = Math.max(0, (selected.score - second.score) / Math.max(1, selected.score));
   const confidence = Number(Math.min(0.99, (selected.file_match ? 0.65 : 0.4) + queryShare * 0.2 + coverage * 0.1 + margin * 0.1).toFixed(3));
   return { name: selected.name, confidence, mode, manual_label: mode === 'manual_override' ? manualRole : '', evidence: { file_name_match: selected.file_match, query_rows: selected.query_rows, matching_rows: selected.matching_rows, inspected_rows: inferenceRows.length, leading_score: selected.score, second_score: second.score }, candidates: votes.slice(0, 4) };
-}
-
-function extractLabels(row, familyName) {
-  const fullText = [row['岗位名称'], row['技能'], row['岗位描述']].map(text).join('\n');
-  const skills = skillRules.filter(([, regex]) => regex.test(fullText)).map(([name]) => name);
-  const taskRules = [...(familyTaskRules[familyName] || []), ...generalTaskRules];
-  const tasks = taskRules.filter(([, regex]) => regex.test(fullText)).map(([name]) => name);
-  const domains = domainRules.filter(([, regex]) => regex.test(fullText)).map(([name]) => name);
-  return { fullText, skills:[...new Set([...skills,...(row.knowledge_approved_skills||[])])], tasks: [...new Set([...tasks,...(row.knowledge_approved_tasks||[])])], domains:[...new Set([...domains,...(row.knowledge_approved_domains||[])])] };
 }
 
 function salaryBenchmark(items, field, minCount = 5) {
@@ -757,18 +747,20 @@ for (const row of allRows) {
   row['原始工作城市'] = row['工作城市'];
   row['工作城市'] = cityName(row['工作城市']);
 }
-if ([config.reviewedLabelDir, config.consensusLabelDirs, config.prelabelDir].filter(Boolean).length > 1) throw new Error('一次洞察只能选择一种外部标签来源');
-const labelSelection = config.reviewedLabelDir
+const externalLabelsEnabled = config.labelingEnabled !== false;
+const hasConsensusLabels = Array.isArray(config.consensusLabelDirs) && config.consensusLabelDirs.length > 0;
+if (externalLabelsEnabled && [config.reviewedLabelDir, hasConsensusLabels, config.prelabelDir].filter(Boolean).length > 1) throw new Error('一次洞察只能选择一种外部标签来源');
+const labelSelection = !externalLabelsEnabled ? null : config.reviewedLabelDir
   ? { ...await approvedLabelsForWorkbook(path.resolve(config.reviewedLabelDir), inputFile, allRows, new Set(skillRules.map(([name]) => name))), sourceName: '人工复核标注' }
-  : config.consensusLabelDirs
+  : hasConsensusLabels
     ? await consensusLabelsForWorkbook(config.consensusLabelDirs.map((directory) => path.resolve(directory)), inputFile, allRows, new Set(skillRules.map(([name]) => name)))
     : config.prelabelDir
       ? await prelabelsForWorkbook(path.resolve(config.prelabelDir), inputFile, allRows, new Set(skillRules.map(([name]) => name)))
     : null;
 const detectedRole = inferDatasetRole(allRows);
+if(config.roleSource==='source_task')detectedRole.mode='source_task';
 const initialSample = analysisMode === 'full' ? allRows : selectEvenSample(allRows, sampleSize);
 const targetFamily = roleFamilies.find((family) => family.name === detectedRole.name) || literalRoleFamily(detectedRole.name);
-const strictKeywords = targetFamily.custom || targetFamily.strict;
 // Offline comparison writes only the explicitly supplied test output, never
 // the production report. Baseline selection cannot be enabled by the UI.
 if (config.comparisonOnly === true) {
@@ -797,18 +789,17 @@ if (config.comparisonOnly === true) {
 }
 const topicModel = { seed_rows: 0, terms: [], strong_terms: [], supporting_terms: [] };
 const jointModel = { seed_rows: 0, skills: [], tasks: [] };
-// All roles use the same learning/matching path. Historical drama validation
-// must not be attached to this different algorithm or a different dataset.
-// Only the agent application profile has undergone the v2 offline review.
-// Preserve other role families until their own evidence profiles are evaluated.
-const embeddedEvidence = targetFamily.name === '嵌入式开发';
-const evidenceV2 = targetFamily.name === '智能体/大模型应用' || embeddedEvidence;
-const keywordModel = (embeddedEvidence ? learnEmbeddedEvidence : evidenceV2 ? learnRoleEvidence : learnUniversalRoleKeywords)(allRows, targetFamily, {
-  algorithm: config.keywordAlgorithm || 'tfidf', top_k: 40, minimum_hits: 2,
-  threshold: 4,
-});
-if (keywordModel && (keywordModel.family !== targetFamily.name || (!keywordModel.cold_start && !keywordModel.keywords?.length) || !Number.isInteger(keywordModel.minimum_hits) || keywordModel.minimum_hits < 1)) throw new Error('岗位关键词模型无效，已停止分析');
-const classifiedSample = initialSample.map((row) => ({ row, classification: classifyRow(row), target_match: (embeddedEvidence ? matchEmbeddedEvidence : evidenceV2 ? matchRoleEvidence : matchUniversalRoleKeywords)(row, keywordModel) }));
+// Family-specific sealed artifacts only; no fitting on the analysis corpus.
+if(config.insightClassifier&&config.insightClassifier.family!==targetFamily.name)throw new Error('候选分类器与当前岗位范围不一致，已停止分析');
+const scopedClassifier=config.insightClassifier?createRoleClassifierMatcher(config.insightClassifier.file,config.insightClassifier):null;
+const supervisedMatcher=scopedClassifier||roleClassifier(targetFamily.name);
+if(!supervisedMatcher)throw new Error(`“${targetFamily.name}”尚无通过验收的监督分类器，请先标注并训练；禁止回退到规则或关键词筛选`);
+const supervisedRole=true;
+const candidateMetadata=scopedClassifier?{...scopedClassifier.metadata,profile:'qwen-scoped-supervised',scope:targetFamily.name,display_name:`TF-IDF＋逻辑回归（Qwen标签训练 · ${targetFamily.name}）`,keywords:[],display_keywords:[],minimum_hits:null,training_seed_rows:[],rule_seed_candidates:0,training_background_rows:scopedClassifier.metadata.provenance.train_rows,cold_start:false,selection_policy:'通过验收后自动采用的数据集专属监督模型；Qwen留出标签代理评测，非人工准确率；当前待分析数据不再参与拟合；不回退规则筛选',annotation_type:'Qwen3.7-Flash伪标签',validation:scopedClassifier.metadata.provenance}:null;
+const keywordModel=candidateMetadata||roleInsightModel(targetFamily.name);
+const matchTarget=scopedClassifier?row=>scopedClassifier.match(scopedClassifierRow(row)):supervisedMatcher.match;
+const semanticData=await loadSemanticCloud(config.semanticCloud,{role:targetFamily.name,inputFile:config.displayInputFile||inputFile,classifierId:config.insightClassifier?.id||supervisedMatcher.metadata.version});
+const classifiedSample = initialSample.map((row) => ({ row, classification: classifyRow(row), target_match: matchTarget(row, keywordModel) }));
 const pendingReview = classifiedSample.filter(item => item.target_match.decision === 'review');
 // Same-file labels may have been produced for a different job family. For a
 // custom requested role, use their attributes, not their target/non-target vote.
@@ -821,26 +812,22 @@ const focused = classifiedSample.filter((item) => (
   ...item, target_match:{matched:true,method:'外部原文证据标签补充',confidence_band:labelSelection.sourceName==='本地规则预标注'?'待复核':'标签确认',reasons:[labelSelection.sourceName],topic_matches:[]},
 });
 const relevantDetectedCount = focused.length;
-if (!focused.length) throw new Error(`未找到与“${detectedRole.name}”学习关键词匹配的职责记录，已停止分析；不会回退到固定技术词或其他岗位族`);
+if (!focused.length) throw new Error(`未找到通过“${detectedRole.name}”${supervisedRole?'TF-IDF＋逻辑回归阈值':'学习关键词匹配'}的职责记录，已停止分析；不会回退到固定技术词或其他岗位族`);
 const enriched = focused.map((item) => {
-  const labels = extractLabels(item.row, detectedRole.name);
-  const selectedLabels = labelSelection?.accepted.get(item.row.row_no);
-  if (selectedLabels) {
-    if (selectedLabels.skills.length) labels.skills = selectedLabels.skills;
-    if (selectedLabels.tasks.length) labels.tasks = selectedLabels.tasks;
-    if (selectedLabels.domains?.length) labels.domains = selectedLabels.domains;
-  }
-  return { ...item, salary: normalizeSalary(item.row['薪资']), labels, label_source: selectedLabels ? labelSelection.sourceName : '规则抽取' };
+  const semantic=semanticData?.byKey.get(semanticRowKey(item.row));
+  const labels=Object.fromEntries(['skills','tasks','domains','industries'].map(field=>[field,semantic?.fit==='include'?(semantic[field]||[]).map(t=>t.name):[]]));
+  return { ...item, salary: normalizeSalary(item.row['薪资']), labels, semantic, label_source: semantic?.fit==='include'?'Qwen语义抽取':'未完成语义标注' };
 });
+const semanticAccepted=enriched.filter(item=>item.semantic?.fit==='include');
 const sample = enriched.map((item) => item.row);
 const monthlySalaryK = enriched.map((item) => item.salary?.midpoint / 1000).filter(Number.isFinite);
 const overallMedian = quantile(monthlySalaryK, 0.5);
 
-const skillStats = skillRules.map(([name]) => {
+const skillStats = [...new Set(enriched.flatMap(item=>item.labels.skills))].map((name) => {
   const matches = enriched.filter((item) => item.labels.skills.includes(name));
   const salaries = matches.map((item) => item.salary?.midpoint / 1000).filter(Number.isFinite);
   const median = quantile(salaries, 0.5);
-  return { name, count: matches.length, rate: Number((matches.length / sample.length).toFixed(3)), salary_count: salaries.length, median_salary_k: median, salary_delta_pct: overallMedian && salaries.length >= 5 ? Number((((median / overallMedian) - 1) * 100).toFixed(1)) : null };
+  return { name, count: matches.length, rate: Number((matches.length / Math.max(1,semanticAccepted.length)).toFixed(3)), salary_count: salaries.length, median_salary_k: median, salary_delta_pct: overallMedian && salaries.length >= 5 ? Number((((median / overallMedian) - 1) * 100).toFixed(1)) : null };
 }).filter((item) => item.count).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 
 const pairCounts = new Map();
@@ -852,11 +839,11 @@ for (const item of enriched) {
   }
 }
 const skillCountMap = new Map(skillStats.map((item) => [item.name, item.count]));
-const minPairCount = Math.max(3, Math.ceil(sample.length * 0.015));
+const minPairCount = Math.max(3, Math.ceil(semanticAccepted.length * 0.015));
 const skillCombinations = [...pairCounts.entries()].map(([name, count]) => {
   const [first, second] = name.split(' + ');
-  const support = count / sample.length;
-  const lift = support / ((skillCountMap.get(first) / sample.length) * (skillCountMap.get(second) / sample.length));
+  const support = count / Math.max(1,semanticAccepted.length);
+  const lift = support / ((skillCountMap.get(first) / semanticAccepted.length) * (skillCountMap.get(second) / semanticAccepted.length));
   const salaries = enriched.filter((item) => item.labels.skills.includes(first) && item.labels.skills.includes(second)).map((item) => item.salary?.midpoint / 1000).filter(Number.isFinite);
   return { name, count, support: Number(support.toFixed(3)), lift: Number(lift.toFixed(2)), salary_count: salaries.length, median_salary_k: quantile(salaries, 0.5) };
 }).filter((item) => item.count >= minPairCount).sort((a, b) => b.count - a.count || b.lift - a.lift).slice(0, 15);
@@ -872,19 +859,17 @@ const cities = cityBase.map((item) => {
 
 const observations = enriched.map((item) => {
   const row = item.row;
-  const source = [row['岗位名称'], row['技能'], row['岗位描述']].map(text).join('\n');
-  const domainEvidence = domainRules.filter(([name]) => item.labels.domains.includes(name)).map(([label, regex]) => {
-    const match = regex.exec(source);
-    return { label, quote: match ? source.slice(Math.max(0, match.index - 25), match.index + match[0].length + 65).replace(/\s+/g, ' ') : '' };
-  });
+  const domainEvidence = ['skills','tasks','domains','industries'].flatMap(field=>(item.semantic?.fit==='include'?item.semantic[field]||[]:[]).map(tag=>({label:tag.name,quote:tag.quote,field:tag.field,category:field})));
   return { row_no: row.row_no, platform: text(row['平台']), job_id: text(row['岗位ID']) || `row-${row.row_no}`, job_name: text(row['岗位名称']),
     city: row['工作城市'], raw_city: text(row['原始工作城市']), district: text(row['区县'] || row['工作区域']) || text(row['原始工作城市']).split(/[-—]/).slice(1).join('-'),
     experience: text(row['经验要求']) || '未明确', education: text(row['学历要求']) || '未明确', company_size: text(row['公司规模']) || '未明确',
     employment_type: normalizeEmploymentType(row['用工类型']), salary_midpoint_k: item.salary ? item.salary.midpoint / 1000 : null,
     skills: [...new Set(item.labels.skills)], tasks: [...new Set(item.labels.tasks)], domains: [...new Set(item.labels.domains)],
     knowledge_key:row.knowledge_key||'',knowledge_hash:row.knowledge_hash||'',
-    industry: text(row['行业']) || '未明确', company_key: text(row['公司ID'] || row['公司名称']) ? `${text(row['平台'])}:${text(row['公司ID'] || row['公司名称'])}` : '',
+    industry:item.labels.industries[0]||'',industries:item.labels.industries,source_industry:text(row['行业']),semantic_labeled:item.semantic?.fit==='include',semantic_fit:item.semantic?.fit||'unlabeled',semantic_key:item.semantic?.key||'',company_key: text(row['公司ID'] || row['公司名称']) ? `${text(row['平台'])}:${text(row['公司ID'] || row['公司名称'])}` : '',
     label_source: item.label_source, evidence: domainEvidence,
+    ...(item.target_match.classifier_evidence?{role_classifier:item.target_match.classifier_evidence}:{}),
+    reviewed_term_skills: row.knowledge_approved_term_skills || [],
   };
 });
 const cohortSummary = summarizeCohort(observations);
@@ -892,7 +877,7 @@ const cohortSummary = summarizeCohort(observations);
 const roleSegments = countBy(focused.map((item) => item.classification.family));
 const inputRoleSegments = countBy(classifiedSample.map((item) => item.classification.family));
 const salarySkillStats = skillStats.filter((item) => item.salary_count >= 5).sort((a, b) => (b.median_salary_k || 0) - (a.median_salary_k || 0)).slice(0, 12);
-const salaryModelWithInternal = buildSalaryModel(enriched, detectedRole.name, relevantDetectedCount / initialSample.length);
+const salaryModelWithInternal = buildSalaryModel(semanticAccepted, detectedRole.name, relevantDetectedCount / initialSample.length);
 const frequentSkillSets = buildFrequentSkillSets(salaryModelWithInternal);
 const { _internal: salaryModelInternal, ...salaryModel } = salaryModelWithInternal;
 const descriptionFilled = sample.filter((row) => text(row['岗位描述'])).length;
@@ -902,23 +887,26 @@ const fieldCoverage = Object.fromEntries(['岗位名称', '薪资', '工作城�
 const relevantRate = Number((relevantDetectedCount / initialSample.length).toFixed(3));
 const matchMethods = countBy(focused.map((item) => item.target_match.method));
 const confidenceBands = countBy(focused.map((item) => item.target_match.confidence_band));
-const auditExample = (item) => ({ row_no: item.row.row_no, title: text(item.row['岗位名称']), query: text(item.row['查询关键词']), reasons: item.target_match.reasons, topic_matches: item.target_match.topic_matches, joint_evidence: item.target_match.joint_evidence || null, keyword_evidence: item.target_match.keyword_evidence || null });
+const auditExample = (item) => ({ row_no: item.row.row_no, title: text(item.row['岗位名称']), query: text(item.row['查询关键词']), reasons: item.target_match.reasons, topic_matches: item.target_match.topic_matches, joint_evidence: item.target_match.joint_evidence || null, keyword_evidence: item.target_match.keyword_evidence || null, classifier_evidence:item.target_match.classifier_evidence||null });
 const matchExamples = Object.fromEntries([...new Set(focused.map((item) => item.target_match.method))].map((method) => [method, selectEvenSample(focused.filter((item) => item.target_match.method === method), 12).map(auditExample)]));
 matchExamples['未匹配'] = selectEvenSample(classifiedSample.filter((item) => !item.target_match.matched), 12).map(auditExample);
 const insights = [];
-if (skillStats[0]) insights.push(`${detectedRole.name}样本中最常见技能为 ${skillStats[0].name}，覆盖 ${skillStats[0].count}/${sample.length} 条岗位。`);
+if (skillStats[0]) insights.push(`已完成Qwen语义抽取的${semanticAccepted.length}条抽样岗位中，最常见技能为 ${skillStats[0].name}，覆盖 ${skillStats[0].count} 条；不代表全库频率。`);
 if (skillCombinations[0]) insights.push(`最高频技能组合为 ${skillCombinations[0].name}，出现 ${skillCombinations[0].count} 次，Lift 为 ${skillCombinations[0].lift}。`);
 if (cities[0]) insights.push(`${cities[0].name} 是当前样本岗位最多的城市，共 ${cities[0].count} 条。`);
 if (salarySkillStats[0]?.median_salary_k) insights.push(`有至少5个薪资样本的技能中，${salarySkillStats[0].name} 对应月薪中位数最高，为 ${salarySkillStats[0].median_salary_k}K。`);
-insights.push(`${detectedRole.mode === 'auto' ? '自动识别岗位族' : '手工指定岗位'}为“${detectedRole.name}”${detectedRole.confidence == null ? '；按手工关键词直接匹配，不报告自动识别置信度' : `，识别置信度 ${(detectedRole.confidence * 100).toFixed(1)}%`}；样本岗位契合率 ${(relevantRate * 100).toFixed(1)}%。`);
+insights.push(`${detectedRole.mode === 'source_task' ? '按采集任务识别岗位族' : detectedRole.mode === 'auto' ? '自动识别岗位族' : 'API指定岗位'}为“${detectedRole.name}”${detectedRole.confidence == null ? '；不报告自动识别置信度' : `，岗位族识别评分 ${(detectedRole.confidence * 100).toFixed(1)}%（未经概率校准）`}；样本岗位契合率 ${(relevantRate * 100).toFixed(1)}%。`);
 
 const report = {
-  version: evidenceV2 ? 'job-market-insight-v9' : 'job-market-insight-v8', selection_contract: embeddedEvidence ? 'embedded-evidence-v1' : evidenceV2 ? 'role-evidence-v2' : 'universal-keywords-v1', role: detectedRole.name, detected_role: detectedRole, input_file: config.displayInputFile || inputFile, sheet_name: workbookData.sheetName, generated_at: new Date().toISOString(),
+  version: 'job-market-insight-v11', screening_policy:'supervised-only', selection_contract:keywordModel.version, role: detectedRole.name, detected_role: detectedRole, input_file: config.displayInputFile || inputFile, sheet_name: workbookData.sheetName, generated_at: new Date().toISOString(),
+  role_classifier:supervisedRole?{family:targetFamily.name,version:keywordModel.version,algorithm:keywordModel.algorithm,threshold:keywordModel.threshold,artifact_sha256:keywordModel.artifact_sha256,input_contract:keywordModel.input_contract,provenance:keywordModel.provenance}:null,
+  qwen_classification:scopedClassifier?{run_id:config.insightClassifier.id,experimental:true,metrics_basis:'Qwen留出标签代理指标，非人工金标准',provenance:keywordModel.provenance}:null,
+  role_screening_status:'supervised',
   knowledge_snapshot:inputFile.startsWith('kb://')?inputFile:'',knowledge_revision:workbookData.source?.revision??null,
-  selection_review: evidenceV2 ? { included_rows: focused.length, pending_rows: pendingReview.length, excluded_rows: initialSample.length - focused.length - pendingReview.length,
+  selection_review: { included_rows: focused.length, pending_rows: pendingReview.length, excluded_rows: initialSample.length - focused.length - pendingReview.length,
     included_in_statistics: false, profile: keywordModel.profile, threshold: keywordModel.threshold,
     note: '待复核记录独立保留，不计入主报告薪资、城市或技能统计；证据纳入不是人工确认，仍可能误收',
-    rows: pendingReview.map(item => ({ row_no: item.row.row_no, title: text(item.row['岗位名称']), platform: text(item.row['平台']), job_id: text(item.row['岗位ID']), city: text(item.row['工作城市']), reasons: item.target_match.reasons, keyword_evidence: item.target_match.keyword_evidence })) } : null,
+    rows: pendingReview.map(item => ({ row_no: item.row.row_no, title: text(item.row['岗位名称']), platform: text(item.row['平台']), job_id: text(item.row['岗位ID']), city: text(item.row['工作城市']), reasons: item.target_match.reasons, keyword_evidence: item.target_match.keyword_evidence, classifier_evidence:item.target_match.classifier_evidence||null })) },
   transfer_provenance: { task_id: config.sourceTaskId || '', resolution: config.sourceResolution || 'manual', expected_rows: config.expectedRows || null, read_rows: allRows.length },
   input_role_segments: inputRoleSegments,
   joint_expansion: keywordModel ? null : { ...publicJointExpansion(jointModel), included_rows: focused.filter((item) => item.target_match.joint_evidence).length, merged_into_insights: true },
@@ -926,28 +914,27 @@ const report = {
   total_rows: allRows.length, requested_sample_rows: initialSample.length, sample_rows: sample.length, relevant_sample_rows: relevantDetectedCount, filtered_out_rows: initialSample.length - relevantDetectedCount, filtered_out_rate: Number(((initialSample.length - relevantDetectedCount) / initialSample.length).toFixed(3)), relevance_rate: relevantRate, analysis_mode: analysisMode, sampling_method: `${analysisMode === 'full' ? '全量逐条匹配' : '按全量岗位序号等距抽样'}；${keywordModel.display_name}；所有记录须命中至少${keywordModel.minimum_hits}个独立学习关键词；查询关键词不参与纳入；外部标签仅补充属性`, focus_fallback: false,
   topic_model: { method: keywordModel.selection_policy, seed_rows: keywordModel.training_seed_rows.length, discovered_terms: keywordModel.keywords.map(term => ({ ...term, name: term.term })), match_methods: matchMethods, confidence_bands: confidenceBands, audit_examples: matchExamples },
   quality: { salary_rows: monthlySalaryK.length, salary_coverage: Number((monthlySalaryK.length / sample.length).toFixed(3)), description_rows: descriptionFilled, description_coverage: Number((descriptionFilled / sample.length).toFixed(3)), skill_labeled_rows: skillLabeled, skill_coverage: Number((skillLabeled / sample.length).toFixed(3)), task_labeled_rows: taskLabeled, task_coverage: Number((taskLabeled / sample.length).toFixed(3)), field_coverage: fieldCoverage },
-  label_provenance: labelSelection ? { mode: labelSelection.quality.mode || '人工批准且有原文证据的外部标注优先，其余用规则', job_id: config.reviewedLabelJobId || '', ...labelSelection.quality, excluded_by_prelabel: excludedByPrelabel, included_by_external_label: includedByExternalLabel, used_in_focused_rows: enriched.filter((item) => item.label_source === labelSelection.sourceName).length } : { mode: '规则抽取', used_in_focused_rows: 0 },
+  label_provenance:{mode:semanticData?'Qwen语义抽取（带原文证据；仅已标注抽样）':'未完成语义抽取；词云留空，不回退规则',used_in_focused_rows:semanticAccepted.length},
+  semantic_cloud:{mode:'model-only',model:semanticData?.model||'',run_id:config.semanticCloud?.id||'',sampled:semanticData?.sampled||0,covered_rows:semanticAccepted.length,unique_accepted_rows:new Set(semanticAccepted.map(i=>i.semantic.key)).size,reused_identical_rows:semanticAccepted.length-new Set(semanticAccepted.map(i=>i.semantic.key)).size,audited_rows:enriched.filter(i=>i.semantic).length,excluded_in_sample:enriched.filter(i=>i.semantic?.fit==='exclude').length,uncertain_in_sample:enriched.filter(i=>i.semantic?.fit==='uncertain').length,population_rows:sample.length,sampling_policy:'按内容哈希等距抽取不同文本，同文岗位复用同一模型标签；只统计语义覆盖岗位，不外推全量；岗位总量和薪资仍来自监督筛选全量'},
   salary: { unit: 'K/月', p25: quantile(monthlySalaryK, 0.25), median: overallMedian, p75: quantile(monthlySalaryK, 0.75), sample_count: monthlySalaryK.length },
   salary_benchmarks: { experience: salaryBenchmark(enriched, '经验要求'), education: salaryBenchmark(enriched, '学历要求'), city: salaryBenchmark(enriched, '工作城市') },
   skills: skillStats.slice(0, 24), skill_combinations: skillCombinations, frequent_skill_sets: frequentSkillSets, salary_by_skill: salarySkillStats, salary_model: salaryModel,
   profiles: { education: distribution('学历要求'), experience: distribution('经验要求'), employment_type: distribution('用工类型'), role_segments: roleSegments, typical: { education: distribution('学历要求')[0]?.name || '未明确', experience: distribution('经验要求')[0]?.name || '未明确', employment_type: distribution('用工类型')[0]?.name || '未明确' } },
-  cities, industries: distribution('行业'), company_sizes: distribution('公司规模'), company_natures: distribution('公司性质'), tasks: labeledDistribution('tasks'), business_domains: labeledDistribution('domains'), benefits: countBy(sample.flatMap((row) => text(row['福利/标签']).split(/[|、,，]/).map((value) => value.trim()).filter(Boolean))).slice(0, 15), insights,
-  salary_increment_model: fitSkillSalaryIncrements(observations),
+  cities, industries:cohortSummary.industries, company_sizes: distribution('公司规模'), company_natures: distribution('公司性质'), tasks: labeledDistribution('tasks'), business_domains: labeledDistribution('domains'), benefits: countBy(sample.flatMap((row) => text(row['福利/标签']).split(/[|、,，]/).map((value) => value.trim()).filter(Boolean))).slice(0, 15), insights,
+  salary_increment_model: fitSkillSalaryIncrements(observations.filter(r=>r.semantic_labeled)),
   cohort_observations: observations, experience_cohorts: experienceCohorts(observations), industry_positioning: { method: '按来源平台和公司ID/公司名称去重；同一公司存在多个行业时均分权重；占比为样本行业分布', ...cohortSummary },
   warnings: [...(relevantRate < 0.3 ? [`当前数据集岗位契合率仅 ${(relevantRate * 100).toFixed(1)}%，搜索召回噪声较高；结论应基于契合岗位并优先复核原始数据。`] : []), ...(sample.length < 30 ? [`契合岗位仅 ${sample.length} 条，薪资分层和技能组合稳定性不足，不建议直接用于对外报价或个体决策。`] : []), '本页反映企业招聘需求画像，不代表实际从业者供给画像。', '条件薪资模型按公司分组交叉验证选型；技能组合的正负差异是岗位样本关联，不是技能的因果价格或个人身价。', '自动岗位识别和职责抽取采用可解释规则；低置信度或低契合率数据集应先人工抽查，再用于对外咨询。', '少样本结果用于产品验证与方向发现；正式发布建议扩大样本并按岗位族、城市和经验分层验收。'],
 };
 if (keywordModel) {
+  if(supervisedRole)report.warnings=report.warnings.map(w=>w.startsWith('自动岗位识别和职责抽取采用可解释规则')?`${targetFamily.name}样本筛选使用独立TF-IDF＋逻辑回归；岗位族识别和属性抽取不等于人工确认，低契合率数据应抽查。`:w);
   report.sampling_method = `${analysisMode === 'full' ? '全量逐条匹配' : '等距抽样检查'}；${keywordModel.display_name}；${keywordModel.selection_policy}；查询关键词不作为纳入证据；外部标签仅补充属性`;
   report.topic_model.method = keywordModel.display_name;
   report.topic_model.seed_rows = keywordModel.training_seed_rows.length;
   report.topic_model.discovered_terms = (keywordModel.display_keywords || keywordModel.keywords).map(x => ({ name: x.term, seed_count: x.seed_df, score: x.score, lift:x.lift, used_for_filter:keywordModel.keywords.some(k=>k.term===x.term) }));
   report.topic_model.display_limit = 100;
-  const cloudDisplay = buildKeywordCloudDisplay(allRows, targetFamily, {seedRows:focused.map(item=>item.row.row_no)});
-  if(cloudDisplay){
-    report.topic_model.discovered_terms = cloudDisplay.terms;
-    report.topic_model.display_model = {...cloudDisplay,terms:undefined};
-  }
-  report.warnings.unshift(embeddedEvidence ? '嵌入式方案使用人工配置领域词表与软件职责证据；尚无独立人工准确率验证；待复核记录不计入主统计，简短或不规范正文可能漏选。' : evidenceV2 ? '智能体上下文方案在40条开发记录和32条隔离留出记录上做过模型原文复核，并非人工金标准；更保守但会漏选，英文及工业Agent语义仍有边界；待复核列表不纳入主统计。' : '统一关键词方案尚无本岗位独立人工准确率验证；自动纳入仍可能误收，需人工抽查。');
+  report.topic_model.discovered_terms=skillStats.map(item=>({...item,used_for_filter:false}));
+  report.topic_model.display_model={method:'Qwen语义抽取',covered_rows:semanticAccepted.length,used_for_filter:false};
+  report.warnings.unshift(supervisedRole ? `${targetFamily.name}使用独立固定TF-IDF＋逻辑回归，阈值${keywordModel.threshold}；${scopedClassifier?'Qwen3.7-Flash伪标签':'Codex原文证据标签'}不是独立人工金标准；公司及近重复隔离小样本结果见模型溯源，不能当成总体准确率。存在误纳漏纳。分数不是正确概率；80–9000字符之外/无特征记录待复核且不计入主统计；不复用其他岗位模型。` : `${report.role_screening_status.reason}；自动纳入仍可能误收，需人工抽查。`);
 }
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
 await fs.writeFile(outputPath, JSON.stringify(report, null, 2), 'utf8');

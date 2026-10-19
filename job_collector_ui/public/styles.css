@@ -198,7 +198,6 @@ summary { cursor: pointer; color: #52616d; font-size: 11px; font-weight: 700; }
 .label-review-row small { color: #51626b; line-height: 1.5; overflow-wrap: anywhere; }
 .label-review-row > div { display: flex; gap: 7px; }
 .label-review-row button { padding: 5px 9px; font-size: 10px; }
-.insight-label-provenance { padding: 11px 16px; color: #49616a; font-size: 11px; }
 .insight-toolbar { padding: 20px 22px; display: grid; grid-template-columns: minmax(280px, .72fr) minmax(620px, 1.8fr); gap: 24px; align-items: end; }
 .insight-toolbar-copy h2 { margin-bottom: 7px; font-size: 19px; }
 .insight-toolbar-copy > p:last-child { margin: 0; max-width: 520px; color: var(--muted); font-size: 11px; line-height: 1.7; }
@@ -748,3 +747,31 @@ body.assistant-chat-page .sidebar-note > div { display:none; }
 .assistant-collection-buttons small { color:#63748a; font-size:12px; }
 .assistant-collection-logs pre { max-height:320px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#162437; color:#dbe6f7; padding:16px; border-radius:12px; font-size:12px; }
 @media(max-width:600px) { .assistant-collection-task,.assistant-collection-action {padding:14px;} .assistant-collection-action dl {grid-template-columns:68px minmax(0,1fr);} }
+
+/* Live observable execution; retains the assistant's muted green palette. */
+.assistant-live-run { margin:4px 0 18px; padding:12px 15px; border:1px solid #dce8e3; border-radius:12px; background:#f7faf8; }
+.assistant-live-run>summary { display:flex; align-items:center; gap:10px; list-style:none; }
+.assistant-live-run>summary::-webkit-details-marker { display:none; }
+.assistant-live-run>summary::before { content:''; flex:0 0 11px; width:11px; height:11px; border:2px solid #b9d9ce; border-top-color:#2b806d; border-radius:50%; animation:assistant-spin .9s linear infinite; }
+.assistant-live-run>summary small { margin-left:auto; font-size:11px; color:#7b9289; white-space:nowrap; }
+.assistant-live-note,.assistant-live-plan { color:#81938c; font-size:11px; line-height:1.7; margin:9px 0 0; }
+.assistant-live-plan { color:#58796b; }
+.assistant-live-tools { margin:12px 0 0; padding:0; list-style:none; }
+.assistant-message .assistant-live-tools li { position:relative; margin:0; padding:7px 0 7px 21px; font-size:12px; color:#527165; border-left:1px solid #dbe8e1; }
+.assistant-live-tools li::before { content:'✓'; position:absolute; left:-7px; top:8px; width:13px; height:15px; background:#f7faf8; color:#348571; font-size:11px; text-align:center; }
+.assistant-live-tools li[data-state=running]::before { content:'•'; color:#4f9b82; animation:assistant-wait .8s ease-in-out infinite alternate; }
+.assistant-live-tools li[data-state=failed]::before { content:'!'; color:#b27636; }
+.assistant-live-run[data-state=completed]>summary::before { content:'✓'; border:0; animation:none; color:#33836b; }
+.assistant-live-run[data-state=failed]>summary::before { content:'!'; border:0; animation:none; color:#b27636; }
+.assistant-run-summary { margin-top:14px; border-top:1px solid #e5ede8; padding-top:10px; }
+.assistant-run-summary>summary { color:#71877b!important; font-size:12px; }
+.assistant-run-summary[open]>summary { color:#267969!important; margin-bottom:14px; }
+.assistant-stop { font-size:12px; white-space:nowrap; padding:8px 12px; }
+.assistant-stop[hidden] { display:none!important; }
+.assistant-condition-bar[hidden], #insightRoleSource[hidden],
+#assistantModelNotice:empty, #assistantNotice:empty,
+#insightTransferSource:empty, #salaryEstimateBasis:empty { display:none; }
+.insight-dataset-error { display:flex; align-items:center; gap:12px; color:#9c543a; font-size:12px; }
+.insight-dataset-error[hidden] { display:none; }
+@keyframes assistant-spin { to {transform:rotate(360deg);} }
+@media(prefers-reduced-motion:reduce) { .assistant-live-run>summary::before,.assistant-live-tools li[data-state=running]::before {animation:none;} }

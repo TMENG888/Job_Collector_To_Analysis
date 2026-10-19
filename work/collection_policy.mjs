@@ -24,7 +24,7 @@ export async function checkedJsonResponse(response, channel='渠道') {
   try { return JSON.parse(text); }
   catch { throw fail('岗位响应不是有效 JSON，停止该渠道并保留断点', 'invalid_response'); }
 }
-export async function boundedFetch(url, options={}, {attempts=4, fetchImpl=fetch, wait=ms=>new Promise(r=>setTimeout(r,ms)), before=async()=>{}, timeoutMs=30000}={}) {
+export async function boundedFetch(url, options={}, {attempts=4, fetchImpl=fetch, wait=ms=>new Promise(r=>setTimeout(r,ms)), before=async()=>{}, timeoutMs=30000,isValidatedData=()=>false}={}) {
   const limit=Math.max(1,Math.min(4,Number(attempts)||1));
   for(let attempt=1;attempt<=limit;attempt++) {
     await before();
@@ -33,7 +33,7 @@ export async function boundedFetch(url, options={}, {attempts=4, fetchImpl=fetch
       if([401,403,429].includes(response.status))throw Object.assign(Error(`HTTP ${response.status}，该渠道已停止，不自动重试登录/验证/限流`),{code:'access_blocked',stopChannel:true});
       if(!response.ok)throw Object.assign(Error(`HTTP ${response.status}`),{code:'http_error',retryable:response.status>=500});
       const body=await response.clone().text();
-      if(/^\s*</.test(body)&&(/aliyun_waf|<textarea[^>]*\bid=["']?(?:renderData|styleData)/i.test(body)||body.length<10000&&/访问验证|请按住滑块|人机验证/i.test(body)))
+      if(!isValidatedData(response)&&/^\s*</.test(body)&&(/aliyun_waf|<textarea[^>]*\bid=["']?(?:renderData|styleData)/i.test(body)||body.length<10000&&/访问验证|请按住滑块|人机验证/i.test(body)))
         throw Object.assign(Error('返回安全验证页面，请在平台登录入口人工处理，已停止该渠道'),{code:'verification_required',stopChannel:true});
       return response;
     }catch(error){

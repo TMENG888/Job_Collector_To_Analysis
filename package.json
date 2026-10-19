@@ -1,6 +1,6 @@
 {
   "name": "job-collector-to-analysis",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "本机岗位采集、数据去重、标注与岗位市场洞察控制台",
@@ -11,6 +11,8 @@
     "test": "node scripts/run-unit-tests.mjs",
     "docs:demo": "node scripts/docs-demo.mjs",
     "test:docs": "node scripts/test-docs-demo.mjs",
+    "test:desktop": "node --test desktop/policy.test.mjs",
+    "test:supervised": "node work/test_supervised_release.mjs",
     "check:release": "node scripts/check-release.mjs"
   },
   "dependencies": { "playwright": "1.62.1" },

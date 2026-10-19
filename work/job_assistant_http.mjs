@@ -3,7 +3,8 @@ import {cohortConditionValue} from '../job_collector_ui/public/insight-cohorts.j
 import {createChatAgent} from './job_assistant_chat.mjs';
 import {extractResumeAttachment} from './job_assistant_resume.mjs';
 import {resumeMessage} from './job_assistant_resume.mjs';
-import {isCollectionRequest,collectionOnlyIndex} from './job_assistant_collection.mjs';
+import {collectionOnlyIndex} from './job_assistant_collection.mjs';
+import {storageError} from './knowledge_storage.mjs';
 function json(res,status,value){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));}
 export function createAssistantHandler(store,credentials=null,chatOptions={}){
   let active=0;
@@ -15,11 +16,11 @@ export function createAssistantHandler(store,credentials=null,chatOptions={}){
       const origin=req.headers.origin;
       if(origin){let url;try{url=new URL(origin);}catch{}if(!url||url.protocol!=='http:'||!['127.0.0.1','localhost'].includes(url.hostname)||!['8788','8765','8791',String(req.headers.host||'').split(':').pop()].includes(url.port)){json(res,403,{error:'仅允许本机控制台访问'});return true;}}
       if(req.method==='GET'&&pathname.endsWith('/model')){json(res,200,credentials?await credentials.status():modelAvailability());return true;}
-      if(req.method==='GET'&&pathname.endsWith('/sessions')){json(res,200,{sessions:await chat.list(),persistent:!!chatOptions.repository,collection_flow_version:2});return true;}
+      if(req.method==='GET'&&pathname.endsWith('/sessions')){json(res,200,{sessions:await chat.list(),persistent:!!chatOptions.repository,collection_flow_version:4});return true;}
       if(req.method==='GET'&&pathname.endsWith('/context')){
         let index;try{index=await store.load();}catch(error){if(!chatOptions.collectionControl)throw error;index=collectionOnlyIndex;}
         const options=Object.fromEntries(['city','experience','education','employment_type'].map(field=>[field,[...new Set(index.jobs.map(j=>cohortConditionValue(j,field)))].sort((a,b)=>a.localeCompare(b,'zh-CN'))]));
-        json(res,200,{role:index.report.role,generated_at:index.report.generated_at,indexed_jobs:index.jobs.length,
+        json(res,200,{assistant_flow_version:6,streaming:true,features:['career_goal','salary_benchmark','job_details','clarification','multi_city_role','resumable_task','data_admission','scoped_tools','live_execution','flexible_query_scope','market_salary_scope','role_scope_edits','tool_failure_recovery'],data_quality:index.report.data_quality,role:index.report.role,generated_at:index.report.generated_at,indexed_jobs:index.jobs.length,
           verified_sources:index.jobs.filter(j=>j.source_verified).length,roles:index.report.roles||[index.report.role],knowledge:!!index.report.knowledge,revision:index.report.revision,candidate_rows:index.report.candidate_rows,options,model:credentials?await credentials.status():modelAvailability(),
           collection_control:!!chatOptions.collectionControl,retrieval:'多轮系统工具Agent；岗位工具只读，采集写操作需确认；未配置模型时使用本地规则模式',privacy:'历史会话本机加密保存；简历原文仅存内存，闲置30分钟或重启后需重新提供。发送消息默认调用已配置模型，外发脱敏最近对话、技能与少量证据，不发送简历原文。'});return true;
       }
@@ -43,7 +44,27 @@ export function createAssistantHandler(store,credentials=null,chatOptions={}){
       try{
         if(pathname.endsWith('/attachment')){json(res,200,await extractResumeAttachment(body));return true;}
         if(pathname.endsWith('/action')){json(res,200,await chat.action(body));return true;}
-        const collection=chatOptions.collectionControl&&pathname.endsWith('/chat')&&body.resume==null&&resumeMessage(String(body.message||''))===null&&isCollectionRequest(body.message);
+        const collection=chatOptions.collectionControl&&pathname.endsWith('/chat')&&body.resume==null&&resumeMessage(String(body.message||''))===null&&await chat.isCollectionMessage(body.message,body.conversationId);
+        if(pathname.endsWith('/chat')&&String(req.headers.accept||'').includes('text/event-stream')){
+          const controller=new AbortController(),cancel=()=>controller.abort();res.once('close',cancel);
+          res.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-cache, no-transform','x-accel-buffering':'no'});res.flushHeaders();
+          const emit=event=>{if(!res.destroyed&&!res.writableEnded)res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);};
+          const heartbeat=setInterval(()=>{if(!res.destroyed&&!res.writableEnded)res.write(': heartbeat\n\n');},10000);heartbeat.unref();
+          try{
+            emit({type:'phase',phase:'loading',message:collection?'已接收请求，正在连接采集中心':'已接收请求，正在读取已入库的岗位证据'});
+            const index=collection?collectionOnlyIndex:await store.load();
+            if(controller.signal.aborted)return true;
+            const turn=await chat.run(index,body,controller.signal,emit);
+            // Publish only the grounded/validated answer. Provider drafts and
+            // private reasoning are never forwarded, even on failed citations.
+            emit({type:'answer_start',message:'核验完成，正在呈现答复'});
+            const letters=Array.from(turn.answer||'');
+            for(let n=0;n<letters.length;n+=96){if(controller.signal.aborted)return true;emit({type:'answer_delta',text:letters.slice(n,n+96).join('')});}
+            emit({type:'done',turn});
+          }catch(error){emit({type:'error',message:String(storageError(error).message||'本轮未完成').slice(0,300)});}
+          finally{clearInterval(heartbeat);res.off('close',cancel);if(!res.destroyed)res.end();}
+          return true;
+        }
         const index=collection?collectionOnlyIndex:await store.load();
         if(pathname.endsWith('/chat')){
           const controller=new AbortController(),cancel=()=>controller.abort();res.once('close',cancel);
@@ -56,7 +77,7 @@ export function createAssistantHandler(store,credentials=null,chatOptions={}){
         }
         json(res,200,result);
       }finally{active--;}
-    }catch(error){json(res,400,{error:error.code==='ENOENT'?'尚无岗位洞察报告，请先生成分析':String(error.message||'请求失败').slice(0,300)});}
+    }catch(error){if(!res.headersSent&&!res.destroyed)json(res,400,{error:error.code==='ENOENT'?'尚无岗位洞察报告，请先生成分析':String(storageError(error).message||'请求失败').slice(0,300)});else if(!res.destroyed)res.end();}
     return true;
   };
 }

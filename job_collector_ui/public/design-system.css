@@ -1,5 +1,16 @@
 /* Shared visual skin. styles.css owns module layouts; this file owns the
    assistant-led palette, surfaces, controls and responsive application shell. */
+.skill-term-review { margin:16px 0; padding:20px; }
+.skill-term-review > summary { cursor:pointer; color:var(--ink); font-weight:600; }
+.skill-term-review > p,.skill-term-candidate > p,.skill-term-candidate > small { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
+.skill-term-controls,.skill-term-actions { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:12px 0; }
+.skill-term-controls label { display:grid; gap:5px; min-width:160px; max-width:100%; }
+.skill-term-candidate { border-top:1px solid var(--line); padding:16px 0 8px; }
+.skill-term-candidate header { display:flex; flex-wrap:wrap; gap:12px; align-items:baseline; }
+.skill-term-candidate header strong { color:var(--teal-dark); font-size:18px; }
+.skill-term-candidate blockquote { margin:12px 0; padding:12px 16px; border-left:3px solid var(--brand-line); background:var(--soft); white-space:pre-wrap; overflow-wrap:anywhere; }
+.skill-term-candidate small { display:block; }
+@media(max-width:600px) { .skill-term-controls label { width:100%; } .skill-term-review { padding:14px; } }
 :root {
   color-scheme: light;
   --ink: #293d34;
@@ -233,4 +244,28 @@ dialog form { padding: 26px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
+
+/* Message utilities inherit the existing palette; no DeepSeek brand assets. */
+.assistant-message-actions { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:12px; }
+.assistant-message-action { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:32px; padding:5px 8px; border:0; border-radius:7px; background:transparent; color:var(--muted); font-size:12px; font-weight:400; line-height:1.4; cursor:pointer; }
+.assistant-message-action svg { width:15px; height:15px; flex-shrink:0; }
+.assistant-message-action:hover { color:var(--teal-dark); background:var(--surface-hover); }
+.assistant-message-action:focus-visible,.assistant-scroll-latest:focus-visible { outline:2px solid var(--teal-dark); outline-offset:3px; }
+.assistant-message-action:disabled { opacity:.45; cursor:wait; }
+.assistant-message-user .assistant-message-actions { justify-content:flex-end; margin-top:5px; }
+.assistant-message-user .assistant-message-action { padding:4px 7px; }
+.assistant-code-block { min-width:0; margin:16px 0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--soft); }
+.assistant-code-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:5px 12px; border-bottom:1px solid var(--line); color:var(--muted); font-size:12px; }
+.assistant-markdown .assistant-code-block pre { border:0; border-radius:0; margin:0; background:transparent; }
+.assistant-edit-notice { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px; padding:0 5px 9px; margin-bottom:7px; border-bottom:1px solid var(--line); color:var(--teal-dark); font-size:12px; }
+.assistant-edit-notice[hidden],.assistant-scroll-latest[hidden] { display:none; }
+.assistant-edit-notice button { font-size:12px; padding:4px 8px; }
+.assistant-scroll-tools { position:relative; flex-shrink:0; height:0; z-index:2; display:flex; justify-content:center; }
+.assistant-scroll-latest { position:absolute; bottom:10px; border:1px solid var(--line); background:var(--paper); color:var(--teal-dark); border-radius:20px; padding:7px 13px; box-shadow:0 3px 12px #182a2012; font-size:12px; cursor:pointer; }
+.assistant-clipboard-fallback,.assistant-plain-copy { position:fixed!important; left:-100000px!important; top:0!important; width:800px!important; pointer-events:none!important; }
+@media(max-width:600px) {
+  .assistant-message-actions { gap:2px; }
+  .assistant-message-action { min-height:36px; padding:6px; font-size:11px; }
+  .assistant-edit-notice { line-height:1.6; }
 }

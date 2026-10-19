@@ -35,6 +35,18 @@ try{
   const insight=await until(async()=>{const state=await api('/api/insights');if(state.status==='failed')throw new Error(state.message);return state.status==='completed'&&state.report?state:null;});
   assert.equal(insight.report.total_rows,28);
   assert.equal(insight.report.input_file,source.dataset.path);
+  // Read newly committed task data without exporting or restarting collection.
+  await writeNativeChannelRows(task.outputDir,task.id,[{platform:'智联招聘',job_id:'live-new',job_name:'嵌入式软件开发工程师',company_name:'中途新增测试公司',city:'北京',salary:'15-25K',job_url:'https://example.com/live-new',job_description:'岗位职责：负责嵌入式软件开发与STM32固件设计、RTOS实时任务调试及Linux驱动开发。任职要求：熟悉C++与ARM。'}]);
+  const liveSource=await api(`/api/tasks/${task.id}/insight-source`);
+  assert.equal(liveSource.dataset.expectedRows,29);
+  assert.equal((await api('/api/insights')).report.total_rows,28,'existing report must not silently change');
+  await api('/api/insights/run',{inputFile:liveSource.dataset.path,sourceTaskId:task.id,analysisMode:'full'});
+  const newer=await until(async()=>{const state=await api('/api/insights');if(state.status==='failed')throw new Error(state.message);return state.status==='completed'&&state.report?.total_rows===29?state:null;});
+  assert.notEqual(newer.report.knowledge_snapshot,insight.report.knowledge_snapshot);
+  const unbounded=(await api('/api/tasks',{label:'无数量隔离测试',primaryKeyword:'嵌入式软件开发',platforms:['iguopin'],cities:['北京'],adaptiveSearch:false})).task;
+  assert.equal(unbounded.targetRows,null);assert.equal(unbounded.collectUntilExhausted,true);
+  assert.equal((await api(`/api/tasks/${unbounded.id}`)).task.metrics.targetReached,false);
+  assert.equal(unbounded.status,'ready','creating without a count must not start real requests');
   const {job}=await api('/api/labels',{inputFile:source.dataset.path,jobFamily:'智能体/大模型应用',platform:'rules',sampleSize:5});
   assert.ok(job.inputFile.startsWith('kb://snapshot/'));
   await api(`/api/labels/${job.id}/run`,{});

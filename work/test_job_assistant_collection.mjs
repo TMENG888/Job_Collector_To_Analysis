@@ -64,13 +64,16 @@ try{
   const config={action:'create',label:'测试',target_rows:30};
   await assert.rejects(control.prepare({...config,platforms:['boss']},state,'创建测试任务，目标30条'),/渠道不可用/);
   await assert.rejects(control.prepare({...config,target_rows:31},state,'创建测试任务，目标30条'),/不一致/);
-  await assert.rejects(control.prepare(config,state,'创建测试任务'),/明确采集目标/);
+  const noCount=await control.prepare(config,{},'创建测试任务');
+  assert.equal(noCount.action.config.target_rows,null,'model must not invent a missing user target');
+  assert.equal(noCount.action.config.collect_until_exhausted,true);
   await assert.rejects(control.prepare({...config,url:'http://evil'},state,'创建测试任务，目标30条'),/参数不受支持/);
   await assert.rejects(control.prepare({...config,outputDir:'C:\\'},state,'创建测试任务，目标30条'),/参数不受支持/);
   await assert.rejects(control.prepare({...config,action:'create_start'},state,'创建测试任务，目标30条'),/不能自动启动/);
   await assert.rejects(control.prepare({action:'pause',task_id:taskId},state,'为什么暂停了采集任务'),/没有明确请求/);
   await assert.rejects(control.prepare({action:'resume',task_id:taskId},{collectionFocused:taskId},'查询进度，不启动任务'),/没有明确请求/);
-  assert.equal((await control.local('创建测试采集任务，目标30条，只采北京',{})).status,'clarification');
+  const localCityPlan=await control.local('创建测试采集任务，目标30条，只采北京',{});
+  assert.equal(localCityPlan.status,'ready');assert.deepEqual(localCityPlan.action.config.cities,['北京']);
   await assert.rejects(control.read('collection_task_status',{task_id:'../private'},state),/ID无效/);
   const pending=await run('暂停这个采集任务',id),record=await repo.read(id);
   record.state.actions.find(p=>p.id===pending.result.action.id).status='executing';await repo.write(record);
@@ -149,7 +152,15 @@ try{
   assert.ok(failedTurn.trace.some(t=>t.tool==='collection_prepare_action'&&t.status==='failed'));assert.match(failedTurn.answer,/目标.*不一致/);assert.doesNotMatch(failedTurn.answer,/已启动/);assert.equal(writes.length,beforeFailure);
   response=await post('/api/assistant/chat',{message:'确认并采集',conversationId:followId});assert.equal(response.status,200);assert.equal(storeLoads,1,'confirmation must not load job knowledge');assert.equal((await response.json()).result.action.status,'cancelled');
   console.log('PASS: simulated create → start → progress → logs → pause → resume → export; no writes before confirmation; cancellation/expiry/state revalidation/session binding/restart deduplication/uncertain execution; blocked channels/paths/guessed targets; DeepSeek tool continuation and HTTP without knowledge');
-  console.log('PASS: chat confirmation resolution, expiry renewal, restart/cancellation guards, legacy keyword repair, primary keyword separation, explicit tool-failure continuation and no real collection/model calls');
+  const noCountWrites=writes.length;
+  const noCountTurn=await run('帮我采集下网络运维工程师的数据');
+  assert.equal(noCountTurn.result.action.config.label,'网络运维工程师');
+  assert.equal(noCountTurn.result.action.config.collect_until_exhausted,true);
+  assert.equal(writes.length,noCountWrites);
+  await act(noCountTurn);
+  const noCountBody=writes.find((entry,i)=>i>=noCountWrites&&entry.pathname==='/api/tasks').body;
+  assert.equal(noCountBody.targetRows,null);assert.equal(noCountBody.collectUntilExhausted,true);
+  console.log('PASS: chat confirmation resolution, expiry renewal, restart/cancellation guards, legacy keyword repair, primary keyword separation, explicit tool-failure continuation, no-count creation and no real collection/model calls');
 }finally{
   for(const agent of agents)agent.close();if(server)await new Promise(resolve=>server.close(resolve));
   assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir())+path.sep)&&path.basename(directory).startsWith('assistant-collection-test-'));await fs.rm(directory,{recursive:true,force:true});

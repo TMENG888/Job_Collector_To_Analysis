@@ -8,6 +8,6 @@ export function normalize51Records(records,keyword,city,total,{htmlToText,collec
     refresh_time:row.updateDateTime||row.confirmDateString,deadline:'',tags:(row.jobTags||[]).join(' | '),
     skills:(row.sesameLabelList||[]).map(item=>item.label||item.name||item).join(' | '),job_description:htmlToText(row.jobDescribe),
     address:row.address||row.jobAreaString,recruiter_name:row.hrName,recruiter_title:row.hrPosition,job_url:row.jobHref,
-    company_url:row.encCoId?`https://jobs.51job.com/all/co${row.encCoId}.html`:'',source_total:total,access_level:'页面会话完整列表字段',collected_at:collectedAt,
+    company_url:row.encCoId?`https://jobs.51job.com/all/co${row.encCoId}.html`:'',source_total:total,access_level:row.access_level||'本地会话接口完整字段',acquisition_mode:row.acquisition_mode||'browser_session_api',collected_at:collectedAt,
   }));
 }

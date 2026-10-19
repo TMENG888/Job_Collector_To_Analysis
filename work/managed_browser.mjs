@@ -7,6 +7,13 @@ import {chromium} from 'playwright';
 import {randomUUID} from 'node:crypto';
 import {writeJsonAtomic} from './collector_storage.mjs';
 import {navigatePlatformLogin} from './platform_login_navigation.mjs';
+import {collectionMode,HYBRID_MODE,browserFallbackPlatforms,sessionProxyPlatforms} from './channel_acquisition.mjs';
+export function assertBrowserPlatform(key){
+  // 会话代理平台（如 job51）：仅用浏览器提供 WAF/会话，调用接口；任何模式均允许。
+  if(sessionProxyPlatforms.includes(key))return;
+  // HTTP readiness must never grant permission to launch the legacy browser.
+  if(['shixiseng','iguopin','zhaopin','yupao','boss','liepin','job51','jobonline','mohrss'].includes(key)&&!(collectionMode()===HYBRID_MODE&&browserFallbackPlatforms.includes(key)))throw Object.assign(Error('当前任务未启用该渠道的浏览器采集'),{code:'DIRECT_HTTP_REQUIRED',stopChannel:true});
+}
 export const platformKeys=['zhaopin','yupao','boss','liepin','job51','jobonline','deepseek','kimi','tongyi','zhipu','doubao'];
 export const browserProfileRoot=()=>process.env.JOB_BROWSER_PROFILE_ROOT||path.join(process.env.LOCALAPPDATA||os.tmpdir(),'CodexJobCollectorProfilesV2');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -61,6 +68,7 @@ async function lockFile(file){
   }throw Error('该平台浏览器启动锁被占用，请检查活动进程；不要清空登录目录');
 }
 export async function ensureManagedBrowser(key){
+  assertBrowserPlatform(key);
   const registered=await managedBrowserState(key);if(registered)return {...registered,reused:true};
   const file=registryFile(key),release=await lockFile(file+'.lock');
   try{
@@ -75,6 +83,7 @@ export async function ensureManagedBrowser(key){
   }finally{await release();}
 }
 export async function switchManagedBrowser(key,{url='https://www.yupao.com/zhaogong/'}={}){
+  assertBrowserPlatform(key);
   if(key!=='yupao')throw Error('当前仅支持鱼泡切换浏览器');
   const file=registryFile(key),workerFile=file+'.worker.lock';
   const owner=await fs.readFile(workerFile,'utf8').then(JSON.parse).catch(()=>null);
@@ -136,6 +145,7 @@ export async function switchManagedBrowser(key,{url='https://www.yupao.com/zhaog
   }
 }
 export async function connectManagedContext(key,{lease=true}={}){
+  assertBrowserPlatform(key);
   let releaseLease;
   if(lease){
     const file=registryFile(key)+'.worker.lock';

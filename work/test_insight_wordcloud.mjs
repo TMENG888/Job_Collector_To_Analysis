@@ -16,7 +16,8 @@ for(let i=1;i<layout.words.length;i++){
 const meanRadius=words=>words.reduce((sum,word)=>sum+radialDistance(word),0)/words.length;
 assert.ok(meanRadius(layout.words.slice(0,10))<meanRadius(layout.words.slice(-10)),'low weight words cluster further outward');
 assert.equal(wordCloudTerms([...terms,...terms]).length,100);
-assert.match(renderKeywordWordCloud(terms),/展示 100 个关键词/);
+assert.match(renderKeywordWordCloud(terms),/共100个词/);
+assert.doesNotMatch(renderKeywordWordCloud(terms),/wordcloud-summary|Ctrl＋滚轮缩放/);
 assert.match(renderKeywordWordCloud(terms),/仅展示，不参与岗位筛选/);
 assert.match(renderKeywordWordCloud([{name:'<script>alert(1)</script>',score:1}]),/&lt;script&gt;/);
 assert.match(renderKeywordWordCloud([]),/暂无/);

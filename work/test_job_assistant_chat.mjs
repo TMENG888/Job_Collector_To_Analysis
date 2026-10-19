@@ -7,7 +7,7 @@ let clock=0;
 const agent=createChatAgent({now:()=>clock});
 let turn=await agent.run(index,{message:'北京、三年经验、本科的岗位有哪些？'});
 const id=turn.conversationId;assert.equal(turn.filters.city,'北京');assert.equal(turn.filters.years,3);assert.equal(turn.result.scope.matched_jobs,5);
-turn=await agent.run(index,{message:'换成上海',conversationId:id});assert.equal(turn.filters.city,'上海');assert.equal(turn.filters.education,'本科');assert.equal(turn.result.scope.matched_jobs,5);
+turn=await agent.run(index,{message:'换成上海',conversationId:id});assert.equal(turn.filters.city,'上海');assert.equal(turn.filters.candidate_education,'本科');assert.equal(turn.result.scope.matched_jobs,5);
 const first=turn.selection[0].key;
 turn=await agent.run(index,{message:'对比前两个岗位',conversationId:id});assert.equal(turn.result.sources.length,2);assert.equal(turn.result.sources[0].key,first);assert.equal(turn.trace[0].tool,'compare_jobs');
 turn=await agent.run(index,{message:'给我准备计划',conversationId:id});assert.ok(turn.result.plan.length);assert.equal(turn.trace[0].tool,'prepare_plan');
@@ -19,8 +19,8 @@ turn=await agent.run(index,{message:'嵌入式岗位有哪些？',conversationId
 clock=31*60*1000;await assert.rejects(agent.run(index,{message:'继续',conversationId:id}),/过期/);
 assert.equal(conversationConditions(index,'取消薪资筛选',{salary_min_k:20}).salary_min_k,undefined);
 assert.equal(conversationConditions(index,'从北京换成上海',{city:'北京'}).city,'上海');
-assert.throws(()=>conversationConditions(index,'不看实习'),/不会/);
-assert.throws(()=>conversationConditions(index,'北京和上海岗位'),/多个城市/);
+assert.equal(conversationConditions(index,'不看实习').career_stage,'formal');
+assert.deepEqual(conversationConditions(index,'北京和上海岗位').cities,['北京','上海']);
 agent.close();
 
 let requests=[];

@@ -22,7 +22,9 @@ if len(sys.argv) < 3:
 output_dir = Path(sys.argv[1]).resolve()
 profile_path = Path(sys.argv[2]).resolve()
 profile = json.loads(profile_path.read_text(encoding="utf-8"))
-target_rows = int(sys.argv[3]) if len(sys.argv) > 3 else int(profile.get("target_rows", 5000))
+raw_target = sys.argv[3] if len(sys.argv) > 3 else profile.get("target_rows", 5000)
+target_rows = int(raw_target) if raw_target not in (None, "", "null") else 0
+unbounded = bool(profile.get("collect_until_exhausted")) or target_rows <= 0
 label = str(profile.get("label") or "岗位").strip()
 task_id = profile.get("task_id")
 if not task_id:
@@ -90,7 +92,7 @@ def discover_sources():
             if not owner_path.exists() or json.loads(owner_path.read_text(encoding="utf-8")).get("task_id") != task_id:
                 raise ValueError(f"外部源目录不属于当前任务，拒绝混入历史数据：{directory}")
         for candidate in directory.glob("*_标准化数据.csv"):
-            if candidate.name not in {f"{channel}_标准化数据.csv" for channel in ["shixiseng", "iguopin", "mohrss", "job51", "jobonline", "zhaopin", "yupao", "boss"]}:
+            if candidate.name not in {f"{channel}_标准化数据.csv" for channel in ["shixiseng", "iguopin", "mohrss", "job51", "jobonline", "zhaopin", "liepin", "yupao", "boss"]}:
                 continue
             if candidate.name in excluded_names or candidate.name.startswith(f"{label}岗位_"):
                 continue
@@ -199,7 +201,7 @@ for row in deduped:
 
 rank = {level_name: index for index, level_name in enumerate(levels)}
 eligible.sort(key=lambda row: rank.get(row.get("relevance_level", ""), len(rank)))
-rows = eligible[:target_rows] if profile.get("trim_to_target") else eligible
+rows = eligible[:target_rows] if profile.get("trim_to_target") and not unbounded else eligible
 for index, row in enumerate(rows, 1):
     row["record_no"] = index
 
@@ -243,7 +245,7 @@ quality = {
     "trimmed_rows": len(eligible) - len(rows),
     "dataset_label": label,
     "target_rows": target_rows,
-    "target_reached": len(rows) >= target_rows,
+    "target_reached": not unbounded and len(rows) >= target_rows,
     "input_rows": len(raw_rows),
     "unified_checkpoint_rows_added": unified_added,
     "unique_rows_before_filter": len(deduped),
@@ -271,7 +273,7 @@ manifest = {
     "label": label,
     "target_rows": target_rows,
     "rows": len(rows),
-    "target_reached": len(rows) >= target_rows,
+    "target_reached": not unbounded and len(rows) >= target_rows,
     "dataset": stable_csv.name,
     "dataset_json": stable_json.name,
     "named_dataset": named_csv.name,
@@ -289,7 +291,7 @@ print(json.dumps({
     "output_dir": str(output_dir),
     "rows": len(rows),
     "target": target_rows,
-    "target_reached": len(rows) >= target_rows,
+    "target_reached": not unbounded and len(rows) >= target_rows,
     "duplicates_removed": duplicate_count,
     "csv": str(stable_csv),
     "json": str(stable_json),

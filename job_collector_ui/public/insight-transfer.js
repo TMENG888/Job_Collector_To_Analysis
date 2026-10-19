@@ -1,6 +1,9 @@
 export const localPathKey = (value) => String(value || '').trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase();
 export async function resolveLatestInsightSource(task,request){
-  try{return (await request(`/api/knowledge/tasks/${encodeURIComponent(task.id)}/source`)).dataset;}catch(error){if(error.status!==404)throw error;}
+  // Task-scoped transfer refreshes committed intermediate rows and carries the
+  // running flag; a catalog lookup alone may still be the previous poll.
+  try{return (await request(`/api/tasks/${encodeURIComponent(task.id)}/insight-source`,{timeoutMs:120000})).dataset;}catch(error){if(error.status!==404)throw error;}
+  try{const dataset=(await request(`/api/knowledge/tasks/${encodeURIComponent(task.id)}/source`)).dataset;return {...dataset,collecting:['running','stopping'].includes(task.status)};}catch(error){if(error.status!==404)throw error;}
   try{return (await request(`/api/tasks/${encodeURIComponent(task.id)}/refresh-latest`,{method:'POST',body:'{}',timeoutMs:120000})).dataset;}
   catch(error){
     if(error.status!==404)throw error;

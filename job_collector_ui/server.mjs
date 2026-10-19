@@ -5,20 +5,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { labelKey, labelDigest, reviewState, selectReviewAuditRows, readJsonLines, consensusLabelsForWorkbook } from '../work/reviewed_job_labels.mjs';
-import { labelPolicy, resumeBlock } from '../work/label_runtime_policy.mjs';
 import { taskInsightSource } from '../work/task-insight-source.mjs';
+import { resolveInsightSourceRole } from '../work/insight-source-role.mjs';
 import { bossCities } from '../work/boss_page_adapter.mjs';
 import {assertCollectorResources,nativeCrashMessage} from '../work/collector_resources.mjs';
-import {ownedReport,isolatedDirectory,isolateLegacyTask} from '../work/task_dataset_scope.mjs';
+import {ownedReport,isolatedDirectory,isolateLegacyTask,assertTaskOutputOwnership} from '../work/task_dataset_scope.mjs';
+import {snapshotTaskOutput,inspectTaskBackup,restoreTaskBackup} from '../work/task_output_backup.mjs';
 import {writeJsonAtomic,writeAtomic} from '../work/collector_storage.mjs';
 import {createHash} from 'node:crypto';
 import {sessionFileName} from '../work/manual_search_session.mjs';
-import {managedBrowserState,switchManagedBrowser} from '../work/managed_browser.mjs';
 import {stageDisposition} from '../work/collection_policy.mjs';
 import {deliverPartial} from '../work/partial_delivery.mjs';
 import {otherChannelValidCount} from '../work/task_collection_target.mjs';
-import {collectionChannelAvailable,retiredCollectionChannels} from '../work/channel_availability.mjs';
+import {collectionChannelAvailable,collectionChannelPauseReason,assertDirectHttpCollection,retiredCollectionChannels} from '../work/channel_availability.mjs';
+import {collectionTransportPolicy} from '../work/channel_acquisition.mjs';
 import {liveCollectionMetrics} from '../work/live_collection_metrics.mjs';
 import {synchronizePublicKeywords} from '../work/task_collection_config.mjs';
 import {updateUnifiedDataset} from '../work/unified_collection_store.mjs';
@@ -31,7 +31,22 @@ import {createAssistantCredentialStore} from '../work/job_assistant_credentials.
 import {createAssistantSessionStore} from '../work/job_assistant_sessions.mjs';
 import {assistantSessionDirectory} from '../work/job_assistant_storage.mjs';
 import {createCollectionControl} from '../work/job_assistant_collection.mjs';
-import {zhaopinCities} from '../work/collection_cities.mjs';
+import {zhaopinCities,jobonlineCities} from '../work/collection_cities.mjs';
+import {liepinCities} from '../work/liepin_cities.mjs';
+import {channelAcquisition,collectionPolicyFor,collectionMode,HYBRID_MODE} from '../work/channel_acquisition.mjs';
+import {prepareStructuredCollection} from '../work/structured_collection_plan.mjs';
+import {runAdaptiveCollection} from '../work/collection_search_queue.mjs';
+import {PipelineRuns} from '../work/pipeline_runs.mjs';
+import {collectionStopMessage} from '../work/jobonline_pagination_health.mjs';
+import {collectionGoal,untilExhausted,goalText,collectionOutcome} from '../work/collection_goal.mjs';
+import {migrateLegacyCollectionGoals} from '../work/legacy_collection_goal.mjs';
+import {createInsightSupervised,createInsightSupervisedHandler} from '../work/insight-supervised.mjs';
+import {selectManualRole} from '../work/insight-role-selection.mjs';
+import {roleFamilies} from '../work/job_knowledge_schema.mjs';
+import {roleClassifier} from '../work/role-classifier-registry.mjs';
+import {createBrowserWorkspace} from '../work/job-browser-workspace.mjs';
+import {createBrowserScreening} from '../work/job-browser-screening.mjs';
+import {createSemanticCloud,createSemanticCloudHandler} from '../work/insight-semantic-cloud.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -40,28 +55,33 @@ const dataDir = process.env.JOB_UI_DATA_DIR ? path.resolve(process.env.JOB_UI_DA
 const taskDataDir = path.join(dataDir, 'tasks');
 const logDir = path.join(dataDir, 'logs');
 const tasksPath = path.join(dataDir, 'tasks.json');
-const platformSessionDir = path.join(dataDir, 'platform_sessions');
-const platformStatusPath = path.join(platformSessionDir, '登录会话状态.json');
-const labelDataDir = path.join(dataDir, 'label_tasks');
-const labelLogDir = path.join(dataDir, 'label_logs');
-const labelJobsPath = path.join(dataDir, 'label_jobs.json');
-const labelPlatformRuntimeDir = path.join(dataDir, 'label_platform_runtime');
+// Collectors may still read existing sessions; interactive login management is retired.
+const platformStatusPath = path.join(dataDir, 'platform_sessions', '登录会话状态.json');
+const taskBackupRoot=path.resolve(process.env.JOB_TASK_BACKUP_ROOT||(process.env.JOB_UI_DATA_DIR?path.join(dataDir,'task_backups'):path.join(os.homedir(),'.job-collector','task-backups')));
+const taskOutputRoot=path.resolve(process.env.JOB_TASK_OUTPUT_ROOT||(process.env.JOB_UI_DATA_DIR?path.join(dataDir,'task_outputs'):process.platform==='win32'&&fsSync.existsSync('D:/')?'D:/岗位采集数据':path.join(dataDir,'task_outputs')));
 const insightDataDir = path.join(dataDir, 'insights');
 const insightStatePath = path.join(insightDataDir, 'state.json');
 const insightConfigPath = path.join(insightDataDir, 'config.json');
 const insightReportPath = path.join(insightDataDir, '岗位市场洞察.json');
 const insightLogPath = path.join(insightDataDir, 'analysis.log');
 const knowledge=knowledgeStore(dataDir);
+const insightSupervised=createInsightSupervised(dataDir);
+const classifierScope=inputFile=>{
+  const source=resolveInsightSourceRole({inputFile},tasks);
+  return {inputFile,role:selectManualRole(roleFamilies,source.role)?.name||source.role};
+};
+const handleInsightClassifier=createInsightSupervisedHandler(insightSupervised,classifierScope);
+const semanticCloud=createSemanticCloud(dataDir,{supervised:insightSupervised,scope:classifierScope});
+const handleSemanticCloud=createSemanticCloudHandler(semanticCloud);
 const handleKnowledge=createKnowledgeHandler(dataDir);
-const insightDatasetRoot = process.env.JOB_INSIGHT_DATASET_ROOT ? path.resolve(process.env.JOB_INSIGHT_DATASET_ROOT) : path.join(root, 'outputs');
+const insightDatasetRoot = path.resolve(process.env.JOB_INSIGHT_DATASET_ROOT || path.join(root, 'outputs'));
 const host = '127.0.0.1';
 const port = Number(process.env.JOB_UI_PORT || process.argv[2] || 8765);
-const handleJobAssistant = createAssistantHandler(createKnowledgeAssistantStore(dataDir),createAssistantCredentialStore(path.join(dataDir,'assistant_private','model.json')),{repository:createAssistantSessionStore(await assistantSessionDirectory(dataDir)),collectionControl:createCollectionControl({baseUrl:`http://${host}:${port}`,storageDir:dataDir,getCities:()=>Object.keys(zhaopinCities)})});
+const browserWorkspace=createBrowserWorkspace(dataDir,{screening:createBrowserScreening({supervised:insightSupervised})});
+const handleJobAssistant = createAssistantHandler(createKnowledgeAssistantStore(dataDir,{readOnly:true}),createAssistantCredentialStore(path.join(dataDir,'assistant_private','model.json')),{repository:createAssistantSessionStore(await assistantSessionDirectory(dataDir)),collectionControl:createCollectionControl({baseUrl:`http://${host}:${port}`,storageDir:dataDir,dataDiskDir:path.dirname(knowledge.filename),getCities:()=>Object.keys(zhaopinCities)})});
 const latestExports=new Map();
 const active = new Map();
-const activeLabels = new Map();
-const startingLabels = new Map();
-const activeLogins = new Map();
+const pipelineRuns=new PipelineRuns();
 let startingBoss = false;
 let activeInsight = null;
 const rowCountCache = new Map();
@@ -106,25 +126,7 @@ function existingConsoleIsReady() {
 
 await fs.mkdir(taskDataDir, { recursive: true });
 await fs.mkdir(logDir, { recursive: true });
-await fs.mkdir(platformSessionDir, { recursive: true });
-await fs.mkdir(labelDataDir, { recursive: true });
-await fs.mkdir(labelLogDir, { recursive: true });
 await fs.mkdir(insightDataDir, { recursive: true });
-
-const platformDefinitions = [
-  { key: 'zhaopin', name: '智联招聘', group: '招聘平台', description: '岗位详情采集主力渠道' },
-  { key: 'yupao', name: '鱼泡直聘', group: '招聘平台', description: '蓝领与技术岗位补充渠道' },
-  { key: 'liepin', name: '猎聘', group: '招聘平台', description: '共享登录浏览器 · 命令行采集渠道' },
-  { key: 'boss', name: 'BOSS直聘', group: '招聘平台', description: '试验接入 · 人工登录后正常页面采集，需小样本验收' },
-  { key: 'jobonline', name: '就业在线', group: '招聘平台', description: '公开列表与详情 · 全国岗位补充渠道' },
-  { key: 'job51', name: '前程无忧', group: '招聘平台', description: '本地浏览器会话 · 验证即停 · 断点续采' },
-  { key: 'deepseek', name: 'DeepSeek', group: 'AI聊天平台', description: '技术岗位结构化标注' },
-  { key: 'kimi', name: 'Kimi', group: 'AI聊天平台', description: '长岗位描述标注' },
-  { key: 'tongyi', name: '通义', group: 'AI聊天平台', description: '中文分类与技能归一' },
-  { key: 'zhipu', name: '智谱清言', group: 'AI聊天平台', description: '复杂岗位交叉复核' },
-  { key: 'doubao', name: '豆包', group: 'AI聊天平台', description: '中文语义与咨询表达' },
-];
-const labelPlatforms = ['rules', ...platformDefinitions.filter((item) => item.group === 'AI聊天平台').map((item) => item.key)];
 
 const job51Cities = {
   '全国': '000000', '北京': '010000', '上海': '020000', '广州': '030200', '深圳': '040000',
@@ -163,33 +165,10 @@ async function saveTasks(tasks) {
 }
 
 let tasks = await loadTasks();
+if(await migrateLegacyCollectionGoals(tasks))await saveTasks(tasks);
 let datasetScopesChanged=false;
 for(const task of tasks)datasetScopesChanged=(await isolateLegacyTask(task))||datasetScopesChanged;
 if(datasetScopesChanged)await saveTasks(tasks);
-
-async function loadLabelJobs() {
-  try {
-    const items = JSON.parse(await fs.readFile(labelJobsPath, 'utf8'));
-    let changed = false;
-    for (const item of items) {
-      if (item.status === 'running' || item.status === 'stopping') {
-        item.status = 'paused';
-        item.message = '控制台曾退出，可从已保存结果继续标注';
-        changed = true;
-      }
-    }
-    if (changed) await saveLabelJobs(items);
-    return items;
-  } catch { return []; }
-}
-
-async function saveLabelJobs(items) {
-  const temp = `${labelJobsPath}.tmp`;
-  await fs.writeFile(temp, JSON.stringify(items, null, 2), 'utf8');
-  await fs.rename(temp, labelJobsPath);
-}
-
-let labelJobs = await loadLabelJobs();
 
 async function loadInsightState() {
   try {
@@ -218,72 +197,26 @@ async function publicInsight() {
 }
 
 async function discoverInsightDatasets() {
-  return knowledge.catalog();
+  return knowledge.catalog({synchronize:false});
 }
 
 async function startInsight(body) {
   if (activeInsight) throw new Error('岗位洞察分析正在运行');
   const requestedInput=String(body.inputFile||'').trim(),nativeInput=requestedInput.startsWith('kb://');
+  const sourceRole=resolveInsightSourceRole(body,tasks);
+  if(sourceRole.taskId)body={...body,sourceTaskId:sourceRole.taskId};
   const inputFile = nativeInput?requestedInput:path.resolve(requestedInput);
   if (!nativeInput&&(!requestedInput || !fsSync.existsSync(inputFile))) throw new Error('找不到输入数据');
   if (!nativeInput&&!['.xlsx', '.csv'].includes(path.extname(inputFile).toLowerCase())) throw new Error('请选择知识库岗位范围，或手工导入 XLSX/CSV');
+  const classifierRole=selectManualRole(roleFamilies,sourceRole.role)?.name||sourceRole.role;
+  const insightClassifier=await insightSupervised.resolve(inputFile,classifierRole);
+  if(!insightClassifier&&!roleClassifier(classifierRole))throw new Error('该岗位尚无通过验收的监督分类器，请先选择具体岗位数据集并点击“Qwen 标注并训练”；岗位洞察不再使用规则筛选');
   let transferSource = null;
   if (body.sourceTaskId) {
     const task = tasks.find((item) => item.id === String(body.sourceTaskId) && !item.archived);
     if (!task) throw new Error('来源采集任务不存在');
     transferSource = await taskInsightSource(task,{knowledge:nativeInput,dataDir});
     if (transferSource.dataset.path.toLowerCase() !== inputFile.toLowerCase()) throw new Error('洞察文件不是该任务的当前交付文件，请重新点击“用于岗位洞察”');
-    if (String(body.role || '').trim() !== task.label) throw new Error('分析岗位与来源采集任务不一致，请手工选择数据集后再修改岗位');
-  }
-  let labelJobId = String(body.labelJobId || '').trim();
-  // Native snapshots already contain version-checked, approved knowledge labels.
-  if (nativeInput) {
-    if (labelJobId && labelJobId !== 'auto') throw new Error('知识库分析自动使用同版本已批准标签，无需指定文件打标任务');
-    labelJobId = '';
-  }
-  let labelJob = null;
-  let consensusJobs = [];
-  const compatibleLabelJobs = labelJobs.filter((item) => !item.archived && path.resolve(item.inputFile).toLowerCase() === inputFile.toLowerCase());
-  if (labelJobId === 'auto') {
-    const newestFirst = [...compatibleLabelJobs].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-    for (const item of newestFirst.filter((candidate) => candidate.platform !== 'rules')) {
-      if (!fsSync.existsSync(path.join(item.outputDir, '标注结果.jsonl')) || !fsSync.existsSync(path.join(item.outputDir, '标注质量报告.json'))) continue;
-      const reviewed = await reviewState(item.outputDir);
-      if ([...reviewed.decisions.values()].includes('approved')) { labelJob = item; break; }
-    }
-    if (!labelJob) {
-      const ai = newestFirst.filter(item => item.platform !== 'rules' && fsSync.existsSync(path.join(item.outputDir, '标注质量报告.json')) && fsSync.existsSync(path.join(item.outputDir, '标注结果.jsonl')));
-      let bestMatched = 4;
-      for (let i = 0; i < ai.length; i++) for (let j = i + 1; j < ai.length; j++) {
-        if (ai[i].platform === ai[j].platform) continue;
-        try {
-          const records = await readJsonLines(path.join(ai[i].outputDir, '标注结果.jsonl'));
-          const rows = records.map(r => ({ row_no:r.row_no, 岗位ID:r.job_id, 岗位名称:r.job_name, 技能:r.skills_text, 岗位描述:r.job_description }));
-          const known = new Set(records.flatMap(r=>r.skills || []));
-          const result = await consensusLabelsForWorkbook([ai[i].outputDir,ai[j].outputDir],inputFile,rows,known);
-          if (result.quality.matched > bestMatched) { bestMatched=result.quality.matched; consensusJobs=[ai[i],ai[j]]; }
-        } catch {}
-      }
-    }
-    if(!consensusJobs.length)labelJob ||= newestFirst.find((item) => item.platform === 'rules' && item.status === 'completed' && fsSync.existsSync(path.join(item.outputDir, '标注结果.jsonl')) && fsSync.existsSync(path.join(item.outputDir, '标注质量报告.json'))) || null;
-    labelJobId = labelJob?.id || '';
-  } else if(labelJobId.startsWith('consensus:')) {
-    const ids=labelJobId.slice(10).split(',');
-    if(ids.length!==2 || ids[0]===ids[1])throw new Error('双平台标签需要两个不同任务');
-    consensusJobs=ids.map(id=>compatibleLabelJobs.find(job=>job.id===id));
-    if(consensusJobs.some(job=>!job || job.platform==='rules') || consensusJobs[0].platform===consensusJobs[1].platform)throw new Error('请选择同一Excel的两个不同AI平台');
-    if(consensusJobs.some(job=>!fsSync.existsSync(path.join(job.outputDir,'标注质量报告.json'))))throw new Error('双平台标签缺少质量报告');
-    labelJobId='';
-  } else {
-    labelJob = labelJobId ? labelJobs.find((item) => item.id === labelJobId && !item.archived) : null;
-  }
-  if (labelJobId && !labelJob) throw new Error('所选打标任务不存在');
-  if (labelJob && path.resolve(labelJob.inputFile).toLowerCase() !== inputFile.toLowerCase()) throw new Error('打标任务与洞察输入 Excel 不是同一文件');
-  if (labelJob && (!fsSync.existsSync(path.join(labelJob.outputDir, '标注结果.jsonl')) || !fsSync.existsSync(path.join(labelJob.outputDir, '标注质量报告.json')))) throw new Error('所选打标任务的结果或质量报告缺失');
-  if (labelJob?.platform === 'rules' && labelJob.status !== 'completed') throw new Error('本地预标注任务尚未完成，不能作为洞察输入');
-  if (labelJob && labelJob.platform !== 'rules') {
-    const reviewed = await reviewState(labelJob.outputDir);
-    if (![...reviewed.decisions.values()].includes('approved')) throw new Error('所选打标任务尚无人工批准的标签');
   }
   let analysisInputFile=inputFile;
   if(nativeInput){const snapshot=await knowledge.snapshot(inputFile);analysisInputFile=snapshot.uri;if(transferSource)transferSource.dataset.expectedRows=snapshot.rows;}
@@ -303,13 +236,16 @@ async function startInsight(body) {
     displayInputFile:inputFile,
     ...(transferSource ? { sourceTaskId: transferSource.taskId, sourceResolution: transferSource.dataset.resolution, expectedRows: transferSource.dataset.expectedRows } : {}),
     sheetName: String(body.sheetName || '岗位数据').trim() || '岗位数据',
-    role: String(body.role || '自动识别').trim() || '自动识别',
+    role: sourceRole.role,
+    roleSource: sourceRole.mode,
     analysisMode: String(body.analysisMode || 'preview') === 'full' ? 'full' : 'preview',
     sampleSize: Math.max(50, Math.min(2000, Number(body.sampleSize || 300))),
-    reviewedLabelDir: labelJob && labelJob.platform !== 'rules' ? labelJob.outputDir : '',
-    prelabelDir: labelJob?.platform === 'rules' ? labelJob.outputDir : '',
-    reviewedLabelJobId: labelJob?.id || '',
-    ...(consensusJobs.length ? {consensusLabelDirs:consensusJobs.map(job=>job.outputDir),consensusLabelJobIds:consensusJobs.map(job=>job.id)} : {}),
+    // Clear obsolete state references; historical result files are untouched.
+    reviewedLabelDir: '', prelabelDir: '', reviewedLabelJobId: '',
+    consensusLabelDirs: [], consensusLabelJobIds: [], labelingEnabled: false,
+    insightClassifier,
+    screeningPolicy: 'supervised-only',
+    semanticCloud: await semanticCloud.resolve(inputFile,classifierRole,insightClassifier),
   };
   await fs.writeFile(insightConfigPath, JSON.stringify(config, null, 2), 'utf8');
   await fs.writeFile(insightLogPath, `[${new Date().toLocaleString('zh-CN')}] 开始分析\n输入：${inputFile}\n模式：${config.analysisMode === 'full' ? '全量逐条匹配' : `抽样 ${config.sampleSize} 条`}\n`, 'utf8');
@@ -346,214 +282,6 @@ async function startInsight(body) {
   return insightState;
 }
 
-async function setLabelJob(id, patch) {
-  const item = labelJobs.find((job) => job.id === id);
-  if (!item) return null;
-  Object.assign(item, patch, { updatedAt: now() });
-  await saveLabelJobs(labelJobs);
-  return item;
-}
-
-async function appendLabelLog(id, text) {
-  if (!text) return;
-  await fs.appendFile(path.join(labelLogDir, `${id}.log`), String(text), 'utf8').catch(() => {});
-}
-
-async function readPlatformStatus() {
-  try { return JSON.parse(await fs.readFile(platformStatusPath, 'utf8')); }
-  catch { return { platforms: {} }; }
-}
-
-async function publicPlatforms() {
-  const saved = await readPlatformStatus();
-  const sessions=await Promise.all(tasks.filter(t=>!t.archived).map(readManualSession));
-  const browsers=new Map(await Promise.all(platformDefinitions.map(async p=>[p.key,await managedBrowserState(p.key)])));
-  return platformDefinitions.filter(platform=>collectionChannelAvailable(platform.key)).map((platform) => {
-    const entry = saved.platforms?.[platform.key] || {};
-    const session=sessions.find(s=>s?.platform===platform.key);
-    const browser=browsers.get(platform.key);
-    return {
-      ...platform,
-      loginStatus:session?.login_status||(entry.manual_window_closed_at?'saved_unverified':'unknown'),
-      verificationStatus:session?.verification_status||'unchecked',
-      browserOpen:Boolean(browser),browserSessionId:browser?.session_id||null,
-      browserExecutable:browser?.executable_path||null,browserPid:browser?.browser_pid||null,
-      browserProfile:browser?.profile_dir||null,
-      browserInitialization:browser?.local_initialization||null,browserProxy:browser?.proxy_server||null,
-      canSwitchBrowser:platform.key==='yupao'&&Boolean(browser)&&!activeLogins.has(platform.key)&&![...active.values()].some(item=>item.stage==='yupao'),
-      status: activeLogins.has(platform.key) ? 'opening' : browser?'browser_open':entry.manual_window_closed_at ? 'saved' : 'not_logged_in',
-      message: activeLogins.has(platform.key)?(platform.key==='yupao'?'正在打开鱼泡浏览器；首次访问前会随机等待 3–8 秒，请稍候':'正在打开登录浏览器，请稍候'):browser?(browser.switched_from?'已切换到携带 Cookie 的新浏览器；后续采集复用此实例。请在新窗口检查登录和验证状态':'共享浏览器保持开启；登录和采集复用同一实例，无需关闭窗口'):entry.state || '尚未打开平台共享浏览器',
-      updatedAt: browser?.opened_at||entry.browser_opened_at||entry.manual_window_closed_at || null,
-    };
-  });
-}
-
-function startPlatformLogin(key) {
-  const platform = platformDefinitions.find((item) => item.key === key);
-  if (!platform) throw new Error('不支持的登录平台');
-  if(key==='zhaopin' && [...active.values()].some(item=>['collection','zhaopin'].includes(item.stage))) throw new Error('多平台采集正在使用或排队等待智联会话，请先暂停相关任务再打开登录');
-  if (activeLogins.has(key)) throw new Error(`${platform.name}登录窗口已经打开`);
-  const child = spawn(process.execPath, [path.join(root, 'work', 'login_job_platforms.mjs'), platformSessionDir, key], {
-    cwd: root,
-    env: { ...process.env },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: false,
-  });
-  activeLogins.set(key, child);
-  child.stdout.on('data', (chunk) => console.log(`[${platform.name}] ${chunk.toString('utf8').trim()}`));
-  child.stderr.on('data', (chunk) => console.error(`[${platform.name}] ${chunk.toString('utf8').trim()}`));
-  child.once('error', () => activeLogins.delete(key));
-  child.once('exit', () => activeLogins.delete(key));
-}
-
-async function createLabelJob(body) {
-  const requestedInput=String(body.inputFile||'').trim(),nativeInput=requestedInput.startsWith('kb://');
-  const inputFile = nativeInput?(await knowledge.snapshot(requestedInput)).uri:path.resolve(requestedInput);
-  if (!nativeInput&&(!requestedInput || !fsSync.existsSync(inputFile))) throw new Error('找不到输入数据');
-  if (!nativeInput&&!['.xlsx', '.csv'].includes(path.extname(inputFile).toLowerCase())) throw new Error('请选择知识库岗位范围，或导入XLSX/CSV');
-  const platform = String(body.platform || 'rules');
-  if (!labelPlatforms.includes(platform)) throw new Error('不支持的打标平台');
-  const jobFamily = String(body.jobFamily || '').trim();
-  if (!jobFamily) throw new Error('请填写目标岗位族，避免将其他岗位套用爬虫标签');
-  if (platform === 'rules' && !['爬虫/数据采集', '智能体/大模型应用'].includes(jobFamily)) throw new Error('本地规则预标注仅适用于爬虫/数据采集和智能体/大模型应用；其他岗位族请选择人工登录的 AI 平台并复核');
-  const sampleSize = Math.max(1, Math.min(20000, Number(body.sampleSize || 20)));
-  const requestedBatchSize = Math.max(1, Math.min(5, Number(body.batchSize || 3)));
-  const batchSize = platform === 'kimi' ? 1 : requestedBatchSize;
-  const id = `${Date.now()}-label`;
-  const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
-  const outputDir = path.resolve(String(body.outputDir || path.join(nativeInput?path.join(dataDir,'knowledge_labels'):path.dirname(inputFile), `AI打标_${sampleSize}条_${stamp}_${id}`)).trim());
-  if (labelJobs.some((job) => path.resolve(job.outputDir).toLowerCase() === outputDir.toLowerCase())) throw new Error('该输出目录已被其他打标任务使用，请为新任务指定独立目录');
-  if (fsSync.existsSync(outputDir) && (await fs.readdir(outputDir)).length) throw new Error('新打标任务的输出目录必须为空，避免覆盖已有结果');
-  const configDir = path.join(labelDataDir, id);
-  await fs.mkdir(configDir, { recursive: true });
-  await fs.mkdir(outputDir, { recursive: true });
-  const configPath = path.join(configDir, '打标配置.json');
-  const config = {
-    inputFile, outputDir, sheetName: String(body.sheetName || '岗位数据'), platform, jobFamily, sampleSize, batchSize,
-    samplingMode: platform === 'rules' ? 'first' : 'spread',
-    ...labelPolicy(platform, body),
-    platformRuntimePath: path.join(labelPlatformRuntimeDir, `${platform}.json`),
-    navigationTimeoutMs: Math.max(45000, Math.min(300000, Number(body.navigationTimeoutMs || 120000))),
-    inputTimeoutMs: Math.max(10000, Math.min(120000, Number(body.inputTimeoutMs || 45000))),
-    cooldownJitterRatio: 0.35,
-    typingChunkMinChars: 120,
-    typingChunkMaxChars: 260,
-    typingPauseMinMs: platform === 'kimi' ? 60 : 35,
-    typingPauseMaxMs: platform === 'kimi' ? 180 : 140,
-    beforeSendMinMs: 900,
-    beforeSendMaxMs: platform === 'kimi' ? 3200 : 2400,
-  };
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
-  const platformName = platform === 'rules' ? '本地规则预标注' : platformDefinitions.find((item) => item.key === platform)?.name || platform;
-  const item = {
-    id, name: String(body.name || `${path.basename(inputFile, path.extname(inputFile))} · ${platformName}`).trim(),
-    inputFile, outputDir, sheetName: config.sheetName, platform, platformName, jobFamily, sampleSize, batchSize, configPath,
-    status: 'ready', message: '打标任务已创建', createdAt: now(), updatedAt: now(), archived: false,
-  };
-  labelJobs.unshift(item);
-  await saveLabelJobs(labelJobs);
-  await appendLabelLog(id, `[${new Date().toLocaleString('zh-CN')}] 打标任务已创建\n输入：${inputFile}\n输出：${outputDir}\n`);
-  return item;
-}
-
-async function labelMetrics(item) {
-  try {
-    const report = JSON.parse(await fs.readFile(path.join(item.outputDir, '标注质量报告.json'), 'utf8'));
-    return {
-      total: Number(report.requested_rows || item.sampleSize), completed: Number(report.completed_rows || 0),
-      failed: Number(report.failed_rows || 0), averageConfidence: Number(report.average_confidence || 0),
-      riskRows: Number(report.risk_signal_rows || 0), schemaSuccessRate: Number(report.schema_success_rate || 0),
-      skillsCoverageRate: Number(report.skills_coverage_rate || 0), tasksCoverageRate: Number(report.tasks_coverage_rate || 0),
-      evidenceCoverageRate: Number(report.evidence_coverage_rate || 0), elapsedSeconds: Number(report.elapsed_seconds || 0),
-      rowsPerMinute: Number(report.rows_per_minute || 0),
-    };
-  } catch {
-    let completed = 0;
-    try { completed = (await fs.readFile(path.join(item.outputDir, '标注结果.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).length; } catch {}
-    return { total: item.sampleSize, completed, failed: 0, averageConfidence: 0, riskRows: 0, schemaSuccessRate: 0, skillsCoverageRate: 0, tasksCoverageRate: 0, evidenceCoverageRate: 0, elapsedSeconds: 0, rowsPerMinute: 0 };
-  }
-}
-
-async function publicLabelJob(item) {
-  const running = activeLabels.get(item.id);
-  const ownRuntime = await fs.readFile(path.join(item.outputDir, '平台运行状态.json'), 'utf8').then(JSON.parse).catch(() => null);
-  const platformRuntime = item.platform === 'rules' ? null : await fs.readFile(path.join(labelPlatformRuntimeDir, `${item.platform}.json`), 'utf8').then(JSON.parse).catch(() => null);
-  const runtime = platformRuntime?.status === 'paused' && item.status !== 'completed' ? platformRuntime : ownRuntime;
-  const resultsMissing = ['completed', 'partial'].includes(item.status) && !fsSync.existsSync(path.join(item.outputDir, '标注结果.jsonl'));
-  return {
-    id: item.id, name: item.name, inputFile: item.inputFile, outputDir: item.outputDir, sheetName: item.sheetName,
-    platform: item.platform, platformName: item.platformName, jobFamily: item.jobFamily || '', sampleSize: item.sampleSize, batchSize: item.batchSize,
-    status: item.status, message: resultsMissing ? '历史结果文件缺失，请检查输出目录；不会显示为已完成标签' : item.message, resultsMissing, createdAt: item.createdAt, updatedAt: item.updatedAt,
-    runningSeconds: running ? Math.floor((Date.now() - running.startedAt) / 1000) : 0,
-    metrics: await labelMetrics(item),
-    runtime,
-  };
-}
-
-async function runLabelJob(item, options = {}) {
-  if (startingLabels.has(item.id) || activeLabels.has(item.id)) throw new Error('该打标任务已经在启动或运行');
-  if (item.platform !== 'rules' && [...startingLabels.values(), ...activeLabels.values()].some(run => run.platform === item.platform)) throw new Error(`为保护账号，${item.platformName}同一时间仅运行一个打标任务`);
-  startingLabels.set(item.id, { platform: item.platform });
-  try { return await launchLabelJob(item, options); }
-  finally { startingLabels.delete(item.id); }
-}
-
-async function launchLabelJob(item, options = {}) {
-  if (activeLabels.has(item.id)) throw new Error('该打标任务已经在运行');
-  if (String(item.inputFile).startsWith('kb://')) await knowledge.read(item.inputFile);
-  else if (!fsSync.existsSync(item.inputFile)) throw new Error(`输入文件已不存在：${item.inputFile}。请创建使用新路径的任务，勿覆盖旧任务记录。`);
-  if (item.platform !== 'rules') {
-    if (activeLogins.has(item.platform)) throw new Error('该平台共享浏览器正在打开，请稍后启动打标；无需关闭浏览器');
-    const webRuns = [...activeLabels.values()].filter((running) => running.platform !== 'rules');
-    if (webRuns.some((running) => running.platform === item.platform)) throw new Error(`为保护账号，${item.platformName}同一时间仅运行一个打标任务`);
-    if (webRuns.length >= 5) throw new Error('为控制风控风险，同一时间最多运行五个不同聊天平台');
-    const runtimePath = path.join(labelPlatformRuntimeDir, `${item.platform}.json`);
-    const saved = await fs.readFile(runtimePath, 'utf8').then(JSON.parse).catch(() => null);
-    const block = resumeBlock(saved);
-    if (block) {
-      const cooling = saved.retryAfter && Date.parse(saved.retryAfter) > Date.now();
-      if (cooling || !options.confirmedHumanResolution) throw new Error(block);
-      await fs.writeFile(runtimePath, JSON.stringify({ ...saved, status: 'ready', requiresHuman: false, confirmedAt: now() }, null, 2), 'utf8');
-    }
-  }
-  // Migrate old task configuration at run time so safety policy also covers legacy jobs.
-  const savedConfig = JSON.parse(await fs.readFile(item.configPath, 'utf8'));
-  if (!item.jobFamily && savedConfig.jobFamily) await setLabelJob(item.id, { jobFamily: savedConfig.jobFamily });
-  if (item.batchSize !== labelPolicy(item.platform, savedConfig).batchSize) await setLabelJob(item.id, { batchSize: labelPolicy(item.platform, savedConfig).batchSize });
-  await fs.writeFile(item.configPath, JSON.stringify({ ...savedConfig, ...labelPolicy(item.platform, savedConfig), platformRuntimePath: path.join(labelPlatformRuntimeDir, `${item.platform}.json`) }, null, 2), 'utf8');
-  await setLabelJob(item.id, { status: 'running', message: `${item.platformName}打标中` });
-  await appendLabelLog(item.id, `\n[${new Date().toLocaleString('zh-CN')}] ▶ ${item.platformName}打标\n`);
-  const child = spawn(process.execPath, [path.join(root, 'work', 'label_job_data.mjs'), item.configPath], {
-    cwd: root,
-    env: { ...process.env },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: item.platform === 'rules',
-  });
-  activeLabels.set(item.id, { child, platform: item.platform, startedAt: Date.now() });
-  child.stdout.on('data', (chunk) => appendLabelLog(item.id, chunk.toString('utf8')));
-  child.stderr.on('data', (chunk) => appendLabelLog(item.id, `[错误] ${chunk.toString('utf8')}`));
-  child.once('error', async (error) => {
-    activeLabels.delete(item.id);
-    await setLabelJob(item.id, { status: 'failed', message: error.message });
-  });
-  child.once('exit', async (code, signal) => {
-    const stopping = labelJobs.find((job) => job.id === item.id)?.status === 'stopping';
-    activeLabels.delete(item.id);
-    if (stopping) {
-      await setLabelJob(item.id, { status: 'paused', message: '已暂停，可从已保存结果续标' });
-      return;
-    }
-    if (code === 0) {
-      await setLabelJob(item.id, { status: 'completed', message: '打标与质量汇总已完成' });
-      await appendLabelLog(item.id, '\n[完成] 打标结果已保存。\n');
-    } else {
-      const runtime = await fs.readFile(path.join(item.outputDir, '平台运行状态.json'), 'utf8').then(JSON.parse).catch(() => null);
-      const report = await fs.readFile(path.join(item.outputDir, '标注质量报告.json'), 'utf8').then(JSON.parse).catch(() => null);
-      await setLabelJob(item.id, { status: runtime?.status === 'paused' ? 'paused' : 'failed', message: runtime?.status === 'paused' ? `${runtime.errorCode}：${runtime.recovery}` : report?.last_error || `打标程序退出，代码 ${code ?? signal}` });
-    }
-  });
-}
-
 async function appendLog(id, text) {
   const value = String(text || '');
   if (!value) return;
@@ -578,18 +306,11 @@ function runtimePython() {
 }
 
 function stageCommand(task, stage) {
-  if (['collection','zhaopin'].includes(stage)) return {
+  const roundPlatforms=(task.collectionRoundPlatforms||task.platforms).filter(key=>collectionChannelAvailable(key,task));
+  // 统一 HTTP 直连：所有渠道（含智联）经 collect_public_job_platforms.mjs 采集；不再启动 RPA。
+  if (['collection','zhaopin','public'].includes(stage)) return {
     command: process.execPath,
-    args: [path.join(root,'work','collect_parallel_channels.mjs'),JSON.stringify({
-      public:stage==='collection' && task.platforms.some(key=>['shixiseng','iguopin','mohrss','job51','jobonline'].includes(key)),
-      zhaopin:task.platforms.includes('zhaopin'),publicConfigPath:task.publicConfigPath,
-      zhaopinConfigPath:task.zhaopinConfigPath,outputDir:task.outputDir,candidateTarget:task.candidateTarget,
-      lockDir:path.join(dataDir,'channel_locks'),
-    })],
-  };
-  if (stage === 'public') return {
-    command: process.execPath,
-    args: [path.join(root, 'work', 'collect_public_job_platforms.mjs'), task.publicConfigPath, task.outputDir],
+    args: [path.join(root,'work','collect_public_job_platforms.mjs'), task.publicConfigPath, task.outputDir],
   };
   if (stage === 'yupao') return {
     command: process.execPath,
@@ -599,13 +320,9 @@ function stageCommand(task, stage) {
     command: process.execPath,
     args: [path.join(root, 'work', 'collect_logged_boss.mjs'), task.outputDir, task.bossConfigPath],
   };
-  if (['login_zhaopin', 'login_yupao', 'login_boss'].includes(stage)) return {
-    command: process.execPath,
-    args: [path.join(root, 'work', 'login_job_platforms.mjs'), task.outputDir, stage.replace('login_', '')],
-  };
   if (stage === 'finalize') return {
     command: runtimePython(),
-    args: [path.join(root, 'work', 'finalize_configurable_dataset.py'), task.outputDir, task.profilePath, String(task.targetRows)],
+    args: [path.join(root, 'work', 'finalize_configurable_dataset.py'), task.outputDir, task.profilePath, String(task.targetRows||0)],
   };
   if (stage === 'workbook') return {
     command: process.execPath,
@@ -617,16 +334,19 @@ function stageCommand(task, stage) {
 const stageNames = {
   collection: '多平台并发采集',
   public: '公开渠道采集', zhaopin: '智联登录采集', yupao: '鱼泡登录采集',
-  boss: 'BOSS页面采集（试验）', login_boss: 'BOSS人工登录',
-  login_zhaopin: '智联人工登录', login_yupao: '鱼泡人工验证/登录', finalize: '合并去重', workbook: '导出Excel',
+  boss: 'BOSS页面采集（试验）',
+  finalize: '合并去重', workbook: '导出Excel',
 };
 
 async function runChild(task, stage, pipeline = false) {
+  if(stage.startsWith('login_'))throw new Error('独立平台登录功能已移除');
+  if(['zhaopin','yupao','boss'].includes(stage)&&collectionMode(task)!==HYBRID_MODE)assertDirectHttpCollection(stage);
+  if(['collection','public'].includes(stage)&&!(task.collectionRoundPlatforms||task.platforms).some(key=>collectionChannelAvailable(key,task)))throw Object.assign(Error('该任务没有当前采集方式可用的渠道，历史数据与断点保留'),{code:'DIRECT_HTTP_REQUIRED'});
+  const pipelineToken=pipeline?pipelineRuns.runs.get(task.id):null;
+  const cancelled=()=>pipeline&&(!pipelineToken||!pipelineRuns.current(task.id,pipelineToken)||['paused','stopping'].includes(taskById(tasks,task.id)?.status));
+  if(cancelled())return {paused:true};
   if (active.has(task.id)||startingStages.has(task.id)) throw new Error('该任务已有程序正在运行或正在检查启动条件');
-  const profileKey=stage.replace('login_','');
-  if(activeLogins.has(profileKey)||[...active.values()].some(item=>item.stage==='login_'+profileKey || (stage.startsWith('login_')&&item.stage===profileKey))) throw new Error('该平台浏览器正在使用，请勿同时打开登录和采集会话');
-  if (['boss','login_boss'].includes(stage) && (startingBoss || activeLogins.has('boss') || [...active.values()].some(item => ['boss','login_boss'].includes(item.stage)))) throw new Error('BOSS使用独立本地会话，同一时间只能登录或采集一个任务');
-  if (['collection','zhaopin'].includes(stage) && task.platforms.includes('zhaopin') && activeLogins.has('zhaopin')) throw new Error('智联人工登录窗口正在使用，请完成登录后再启动采集');
+  if (stage === 'boss' && (startingBoss || [...active.values()].some(item => item.stage === 'boss'))) throw new Error('BOSS使用独立本地会话，同一时间只能登录或采集一个任务');
   if (stage === 'yupao' && (
     [...active.values()].some((item) => item.stage === 'yupao')
     || tasks.some((item) => item.id !== task.id && item.status === 'running' && item.currentStage === 'yupao')
@@ -638,27 +358,38 @@ async function runChild(task, stage, pipeline = false) {
   try { await assertCollectorResources(stage === 'workbook' ? 4*1024**3 : stage === 'finalize' ? 1024**3 : 2*1024**3); }
   catch(error) {
     startingStages.delete(task.id);
+    if(cancelled())return {paused:true};
     await appendLog(task.id, `\n[资源保护暂停] ${error.message}\n`);
     await setTask(task.id,{status:'paused',currentStage:stage,lastStage:stage,pipeline:false,message:error.message});
     return {paused:true,code:43};
   }
-  const isBoss = ['boss','login_boss'].includes(stage);
+  const isBoss = stage === 'boss';
+  if(cancelled()){startingStages.delete(task.id);return {paused:true};}
   if (isBoss) startingBoss = true;
   try {
     if (['public','collection'].includes(stage)) {
       const synced = await synchronizePublicKeywords(task);
+      if(cancelled()){startingStages.delete(task.id);return {paused:true};}
       if (synced.changed) await appendLog(task.id, `\n[配置修复] 公开渠道同步全部 ${synced.keywords.length} 个任务关键词；断点与已采集数据保留。\n`);
     }
+    if(['public','collection','zhaopin'].includes(stage)){
+      const plan=await prepareStructuredCollection(task);
+      if(cancelled()){startingStages.delete(task.id);return {paused:true};}
+      await appendLog(task.id,`\n[接口执行计划] ${plan.channels.map(channel=>channel.key+':'+channel.mode+(channel.maxPages?'，最多'+channel.maxPages+'页':'')).join('；')}\n`);
+      if(plan.changes.length)await appendLog(task.id,`[旧任务配置升级] ${plan.changes.join('；')}；原断点和自定义限额保留。\n`);
+    }
     if (stage === 'finalize') await updateUnifiedDataset(task);
-    await setTask(task.id, { status: 'running', currentStage: stage, message: `${stageNames[stage]}运行中`, pipeline });
+    if(cancelled()){startingStages.delete(task.id);return {paused:true};}
+    await setTask(task.id, { status: 'running', currentStage: stage, message: `${stageNames[stage]}运行中`, pipeline,collectionIssues:(task.collectionIssues||[]).filter(item=>item.stage!==stage) });
     await appendLog(task.id, `\n[${new Date().toLocaleString('zh-CN')}] ▶ ${stageNames[stage]}\n`);
   } catch (error) { startingStages.delete(task.id); if (isBoss) startingBoss = false; throw error; }
 
   return await new Promise((resolve, reject) => {
+    if(cancelled()){startingStages.delete(task.id);resolve({paused:true});return;}
     const child = spawn(command, args, {
       cwd: root,
-      env: { ...process.env, JOB_COLLECTOR_NATIVE_STORE:'1',JOB_COLLECTOR_TASK_ID:task.id, JOB_COLLECTOR_BLOCKED_POLICY:pipeline?'skip':'wait', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
-      windowsHide: stage !== 'login',
+      env: { ...process.env, JOB_COLLECTION_MODE:collectionMode(task),JOB_HTTP_RATE_DIR:process.env.JOB_HTTP_RATE_DIR||path.join(dataDir,'http_rate_limits'),JOB_COLLECTION_ROUND:task.collectionRoundCombinations?JSON.stringify({task_id:task.id,combinations:task.collectionRoundCombinations}):'',JOB_STRUCTURED_ROUND_ONLY:task.structuredRoundOnly||'',JOB_COLLECTOR_NATIVE_STORE:'1',JOB_COLLECTOR_TASK_ID:task.id,JOB_TASK_OUTPUT_DIR:task.outputDir,JOB_TASK_BACKUP_ROOT:taskBackupRoot, JOB_COLLECTOR_BLOCKED_POLICY:pipeline?'skip':'wait', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+      windowsHide: true,
     });
     active.set(task.id, { child, stage, startedAt: Date.now() });
     startingStages.delete(task.id);
@@ -708,7 +439,7 @@ async function runChild(task, stage, pipeline = false) {
 
 async function runPipeline(task, resumeFrom = '') {
   const stages = [];
-  const publicPlatforms = ['shixiseng', 'iguopin', 'mohrss', 'job51', 'jobonline'];
+  const publicPlatforms = ['shixiseng', 'iguopin', 'mohrss', 'job51', 'jobonline', 'liepin'];
   if (task.platforms.some((key) => publicPlatforms.includes(key)) || task.platforms.includes('zhaopin')) stages.push('collection');
   if (task.platforms.includes('yupao') && collectionChannelAvailable('yupao')) stages.push('yupao');
   if (task.platforms.includes('boss') && collectionChannelAvailable('boss')) stages.push('boss');
@@ -721,24 +452,52 @@ async function runPipeline(task, resumeFrom = '') {
     if (start < 0) throw new Error('流水线恢复阶段不属于该任务');
     stages.splice(0, start);
   }
+  const token=pipelineRuns.begin(task.id);
+  const cancelled=()=>!pipelineRuns.current(task.id,token)||['paused','stopping'].includes(taskById(tasks,task.id)?.status);
   let currentStage='';
   try {
     for (const stage of stages) {
       currentStage=stage;
       const fresh = taskById(tasks, task.id);
-      if (!fresh || fresh.status === 'paused' || fresh.status === 'stopping') return;
+      if (!fresh || cancelled()) return;
       const result = await runChild(fresh, stage, true);
       if (result.paused) return;
     }
     const fresh = taskById(tasks, task.id) || task;
+    if(cancelled())return;
+    const continued=await runAdaptiveCollection({task:fresh,isCancelled:cancelled,
+      count:()=>otherChannelValidCount(task.outputDir,'',task.id),
+      activateKeyword:async keyword=>{
+        if(cancelled())return;
+        await setTask(task.id,{keywords:[...new Set([...(fresh.keywords||[]),keyword])]});
+        await synchronizePublicKeywords(fresh);
+        await prepareStructuredCollection(fresh);
+        await appendLog(task.id,`\n[相关关键词补采] 增加「${keyword}」；城市仍为${fresh.cities.join('、')}；各渠道仅使用已支持的城市配置，保留分页保护、限流与原断点。\n`);
+      },
+      onRound:async({round,valid,target,combinations})=>{
+        const summary=combinations.map(combo=>`${combo.platform}:${combo.keyword}/${combo.city.name}`).join('；');
+        await setTask(task.id,{message:`补采第${round}轮：${combinations.length}个可执行条件；有效去重${valid}条，${untilExhausted(fresh)?goalText(fresh):'目标'+target+'条'}，受阻条件已让位`});
+        await appendLog(task.id,`\n[目标续轮] 第${round}轮；有效去重${valid}条；${goalText(fresh)}；执行${summary}。\n`);
+      },
+      run:async({platforms,combinations})=>{
+        if(cancelled())return {paused:true};currentStage='collection';
+        return runChild({...taskById(tasks,task.id),collectionRoundPlatforms:platforms,collectionRoundCombinations:combinations},'collection',true);
+      }});
+    if(cancelled()||continued.paused)return;
     const ingested=await updateUnifiedDataset(fresh);await knowledge.sync({refresh:false});
-    await setTask(task.id,{status:ingested.rows>=fresh.targetRows?'completed':'partial',currentStage:'',pipeline:false,lastStage:'collection',message:`本轮已去重入库 ${ingested.rows}/${fresh.targetRows} 条；可直接用于洞察与助手，不需要导出${fresh.collectionIssues?.length?'；受阻渠道和断点保留':''}`});
+    const valid=await otherChannelValidCount(task.outputDir,'',task.id);
+    if(cancelled())return;
+    await appendLog(task.id,`[目标执行结束] ${continued.reason}；有效去重${valid}条，候选入库${ingested.rows}条。\n`);
+    if(cancelled())return;
+    const outcome=collectionOutcome(fresh,{valid,reason:continued.reason,issues:fresh.collectionIssues||[]});
+    await setTask(task.id,{status:outcome.status,validRows:valid,collectionStopReason:continued.reason,currentStage:'',pipeline:false,lastStage:'collection',message:`已归集候选 ${ingested.rows} 条，有效去重 ${valid} 条；${goalText(fresh)}${collectionStopMessage(continued.reason)?'；'+collectionStopMessage(continued.reason):''}；当前阶段结束不代表整个平台已采完，可直接用于洞察与助手${fresh.collectionIssues?.length?'；受阻渠道和断点保留':''}`});
   } catch (error) {
+    if(cancelled())return;
     await appendLog(task.id, `\n流水线停止：${error.message}\n`);
     await finalizeAfterCollectionError(task,{stage:currentStage,code:error.code,signal:error.signal}).catch(async failure=>{
       await appendLog(task.id, `\n[异常收尾失败] ${failure.message}；保留原数据和断点，不宣称交付完成。\n`);
     });
-  }
+  } finally {pipelineRuns.finish(task.id,token);}
 }
 
 async function finalizeAfterCollectionError(task,cause) {
@@ -762,9 +521,9 @@ async function finalizeAfterCollectionError(task,cause) {
       await setTask(task.id,{
         status:'partial',currentStage:'',pipeline:false,lastStage:cause.stage,
         collectionIssues:[...(fresh.collectionIssues||[]).filter(item=>item.stage!==cause.stage),issue],
-        message:`${issue.message}；已导出 ${metrics.finalRows}/${fresh.targetRows} 条${metrics.targetReached?'；渠道异常仍需处理':'，目标未达到'}`,
+        message:`${issue.message}；已导出 ${metrics.finalRows} 条${untilExhausted(fresh)?'；无目标条数，渠道异常仍需处理':`/${fresh.targetRows}${metrics.targetReached?'；渠道异常仍需处理':'，目标未达到'}`}`,
       });
-      await appendLog(task.id, `\n[异常收尾完成] ${metrics.finalRows}/${fresh.targetRows} 条；渠道异常保留，数量不代表岗位相关性验收。\n`);
+      await appendLog(task.id, `\n[异常收尾完成] ${metrics.finalRows} 条；${goalText(fresh)}；渠道异常保留，数量不代表岗位相关性验收。\n`);
     },
   });
 }
@@ -782,7 +541,7 @@ async function runSingle(task, stage) {
         ? { status: 'completed', message: 'Excel 已导出，目标数据量已达到', currentStage: '' }
         : {
             status: 'partial', currentStage: '',
-            message: `Excel 已导出 ${metrics.finalRows} 条，尚未达到 ${fresh.targetRows} 条目标`,
+            message: untilExhausted(fresh)?`Excel 已导出 ${metrics.finalRows} 条；无目标条数，采集状态请查看渠道进度`:`Excel 已导出 ${metrics.finalRows} 条，尚未达到 ${fresh.targetRows} 条目标`,
           });
     }
   } catch(error) {
@@ -802,17 +561,18 @@ async function createTask(body) {
   const keywords = splitTerms(body.keywords);
   if (!label || !primaryKeyword) throw new Error('请填写岗位名称和主关键词');
   if (!keywords.includes(primaryKeyword)) keywords.unshift(primaryKeyword);
-  const targetRows = Math.max(1, Math.min(100000, Number(body.targetRows || 5000)));
-  const candidateTarget = Math.max(targetRows, Math.min(150000, Number(body.candidateTarget || Math.ceil(targetRows * 1.55))));
+  const goal=collectionGoal(body),{targetRows,candidateTarget,collectUntilExhausted}=goal;
+  const transportMode=collectionMode({transportMode:body.transportMode||collectionTransportPolicy.mode});
+  const browserMaxPages=Number(body.browserMaxPages||3),browserMaxRows=Number(body.browserMaxRows||200);
+  if(!Number.isSafeInteger(browserMaxPages)||browserMaxPages<1||browserMaxPages>50||!Number.isSafeInteger(browserMaxRows)||browserMaxRows<1||browserMaxRows>10000)throw Error('浏览器预算须为1–50页、1–10000条');
   const cityNames = splitTerms(body.cities).filter((name) => zhaopinCities[name]);
   if (!cityNames.length) cityNames.push('北京', '上海', '广州', '深圳', '杭州', '成都');
-  const allowedPlatforms = ['shixiseng', 'iguopin', 'mohrss', 'jobonline', 'job51', 'zhaopin', 'boss'].filter(collectionChannelAvailable);
-  const retiredRequested=splitTerms(body.platforms).filter(key=>!collectionChannelAvailable(key));
-  if(retiredRequested.length)throw new Error(`渠道已撤出采集入口：${retiredRequested.join('、')}；历史数据和断点仍保留`);
+  const allowedPlatforms = ['shixiseng', 'iguopin', 'mohrss', 'jobonline', 'job51', 'zhaopin', 'liepin', 'boss'].filter(key=>collectionChannelAvailable(key,{transportMode}));
+  const retiredRequested=splitTerms(body.platforms).filter(key=>!collectionChannelAvailable(key,{transportMode}));
+  if(retiredRequested.length)throw new Error(`纯接口模式暂停：${retiredRequested.map(key=>key+'（'+collectionChannelPauseReason(key)+'）').join('、')}；历史数据和断点仍保留`);
   const platforms = splitTerms(body.platforms).filter((value) => allowedPlatforms.includes(value));
   if (!platforms.length) throw new Error('至少选择一个采集渠道');
-  const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
-  const defaultOutput = path.join(os.homedir(), 'Desktop', `${safeName(label)}岗位_${targetRows}条_${stamp}`);
+  const defaultOutput = taskOutputRoot;
   const outputBaseDir = path.resolve(String(body.outputDir || defaultOutput).trim());
   const id = `${Date.now()}-${safeName(label).replace(/\s+/g, '-').slice(0, 32) || 'task'}`;
   const outputDir=isolatedDirectory(outputBaseDir,id);
@@ -822,29 +582,34 @@ async function createTask(body) {
 
   const pace = String(body.pace || 'balanced');
   const requestSettings = pace === 'safe'
-    ? { concurrency: 1, minimumIntervalMs: 900, jitterMs: 600, attempts: 4 }
+    ? { concurrency: 1, minimumIntervalMs: 4000, jitterMs: 1000, attempts: 2 }
     : pace === 'fast'
-      ? { concurrency: 3, minimumIntervalMs: 350, jitterMs: 200, attempts: 4 }
-      : { concurrency: 2, minimumIntervalMs: 550, jitterMs: 350, attempts: 4 };
+      ? { concurrency: 1, minimumIntervalMs: 2500, jitterMs: 700, attempts: 2 }
+      : { concurrency: 1, minimumIntervalMs: 3000, jitterMs: 700, attempts: 2 };
   const publicCity = { name: '全国', code: '全国' };
   const publicConfig = {
     task_id:id,
+    transportMode,browser:{maxPages:browserMaxPages,maxRows:browserMaxRows},
+    apiExecutionVersion:2,
+    taskTargetRows:targetRows||0,collectUntilExhausted,
+    acquisitionMode:'structured_data_requests',
     keywords,
     platforms: {
-      shixiseng: { enabled: platforms.includes('shixiseng'), cities: [publicCity] },
-      zhaopin: { enabled: false, cities: [] },
+      shixiseng: { enabled: platforms.includes('shixiseng'), cities: [publicCity], maxPages: collectUntilExhausted?300:40, maxRows: collectUntilExhausted?6000:Math.min(candidateTarget,500) },
+      zhaopin: { enabled: platforms.includes('zhaopin'), cities: cityNames.map((name) => ({ name, code: zhaopinCities[name] })).filter((item) => item.code), maxPages: 60, maxRows: Math.min(candidateTarget,50000) },
       job51: {
         enabled: platforms.includes('job51'),
         cities: cityNames.map((name) => ({ name, code: job51Cities[name] })).filter((item) => item.code),
-        maxPages: pace === 'safe' ? 10 : pace === 'fast' ? 20 : 15,
+        maxPages: 100,
       },
-      jobonline: { enabled: platforms.includes('jobonline'), cities: [publicCity], maxPages: 10, maxRows: Math.min(candidateTarget,1000) },
-      iguopin: { enabled: platforms.includes('iguopin'), cities: [{ name: '全国', code: '' }] },
-      mohrss: { enabled: platforms.includes('mohrss'), cities: [{ name: '全国', code: '' }] },
+      jobonline: { enabled: platforms.includes('jobonline'), cities: Object.entries(jobonlineCities).map(([name, code]) => ({ name, code })), maxRows: collectUntilExhausted?100000:Math.min(candidateTarget,2000) },
+      liepin: { enabled: platforms.includes('liepin'), cities: cityNames.map(name=>({name,code:liepinCities[name]})).filter(item=>item.code), maxPages:100, maxRows:candidateTarget },
+      iguopin: { enabled: platforms.includes('iguopin'), cities: [{ name: '全国', code: '' }], maxPages: collectUntilExhausted?250:25, maxRows: collectUntilExhausted?5000:Math.min(candidateTarget,2500) },
+      mohrss: { enabled: platforms.includes('mohrss'), cities: [{ name: '全国', code: '' }], maxPages: collectUntilExhausted?400:40, maxRows: collectUntilExhausted?8000:Math.min(candidateTarget,2500) },
     },
     request: requestSettings,
   };
-  const zhaopinConfig = { task_id:id,keywords, cities: cityNames.map((name) => ({ name, code: zhaopinCities[name] })) };
+  const zhaopinConfig = { task_id:id,keywords, acquisitionMode:'session_json_api',taskTargetRows:targetRows,maxPages:60,maxRows:Math.min(candidateTarget,50000),request:requestSettings,cities: cityNames.map((name) => ({ name, code: zhaopinCities[name] })) };
   const bossConfig = {
     task_id:id,
     keywords, cities: cityNames.map(name => ({ name, code: bossCities[name] })),
@@ -865,7 +630,7 @@ async function createTask(body) {
     label,
     primary_keyword: primaryKeyword,
     keywords,
-    target_rows: targetRows,
+    target_rows: targetRows,collect_until_exhausted:collectUntilExhausted,
     source_directories: splitTerms(body.sourceDirectories),
     relevance: {
       title_terms: splitTerms(body.titleTerms).length ? splitTerms(body.titleTerms) : keywords,
@@ -888,13 +653,14 @@ async function createTask(body) {
   await fs.writeFile(bossConfigPath, JSON.stringify(bossConfig, null, 2), 'utf8');
   await fs.writeFile(profilePath, JSON.stringify(profile, null, 2), 'utf8');
   await fs.copyFile(profilePath, path.join(outputDir, '岗位配置.json'));
-  await fs.writeFile(path.join(outputDir,'任务归属.json'),JSON.stringify({task_id:id,label},null,2),'utf8');
+  await fs.writeFile(path.join(outputDir,'任务归属.json'),JSON.stringify({task_id:id,label,backup_root:taskBackupRoot},null,2),'utf8');
 
   const task = {
-    id, label, primaryKeyword, keywords, targetRows, candidateTarget, cities: cityNames, platforms, pace,
+    id, label, primaryKeyword, keywords, ...goal, cities: cityNames, platforms, pace,transportMode,adaptiveSearch:body.adaptiveSearch!==false,
     outputDir, outputBaseDir,datasetScopeVersion:2, configDir, publicConfigPath, zhaopinConfigPath, yupaoConfigPath, bossConfigPath, profilePath,
     status: 'ready', currentStage: '', message: '任务已创建', createdAt: now(), updatedAt: now(), archived: false,
   };
+  await snapshotTaskOutput(task,{root:taskBackupRoot});
   tasks.unshift(task);
   await saveTasks(tasks);
   await appendLog(id, `[${new Date().toLocaleString('zh-CN')}] 任务已创建\n输出目录：${outputDir}\n`);
@@ -944,7 +710,7 @@ async function metricsFor(task) {
   const liveCollection = await liveCollectionMetrics(task);
   const native=await nativeTaskCounts(task.outputDir,task.id);
   for(const [key,count]of Object.entries(native.platformCounts))liveCollection.platformCounts[key]=Math.max(liveCollection.platformCounts[key]||0,count);
-  const nativePublic=['shixiseng','iguopin','mohrss','jobonline','job51'].reduce((n,key)=>n+(native.platformCounts[key]||0),0);
+  const nativePublic=['shixiseng','iguopin','mohrss','jobonline','job51','liepin'].reduce((n,key)=>n+(native.platformCounts[key]||0),0);
   const publicRows = Math.max(Number(manifest?.total_rows || 0), liveCollection.publicRows,nativePublic);
   const zhaopinRows = Math.max(native.platformCounts.zhaopin||0,await countCsvRows(path.join(task.outputDir, 'zhaopin_标准化数据.csv')));
   const yupaoRows = Math.max(native.platformCounts.yupao||0,await countCsvRows(path.join(task.outputDir, 'yupao_标准化数据.csv')));
@@ -954,9 +720,10 @@ async function metricsFor(task) {
   const finalRows = Number(quality?.output_rows || 0);
   return {
     publicRows, zhaopinRows, yupaoRows, bossRows, finalRows, knowledgeRows,liveCollection,
+    validRows:Number.isSafeInteger(task.validRows)&&!['running','stopping'].includes(task.status)?task.validRows:null,
     hasFinalResult:Boolean(quality),finalResultMessage:quality?'本任务最终结果':'本任务尚未生成最终结果',
     candidates: publicRows + zhaopinRows + yupaoRows + bossRows,
-    targetReached: knowledgeRows>=task.targetRows||Boolean(quality?.target_reached),
+    targetReached: !untilExhausted(task)&&((Number.isSafeInteger(task.validRows)?task.validRows>=task.targetRows:task.status==='completed'&&knowledgeRows>=task.targetRows)||Boolean(quality?.target_reached)),
     duplicatesRemoved: Number(quality?.duplicates_removed || 0),
     platformCounts: quality?.platform_counts || {},
   };
@@ -974,13 +741,16 @@ async function publicTask(task) {
   const running = active.get(task.id);
   const browserSession=await readManualSession(task);
   return {
-    id: task.id, label: task.label, primaryKeyword: task.primaryKeyword, keywords: task.keywords,
-    targetRows: task.targetRows, candidateTarget: task.candidateTarget, cities: task.cities, platforms: task.platforms,
+    id: task.id, label: task.label, primaryKeyword: task.primaryKeyword, keywords: task.keywords,adaptiveSearch:task.adaptiveSearch!==false,
+    targetRows: task.targetRows, candidateTarget: task.candidateTarget, collectUntilExhausted:untilExhausted(task),collectionGoal:task.collectionGoal, cities: task.cities, platforms: task.platforms,
+    transportMode:collectionMode(task),collectionTransportPolicy:collectionPolicyFor(task),availablePlatforms:task.platforms.filter(key=>collectionChannelAvailable(key,task)),pausedPlatforms:task.platforms.filter(key=>!collectionChannelAvailable(key,task)).map(key=>({key,reason:collectionChannelPauseReason(key)})),
+    hybridCollection:await fs.readFile(path.join(task.outputDir,'混合采集状态.json'),'utf8').then(JSON.parse).then(s=>s.task_id===task.id?s:null).catch(()=>null),
     pace: task.pace, outputDir: task.outputDir, legacyOutputDir:task.legacyOutputDir||null,status: task.status, currentStage: task.currentStage,
-    message: browserSession?.verification_status==='waiting_human'?'等待人工验证：请处理已打开的搜索页，不要关闭浏览器，完成后点击继续当前会话':task.message, createdAt: task.createdAt, updatedAt: task.updatedAt,
-    browserSession,
+    message: task.message, createdAt: task.createdAt, updatedAt: task.updatedAt,
+    browserSession:null,
     latestExport:await fs.readFile(path.join(task.outputDir,'最新导出状态.json'),'utf8').then(JSON.parse).catch(()=>null),
-    collectionIssues:task.collectionIssues||[],
+    collectionIssues:task.collectionIssues||[],collectionStopReason:task.collectionStopReason||null,
+    collectionSchedule:await fs.readFile(path.join(task.outputDir,'采集调度状态.json'),'utf8').then(JSON.parse).then(state=>state.task_id===task.id?state:null).catch(()=>null),
     runningSeconds: running ? Math.floor((Date.now() - running.startedAt) / 1000) : 0,
     metrics: await metricsFor(task),
   };
@@ -1022,9 +792,16 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && pathname === '/api/state') {
       const visible = tasks.filter((task) => !task.archived);
-      return json(res, 200, { tasks: await Promise.all(visible.map(publicTask)), version: '1.11.0', capabilities: { unifiedKnowledge:true,nativeCollection:true,optionalExports:true,automaticPartialDelivery:true,retiredChannels:[...retiredCollectionChannels],channelFailureIsolation:true,publicAllKeywords:true,bossCollection: false, job51Collection: true, jobonlineCollection: true, publicChannelCheckpoints: true, nativeDatasets: true, labelReview: true, labelPacing: true, resourceRouting: true, insightSelection: true, taskInsightTransfer: true, finalDatasetCatalog: true }, activeCount: active.size });
+      return json(res, 200, { tasks: await Promise.all(visible.map(publicTask)), version: '1.17.0', capabilities: { insightSourceRole:true,multiRoleScreening:true,collectionTransportPolicy,hybridCollection:true,hybridTransportPolicy:collectionPolicyFor({transportMode:HYBRID_MODE}),adaptiveConditionQueue:true,conditionScopedStops:true,channelAcquisition,structuredDataCollection:true,structuredExecutionPlan:true,structuredTargetRounds:true,zhaopinCollection:true,mohrssHttpData:true,unifiedKnowledge:true,nativeCollection:true,optionalExports:true,automaticPartialDelivery:true,retiredChannels:[...retiredCollectionChannels],channelFailureIsolation:true,publicAllKeywords:true,bossCollection: false, job51Collection: true, jobonlineCollection: true, liepinCollection: true, publicChannelCheckpoints: true, nativeDatasets: true, platformLogin: false, aiLabeling: false, labelReview: false, labelPacing: false, resourceRouting: true, insightSelection: true, taskInsightTransfer: true, finalDatasetCatalog: true }, activeCount: new Set([...active.keys(),...pipelineRuns.runs.keys(),...startingStages]).size });
     }
-    if (await handleKnowledge(req,res,pathname)||await handleJobAssistant(req, res, pathname)) return;
+    // Retired workflows: reject every method before body parsing or side effects.
+    if (/^\/api\/(?:platforms|labels)(?:\/|$)/.test(pathname) || /^\/api\/tasks\/[^/]+\/login\/?$/.test(pathname)) {
+      return json(res, 410, { error: '平台登录与AI打标功能已移除', code: 'FEATURE_REMOVED' });
+    }
+    if (req.method === 'GET' && /^\/(?:platforms|labels)(?:\/|$)/.test(pathname)) {
+      res.writeHead(302, { location: '/tasks', 'cache-control': 'no-store' });res.end();return;
+    }
+    if (await browserWorkspace.handler(req,res,pathname)||await handleSemanticCloud(req,res,pathname)||await handleInsightClassifier(req,res,pathname)||await handleKnowledge(req,res,pathname)||await handleJobAssistant(req, res, pathname)) return;
     if (req.method === 'GET' && pathname === '/api/insights/datasets') {
       return json(res, 200, { root: knowledge.filename, catalog: 'knowledge-v1', datasets: await discoverInsightDatasets() });
     }
@@ -1033,6 +810,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && pathname === '/api/insights/run') {
       const body = await bodyJson(req);
+      if (body.labelJobId && body.labelJobId !== 'auto' || body.reviewedLabelDir || body.prelabelDir || body.reviewedLabelJobId || body.consensusLabelDirs?.length || body.consensusLabelJobIds?.length) {
+        return json(res, 410, { error: 'AI打标任务接入已移除，请直接选择岗位数据集生成洞察', code: 'FEATURE_REMOVED' });
+      }
       return json(res, 202, { ok: true, state: await startInsight(body), message: String(body.analysisMode || '') === 'full' ? '全量岗位匹配分析已启动' : '抽样分析已启动' });
     }
     if (req.method === 'GET' && pathname === '/api/insights/logs') {
@@ -1040,119 +820,48 @@ const server = http.createServer(async (req, res) => {
       try { content = await fs.readFile(insightLogPath, 'utf8'); } catch {}
       return json(res, 200, { content: content.slice(-100000) });
     }
-    if (req.method === 'GET' && pathname === '/api/platforms') {
-      return json(res, 200, { platforms: await publicPlatforms() });
-    }
-    if (req.method === 'POST' && pathname === '/api/platforms/yupao/switch-browser') {
-      if(activeLogins.has('yupao')||[...active.values()].some(item=>item.stage==='yupao'))return json(res,409,{error:'鱼泡登录或采集正在运行，请等待登录完成或暂停采集后再切换'});
-      if(!await managedBrowserState('yupao'))return json(res,409,{error:'请先打开鱼泡登录浏览器，登录后再切换'});
-      activeLogins.set('yupao',{kill(){}});
-      try{
-        const browser=await switchManagedBrowser('yupao');
-        return json(res,200,{ok:true,browserSessionId:browser.session_id,message:'Cookie 已迁移到新浏览器，后续鱼泡采集将复用此实例；请在新窗口确认登录状态'});
-      }finally{activeLogins.delete('yupao');}
-    }
-    const platformLoginMatch = pathname.match(/^\/api\/platforms\/([^/]+)\/login$/);
-    if (req.method === 'POST' && platformLoginMatch) {
-      startPlatformLogin(platformLoginMatch[1]);
-      return json(res, 202, { ok: true, message: platformLoginMatch[1]==='yupao'?'将打开或聚焦鱼泡浏览器；首次访问前随机等待 3–8 秒，再由你人工登录和验证':'将打开或聚焦共享浏览器，请人工登录和验证；无需关闭窗口，采集将复用同一实例' });
-    }
-    if (req.method === 'GET' && pathname === '/api/labels') {
-      const visible = labelJobs.filter((item) => !item.archived);
-      return json(res, 200, { jobs: await Promise.all(visible.map(publicLabelJob)), activeCount: activeLabels.size });
-    }
-    if (req.method === 'POST' && pathname === '/api/labels') {
-      return json(res, 201, { job: await createLabelJob(await bodyJson(req)) });
-    }
-    const labelResourceMatch = pathname.match(/^\/api\/labels\/([^/]+)$/);
-    if (req.method === 'GET' && labelResourceMatch) {
-      const item = labelJobs.find(job => job.id === labelResourceMatch[1] && !job.archived);
-      return item ? json(res, 200, { job: await publicLabelJob(item) }) : json(res, 404, { error: '打标任务不存在' });
-    }
-    const labelReviewMatch = pathname.match(/^\/api\/labels\/([^/]+)\/review$/);
-    if (labelReviewMatch) {
-      const item = labelJobs.find((job) => job.id === labelReviewMatch[1] && !job.archived);
-      if (!item) return json(res, 404, { error: '打标任务不存在' });
-      const state = await reviewState(item.outputDir);
-      if (req.method === 'GET') {
-        const audit = selectReviewAuditRows(state.records, state.decisions, 12);
-        return json(res, 200, {
-          total: state.records.length,
-          approved: [...state.decisions.values()].filter((decision) => decision === 'approved').length,
-          rejected: [...state.decisions.values()].filter((decision) => decision === 'rejected').length,
-          pending: audit.pending,
-          rows: audit.rows.map((record) => ({ row_no: record.row_no, job_id: record.job_id, job_name: record.job_name, skills_text: String(record.skills_text || '').slice(0, 700), job_description: String(record.job_description || '').slice(0, 1400), skills: record.skills || [], tasks: record.tasks || [], evidence_json: (record.evidence_json || []).slice(0, 8), label_status: record.label_status, relevance_grade: record.relevance_grade, confidence: record.confidence, employment_type: record.employment_type, evidence_coverage: record.evidence_coverage })),
-        });
-      }
-      if (req.method === 'POST') {
-        const body = await bodyJson(req);
-        if (!['approved', 'rejected'].includes(body.decision)) throw new Error('复核决定无效');
-        const record = state.records.find((candidate) => Number(candidate.row_no) === Number(body.row_no) && String(candidate.job_id) === String(body.job_id));
-        if (!record) throw new Error('标注记录不存在或已变化，请刷新');
-        await fs.appendFile(state.reviewPath, `${JSON.stringify({ row_no: record.row_no, job_id: record.job_id, label_digest: labelDigest(record), decision: body.decision, reviewer: '本机人工复核', reviewed_at: now() })}\n`, 'utf8');
-        return json(res, 200, { ok: true, message: body.decision === 'approved' ? '已批准该条标签' : '已驳回该条标签' });
-      }
-    }
-    const labelActionMatch = pathname.match(/^\/api\/labels\/([^/]+)\/(run|pause|open|archive)$/);
-    if (req.method === 'POST' && labelActionMatch) {
-      const [, id, action] = labelActionMatch;
-      const item = labelJobs.find((job) => job.id === id && !job.archived);
-      if (!item) return json(res, 404, { error: '打标任务不存在' });
-      if (action === 'run') {
-        if (['running', 'stopping'].includes(item.status)) throw new Error('该打标任务已经在运行');
-        await runLabelJob(item, await bodyJson(req));
-        return json(res, 202, { ok: true, message: '打标任务已启动' });
-      }
-      if (action === 'pause') {
-        const running = activeLabels.get(id);
-        if (!running) return json(res, 409, { error: '打标任务当前未运行' });
-        await setLabelJob(id, { status: 'stopping', message: '正在保存进度并停止' });
-        if (process.platform === 'win32') spawn('taskkill', ['/PID', String(running.child.pid), '/T', '/F'], { windowsHide: true });
-        else running.child.kill('SIGTERM');
-        return json(res, 202, { ok: true, message: '正在暂停，已完成结果可继续使用' });
-      }
-      if (action === 'open') {
-        spawn('explorer.exe', [item.outputDir], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
-        return json(res, 200, { ok: true });
-      }
-      if (action === 'archive') {
-        if (activeLabels.has(id)) throw new Error('请先暂停打标任务');
-        item.archived = true;
-        await saveLabelJobs(labelJobs);
-        return json(res, 200, { ok: true, message: '任务已从列表移除，结果文件未删除' });
-      }
-    }
-    const labelLogMatch = pathname.match(/^\/api\/labels\/([^/]+)\/logs$/);
-    if (req.method === 'GET' && labelLogMatch) {
-      let content = '';
-      try { content = await fs.readFile(path.join(labelLogDir, `${labelLogMatch[1]}.log`), 'utf8'); } catch {}
-      return json(res, 200, { content: content.slice(-180000) });
-    }
     if (req.method === 'POST' && pathname === '/api/tasks') {
       return json(res, 201, { task: await createTask(await bodyJson(req)) });
     }
     if (req.method === 'GET' && pathname === '/api/tasks') {
-      return json(res, 200, { tasks: await Promise.all(tasks.filter(task => !task.archived).map(publicTask)), activeCount: active.size });
+      return json(res, 200, { tasks: await Promise.all(tasks.filter(task => !task.archived).map(publicTask)), activeCount: new Set([...active.keys(),...pipelineRuns.runs.keys(),...startingStages]).size });
     }
     const taskResourceMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    const taskBackupMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/output-backup$/);
+    if(taskBackupMatch){
+      const item=taskById(tasks,taskBackupMatch[1]);if(!item)return json(res,404,{error:'任务不存在'});
+      if(req.method==='GET')return json(res,200,await inspectTaskBackup(item,{root:taskBackupRoot}));
+      if(req.method==='POST'){
+        if(active.has(item.id)||startingStages.has(item.id)||['running','stopping'].includes(item.status))return json(res,409,{error:'请先暂停任务再备份或恢复'});
+        const {action}=await bodyJson(req);if(!['snapshot','restore'].includes(action))return json(res,400,{error:'action 必须是 snapshot 或 restore'});
+        startingStages.add(item.id);
+        try{return json(res,200,action==='snapshot'?await snapshotTaskOutput(item,{root:taskBackupRoot}):await restoreTaskBackup(item,{root:taskBackupRoot}));}finally{startingStages.delete(item.id);}
+      }
+      return json(res,405,{error:'仅支持 GET/POST'});
+    }
     const taskInsightMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/insight-source$/);
     if (req.method === 'GET' && taskInsightMatch) {
       const item = taskById(tasks, taskInsightMatch[1]);
       if (!item || item.archived) return json(res, 404, { error: '采集任务不存在' });
+      const refreshed=await knowledge.sync({tasks:[item],refresh:true});
+      const failed=refreshed.sync_errors?.find(error=>error.task_id===item.id);
+      if(failed)throw new Error(`当前中间数据同步失败：${failed.error}；已有数据保留`);
       return json(res, 200, await taskInsightSource(item,{knowledge:true,dataDir}));
     }
     if (req.method === 'GET' && taskResourceMatch) {
       const item = taskById(tasks, taskResourceMatch[1]);
       return item && !item.archived ? json(res, 200, { task: await publicTask(item) }) : json(res, 404, { error: '采集任务不存在' });
     }
-    const actionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(run|pause|login|open|archive|confirm-verification|export-latest|refresh-latest)$/);
+    const actionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(run|pause|open|archive|confirm-verification|export-latest|refresh-latest)$/);
     if (req.method === 'POST' && actionMatch) {
       const [, id, action] = actionMatch;
       const task = taskById(tasks, id);
       if (!task) return json(res, 404, { error: '任务不存在' });
       if(action==='refresh-latest'){
         if(fsSync.existsSync(path.join(task.outputDir,'任务归属.json'))){const refreshed=await updateUnifiedDataset(task);if(refreshed.latestSnapshotError)throw new Error(refreshed.latestSnapshotError);}
-        await knowledge.sync({refresh:false});return json(res,200,await taskInsightSource(task,{knowledge:true,dataDir}));
+        const syncResult=await knowledge.sync({tasks:[task],refresh:true});
+        const syncError=syncResult.sync_errors?.find(e=>e.task_id===task.id);if(syncError)throw new Error(`当前中间数据同步失败：${syncError.error}；已有数据保留`);
+        return json(res,200,await taskInsightSource(task,{knowledge:true,dataDir}));
       }
       if(action==='export-latest'){
         if(latestExports.size)return json(res,409,{error:'已有最新数据导出正在进行，请稍后重试'});
@@ -1174,12 +883,16 @@ const server = http.createServer(async (req, res) => {
         return json(res,202,{message:'已提交人工确认；程序将检查当前搜索页，验证通过后继续同一会话'});
       }
       if (action === 'run') {
-        if (active.has(id) || startingStages.has(id) || ['running', 'stopping'].includes(task.status)) throw new Error('该任务已有程序正在运行或正在检查启动条件');
+        if (active.has(id) || pipelineRuns.has(id) || startingStages.has(id) || ['running', 'stopping'].includes(task.status)) throw new Error('该任务已有程序正在运行或正在检查启动条件');
         const { stage = 'all', resumeFrom = '' } = await bodyJson(req);
+        if(stage==='all'||['public','zhaopin','yupao','boss'].includes(stage)){
+          startingStages.add(id);
+          try{await assertTaskOutputOwnership(task);await snapshotTaskOutput(task,{root:taskBackupRoot});}finally{startingStages.delete(id);}
+        }
         if(!collectionChannelAvailable(stage)||!collectionChannelAvailable(resumeFrom))throw new Error('该渠道已停用，不能续采；请运行其他渠道或合并导出已有数据');
         if (stage === 'all') {
           if (resumeFrom && !['collection','public', 'zhaopin', 'yupao', 'boss', 'finalize', 'workbook'].includes(resumeFrom)) throw new Error('恢复阶段无效');
-          if (resumeFrom === 'public' && !task.platforms.some(key=>['shixiseng','iguopin','mohrss','job51','jobonline'].includes(key)) || ['zhaopin','yupao','boss'].includes(resumeFrom) && !task.platforms.includes(resumeFrom)) throw new Error('恢复阶段不属于该任务');
+          if (resumeFrom === 'public' && !task.platforms.some(key=>['shixiseng','iguopin','mohrss','job51','jobonline','liepin'].includes(key)) || ['zhaopin','yupao','boss'].includes(resumeFrom) && !task.platforms.includes(resumeFrom)) throw new Error('恢复阶段不属于该任务');
           // Clear the old pause marker before entering the pipeline's cancellation checks.
           await setTask(task.id, { status: 'ready', pipeline: true, message: '准备恢复采集流水线' });
           void runPipeline(task, resumeFrom);
@@ -1191,15 +904,14 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 202, { ok: true, message: '已启动' });
       }
-      if (action === 'login') {
-        const { platform = 'zhaopin' } = await bodyJson(req);
-        if (!['zhaopin', 'yupao', 'boss'].includes(platform)) throw new Error('不支持的登录平台');
-        startPlatformLogin(platform);
-        return json(res,202,{ok:true,message:'将打开或聚焦对应平台的共享浏览器，请人工登录/验证，无需关闭窗口'});
-      }
       if (action === 'pause') {
         const running = active.get(id);
-        if (!running) return json(res, 409, { error: '任务当前未运行' });
+        const cancelledPipeline=pipelineRuns.cancel(id);
+        if (!running){
+          if(!cancelledPipeline)return json(res,409,{error:'任务当前未运行'});
+          await setTask(id,{status:'paused',pipeline:false,message:'已暂停，后续轮次不会启动；已保存数据和断点保留'});
+          return json(res,202,{ok:true,message:'已暂停流水线'});
+        }
         await setTask(id, { status: 'stopping', message: '正在安全停止当前进程' });
         if (process.platform === 'win32') {
           const killer = spawn('taskkill', ['/PID', String(running.child.pid), '/T', '/F'], { windowsHide: true });
@@ -1212,7 +924,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true });
       }
       if (action === 'archive') {
-        if (active.has(id)) throw new Error('请先暂停任务');
+        if (active.has(id)||pipelineRuns.has(id)||startingStages.has(id)) throw new Error('请先暂停任务');
         task.archived = true;
         await saveTasks(tasks);
         return json(res, 200, { ok: true, message: '任务已从控制台移除，输出文件未删除' });
@@ -1234,7 +946,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { content });
     }
     if (pathname.startsWith('/api/')) return json(res, 404, { error: '接口不存在' });
-    if (req.method === 'GET' && /^\/(?:tasks|labels)(?:\/[^/]+)?\/?$|^\/(?:platforms|insights)\/?$/.test(pathname)) return await serveStatic(req, res, '/');
+    if (req.method === 'GET' && /^\/tasks(?:\/[^/]+)?\/?$|^\/(?:insights|browser)\/?$/.test(pathname)) return await serveStatic(req, res, '/');
     return await serveStatic(req, res, pathname);
   } catch (error) {
     console.error(error);
@@ -1265,9 +977,10 @@ server.on('error', async (error) => {
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
+    void insightSupervised.cancel();
+    void semanticCloud.cancel();
+    void browserWorkspace.dispose();
     for (const { child } of active.values()) child.kill('SIGTERM');
-    for (const { child } of activeLabels.values()) child.kill('SIGTERM');
-    for (const child of activeLogins.values()) child.kill('SIGTERM');
     if (activeInsight?.child) activeInsight.child.kill('SIGTERM');
     server.close(() => process.exit(0));
   });

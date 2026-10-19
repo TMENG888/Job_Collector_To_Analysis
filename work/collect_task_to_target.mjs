@@ -61,7 +61,7 @@ async function run(stage) {
 }
 try {
   await save();
-  const stages=['zhaopin','public','boss','yupao'].filter(collectionChannelAvailable).filter(stage=>stage==='public'?task.platforms.some(key=>['shixiseng','iguopin','mohrss','job51','jobonline'].includes(key)):task.platforms.includes(stage));
+  const stages=['zhaopin','public','boss','yupao'].filter(collectionChannelAvailable).filter(stage=>stage==='public'?task.platforms.some(key=>['shixiseng','iguopin','mohrss','job51','jobonline','liepin'].includes(key)):task.platforms.includes(stage));
   if(['running','stopping'].includes(task.status)) {
     journal.attempted.push(task.currentStage);await save();await observe(task.currentStage);
   }

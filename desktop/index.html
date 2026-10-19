@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>岗位工作台 · 桌面预览</title>
+  <link rel="stylesheet" href="shell.css">
+</head>
+<body>
+  <header class="appbar">
+    <div class="brand"><span class="logo">J</span><strong>岗位工作台</strong><span class="badge">桌面预览</span></div>
+    <nav aria-label="工作区">
+      <button data-route="tasks">采集任务</button>
+      <button data-route="insights" class="active">岗位洞察</button>
+      <button data-route="assistant">求职助手</button>
+      <button id="browserMode">求职浏览器</button>
+    </nav>
+    <span class="local"><i></i> 本地运行</span>
+  </header>
+  <section id="browserChrome" hidden>
+    <div class="tabbar"><div id="tabs" role="tablist" aria-label="招聘网页"></div></div>
+    <form id="navigation" class="navigation">
+      <button id="back" type="button" title="返回" aria-label="返回">←</button>
+      <button id="forward" type="button" title="前进" aria-label="前进">→</button>
+      <button id="reload" type="button" title="刷新" aria-label="刷新">↻</button>
+      <span class="native-tag">原生网页</span>
+      <input id="address" aria-label="招聘网页地址" spellcheck="false" placeholder="https://www.zhipin.com/">
+      <button type="submit" id="go">前往</button>
+      <select id="sitePicker" aria-label="新标签网站"></select><button type="button" id="newTab">＋</button>
+    </form>
+  </section>
+  <section id="empty" hidden><div><span class="empty-symbol">⌘</span><h1>打开招聘网站</h1><p>直接点击、滚动与输入</p><div id="sites"></div></div></section>
+  <section id="pageError" hidden><div><h1>网页未正常显示</h1><p id="pageErrorText"></p><button id="recoverBack">返回上一页</button></div></section>
+  <aside id="tools" hidden>
+    <div class="panel-heading"><div><span class="eyebrow">JOB TOOLS</span><h2>岗位插件</h2></div><span class="badge">只读原型</span></div>
+    <div class="tool-actions"><button id="detail" class="primary">读取当前详情</button><button id="list">整理当前页</button></div>
+    <div id="readStatus" class="muted">打开岗位详情后读取</div>
+    <section class="classification"><h3>有监督岗位筛选</h3><select id="models" aria-label="岗位分类器"><option value="">加载分类器…</option></select><button id="classify" disabled>使用本地分类器</button><div id="classification" role="status"></div></section>
+    <div id="results" aria-live="polite"></div>
+  </aside>
+  <footer><span id="status" role="status">连接本地工作台…</span><span id="transport">本地工作台</span></footer>
+  <script src="shell.js"></script>
+</body>
+</html>

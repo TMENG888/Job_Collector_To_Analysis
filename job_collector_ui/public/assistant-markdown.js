@@ -1,5 +1,6 @@
 import {Marked} from './vendor/marked.esm.js';
 import createDOMPurify from './vendor/purify.es.js';
+import {addCodeActions} from './assistant-message-actions.js';
 
 const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const markdown=new Marked({gfm:true,breaks:true,async:false,renderer:{
@@ -58,5 +59,6 @@ export function setAssistantMarkdown(root,value,sources=[],prefix='assistant-ans
     }
     fragment.append(doc.createTextNode(node.textContent.slice(offset)));node.replaceWith(fragment);
   }
+  addCodeActions(root,{notify:text=>{const status=doc.querySelector('#assistantNotice');if(status)status.textContent=text;}});
   return root;
 }

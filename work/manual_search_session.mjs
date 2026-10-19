@@ -3,7 +3,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {writeJsonAtomic} from './collector_storage.mjs';
 import {assertListPage} from './list_page_guard.mjs';
-import {blockedReason} from './browser_public_channels.mjs';
+import {blockedReason} from './access_block_reason.mjs';
 
 export const sessionFileName=platform=>`${platform==='yupao'?'鱼泡直聘':'智联招聘'}_浏览器会话.json`;
 export async function createManualSearchSession(outputDir, taskId, page, {pollMs=1000,platform='zhaopin',settleMs=15000,instanceId=null,onBlocked=process.env.JOB_COLLECTOR_BLOCKED_POLICY||'wait'}={}) {

@@ -1,102 +1,99 @@
-# Job Collector To Analysis
+# 岗位采集与分析工作台
 
-本机岗位采集、统一知识库、AI 打标、岗位洞察与多会话求职助手。仅监听 `127.0.0.1`，不要直接暴露到公网。
+当前源码版本：**0.2.0 · 2026-10-19**。包含采集中心、统一岗位知识库、岗位洞察、求职助手、普通浏览器扩展，以及 Electron 桌面原型。仅监听本机地址，不要直接暴露到公网。
 
-更新：2026-10-14。源码不包含真实任务、招聘数据、简历、聊天历史、密钥或登录态。
+[本版更新与验证](docs/CHANGELOG-2026-10-19.md) · [桌面原型说明](desktop/README.md) · [历史图文说明](docs/USER_GUIDE.md)
 
-[图文使用说明](docs/USER_GUIDE.md) · [求职助手说明](docs/求职助手_使用说明.md) · [后端数据通路](docs/统一岗位知识库_后端设计.md) · [本次更新](docs/CHANGELOG-2026-10-14.md)
+## 本版能力与边界
 
-![多会话求职助手与统一样式](docs/images/09-assistant.jpg)
+- 多渠道任务、关键词扩展、城市与渠道配置、断点和资源保护；任务不再以目标条数为停止条件，按可访问范围及安全分页预算采集。限流、验证或预算停止不代表平台已采完。
+- 采集中间数据经去重写入 SQLite 知识库，可直接用于洞察和助手，不需要先导出文件。
+- 岗位洞察使用 TF-IDF＋逻辑回归监督筛选。已发布固定模型或当前数据集启用的候选模型可用；没有可用模型时明确停止，不静默退回纯规则纳入。
+- Qwen 少样本标注、候选训练、公司与近重复隔离评测、Token 和费用估算、人工核验及手动启用。代理评测是对模型标签的一致性，不等同人工准确率或全库效果。
+- 求职助手支持按本轮问题切换岗位与查询范围，采集配置变更和写操作仍需核对确认卡片。
+- 普通 Chrome/Edge＋本地 MV3 扩展：配对、当前岗位读取、简历匹配、镜像交互和确认后的有界求职操作。镜像交互仍有浏览器授权、焦点及站点兼容性限制，不承诺与原生网页完全等价。
+- Electron 桌面原型：本地工作台与招聘网页独立渲染，原生鼠标和键盘交互、多标签与独立会话；顶部导航统一，避免重复侧栏。招聘网页无 Node/preload 权限。
+- 已移除旧平台登录和 AI 标注独立导航。历史兼容代码和测试保留，不表示旧入口仍然开放。
 
-插图均为本版前端的只读合成演示，不是实际采集结果、薪资结论或算法效果验证。
+桌面原型只接入岗位读取和本地分类，并未把 Web 扩展的沟通、简历截图发送、智能投递通道迁移到 Electron。它不是已打包的独立 EXE 安装程序；不控制用户已有 Chrome，不保证招聘站点接受 Electron，也不规避验证或反爬。
 
-## 本版能力
+## Web 安装与启动
 
-- 统一浅色灰绿 UI、图标导航、弹窗、手机会话抽屉。
-- 有界多渠道并发、账号锁、断点续采、详情缓存、低新增监测；调整仅在已配置条件内，不绕过验证。
-- 平台＋岗位 ID 自动去重写入任务 SQLite，约 15 秒归集中央 SQLite/WAL 知识库。
-- 洞察、打标与助手原生读取数据库，不强制先合并文件/导出 CSV；文件导入和下载为兼容能力。
-- 四类画像使用中心向外权重递减词云，支持单图缩放/重置/放大；经验—薪资折线、学历和城市环状图、联动条件薪资统计。
-- 技术—薪资增量非负回归已退出产品展示；历史代码与测试保留，不作为涨薪建议。
-- 多会话纯聊天、净化后的 Markdown、聊天内简历附件、跨岗位检索/统计/比较，可选 DeepSeek / 通义文本模型。
-- 采集闭环：读任务/进度/日志 → 准备方案 → 人工按钮确认 → 创建、启动/续采、暂停或下载 → 返回真实回执。聊天中的“确认”只定位卡片；过期需重新准备，不直接执行。
-
-检索为结构化过滤＋关键词加权，不是向量检索；embedding 不是启动前提。岗位自动分类尚未在全部方向完成独立人工验收，请核验具体 JD。
-
-## 环境与依赖
-
-主要支持 Windows。Node.js **22.13+**（使用 `node:sqlite`）、Python 3、完整 Chrome；浏览器切换需要 Edge。简历文字 PDF 解析需 Python `pypdf`，DOCX 使用标准库；扫描件不支持 OCR。
+主要支持 Windows，Node.js **22.13+**、npm、Python 3 和已安装的 Chrome/Edge。
 
 ```powershell
 npm ci
-npm test
+$env:JOB_UI_PORT='8788'
+$env:JOB_UI_DATA_DIR='E:\岗位工作台\data'
+$env:TEMP='E:\岗位工作台\temp'
+$env:TMP=$env:TEMP
+New-Item -ItemType Directory -Force $env:JOB_UI_DATA_DIR,$env:TEMP
 npm start
 ```
 
-默认 <http://127.0.0.1:8765>，也可双击启动 BAT。已有实例可能为 8788，以终端输出为准；不要同时用同一数据目录运行两个主服务。
+打开 <http://127.0.0.1:8788>。主服务默认端口仍是 8765；扩展默认连接 8788，使用扩展时建议按上例指定。不要让两个服务同时写同一数据目录。BAT 入口尊重预设的 JOB_UI_PORT。
 
-Excel 导出、XLSX/CSV 读写仍依赖 **`@oai/artifact-tool`（验证版 2.8.59）**，这是 Codex 提供的非公开可选依赖，`npm ci` 不会安装。发布副本延迟加载此组件，原生知识库读取不要求它；文件业务及相应测试仍需有权使用的环境。本次没有替换或打包该组件。
+SQLite 和固定监督分类器使用原生 Node 推理，不需要在线模型调用或 Python 即可启动。文件导入、Excel 导出仍依赖可选的 `@oai/artifact-tool`（验证版 2.8.59），该组件不是公开 npm 安装依赖；未配置时不要调用相应文件功能。
 
-主控制台已内置助手，通常不需要独立服务。兼容旧主服务可运行 `node work/job_assistant_service.mjs`：助手默认 8791，连接旧主端口 8788；主服务为 8765 时先设置 `$env:JOB_UI_PORT='8765'`。
+## Qwen 标注、训练与简历
 
-## 使用流程
+安装可选 Python 依赖：
 
-1. 平台登录页人工完成登录和必要验证。
-2. 创建任务，核对岗位关键词、城市、目标、渠道和节奏，运行有界并发采集。
-3. 自动去重入库后点击“用于岗位洞察”，无需等任务结束或 CSV 导出。
-4. 洞察读取固定版本快照，画像和薪资按条件联动；数据更新需重新生成报告。
-5. 助手直接问岗位需求、同条件比较或上传简历；操作采集需核对确认卡并点击按钮。
-6. 需要文件时“下载数据（可选）”，更新本任务最新文件，不修改原始断点。
+```powershell
+python -m venv E:\岗位工作台\python-env
+E:\岗位工作台\python-env\Scripts\python.exe -m pip install -r requirements.txt
+$env:JOB_INSIGHT_PYTHON='E:\岗位工作台\python-env\Scripts\python.exe'
+$env:JOB_ASSISTANT_PYTHON=$env:JOB_INSIGHT_PYTHON
+$env:JOB_INSIGHT_QWEN_BASE_URL='https://你的业务空间.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'
+npm start
+```
 
-可用性以 `work/channel_availability.mjs` 和任务状态为准。BOSS、鱼泡停止新请求，历史适配器保留；前程无忧重新接入正常页面会话，不保证访问始终可用。资源不足、登录、限流和页面异常需人工处理，目标条数不是交付保证。
+使用供应商控制台提供的真实 OpenAI 兼容 Base URL（不含 /chat/completions）。默认地址为 DashScope 兼容入口，具体模型可用性以你的地域、业务空间和账户权限为准。模型默认为 qwen3.7-flash。
 
-薪资为招聘月薪中点统计，不证明因果涨薪；有效样本少于 5 条不报分位，5–19 条提示小样本。不同平台仍可能存在同岗重复。
+在岗位洞察中配置自己的 API Key，再点击标注、训练并手动启用。Key 采用当前 Windows 用户 DPAPI 加密，不写入源码。Qwen 会接收经过字段处理的岗位文本；提交前确认有权向供应商发送。费用显示按设定单价估算，实际账单与代金券抵扣以供应商为准。
 
-## 本机配置
+PDF 文字解析需 pypdf，原版式页面渲染需 pypdfium2/Pillow。简历截图只接受原版式 PDF；DOCX 请先自行转 PDF。简历需在本机重新上传，不随源码分发。
 
-启动前设置环境变量，程序不自动读取 `.env`。
+## 浏览器扩展与桌面
+
+扩展源码在 `job_collector_ui/browser-extension/`。在 Chrome/Edge 扩展管理页开启开发者模式并加载该目录，在工作台完成配对。浏览器登录和验证码由用户手动处理；不要把登录会话上传 GitHub。
+
+桌面原型首次启动：
+
+```powershell
+pwsh -NoProfile -File .\desktop\start.ps1 -Install -BaseUrl http://127.0.0.1:8788
+```
+
+后续可在资源管理器中双击 `desktop/打开岗位工作台.cmd`。需要 PowerShell 7；优先查找 Codex 已有运行时或系统安装。Electron 44.9.0 从官方固定版本下载并校验 SHA256。为遵循本机约定，桌面运行时、日志和独立会话默认放 E 盘；E 盘不存在会明确停止，不悄悄回退 C 盘。
+
+`pwsh.exe` 仅负责启动环境，不是容器；实际 GUI 由 electron.exe 运行。源码更新后重开 App 即可加载桌面壳更新。Web 后端更新是否需要重启须另外确认，源码推送不会自动重启生产服务。
+
+## 数据与发布
+
+本仓库包含程序源码、合成测试及 4 个经哈希校验的固定监督推理模型；不包含原始训练/标注样本、岗位数据库、任务配置、采集结果、真实简历、聊天记录、API Key、浏览器登录态、私有候选模型、虚拟环境或 Electron 二进制。新电脑需要重新配置密钥、数据路径和个人候选分类器。
+
+`work/models/role-screening/` 是严格白名单，仅发布固定推理权重及注册清单。用户训练的新模型及训练日志仍留在自己的数据目录。固定模型仅覆盖数据分析、嵌入式开发、测试工程和智能体/大模型应用；其他岗位必须在本机完成标注、训练和启用。
+
+配置通过环境变量或本机私有配置读取，不自动加载 .env。常用变量：
 
 | 变量 | 用途 |
 | --- | --- |
-| `JOB_UI_PORT` | 主端口，默认 8765，BAT 尊重已有值 |
-| `JOB_UI_DATA_DIR` | 状态/数据库/日志，默认项目 `ui_data/` |
-| `JOB_UI_OPEN_BROWSER` | `1` 时打开控制台 |
-| `JOB_UI_NODE` / `JOB_UI_PYTHON` | BAT Node / 合并脚本 Python |
-| `JOB_INSIGHT_DATASET_ROOT` | 兼容文件目录，默认项目 `outputs/` |
-| `JOB_BROWSER_PROFILE_ROOT` | 受管理浏览器资料目录 |
-| `JOB_ASSISTANT_PYTHON` | PDF/DOCX Python，PDF 需 pypdf |
-| `JOB_ASSISTANT_SESSIONS_DIR` | 加密历史绝对目录 |
-| `JOB_ASSISTANT_PORT` | 兼容助手端口，默认 8791 |
+| JOB_UI_PORT / JOB_UI_DATA_DIR | 本机端口和私有数据目录 |
+| JOB_TASK_OUTPUT_ROOT / JOB_TASK_BACKUP_ROOT | 任务输出与备份目录 |
+| JOB_INSIGHT_DATASET_ROOT | 兼容文件数据集目录 |
+| JOB_INSIGHT_CLASSIFIER_DIR | 私有候选模型、标注记录与密钥目录 |
+| JOB_INSIGHT_PYTHON / JOB_ASSISTANT_PYTHON | 训练与简历解析 Python |
+| JOB_INSIGHT_QWEN_BASE_URL | 自己的供应商兼容 Base URL |
+| JOB_ASSISTANT_SESSIONS_DIR | 加密聊天历史目录 |
 
-模型在助手右上弹窗配置；密钥由 Windows 当前用户 DPAPI 加密，不回显、不入 Git。聊天中暴露过的密钥应撤销重建，供应商侧建议设预算。
-
-## 目录与验收
-
-```text
-job_collector_ui/server.mjs        主服务和编排
-job_collector_ui/public/           五模块 UI、Markdown、图表与地图
-work/collect_*.mjs                 采集和并发调度
-work/job51/                       前程无忧适配器
-work/collector_native_sink.mjs     任务 SQLite 入库
-work/job_knowledge_*.mjs           中央知识库、版本与接口
-work/job_assistant_*.mjs           多轮工具、会话、模型及确认
-work/analyze_job_market_sample.mjs 生产洞察
-scripts/                         演示、测试、发布检查
-docs/                            图文说明与更新记录
-```
-
-`npm test` 仅执行列明的合成/临时目录测试，不访问真实招聘平台或模型；部分资源检查是 Windows 本机只读诊断。其他 `test_*.mjs` 包含历史 UI、浏览器、私有数据集成，不要批量对生产执行。私有验收资料不随源码发布。
+## 检查与已知限制
 
 ```powershell
-npm run docs:demo
-npm run test:docs
+npm test
+npm run test:desktop
 npm run check:release
 ```
 
-演示 <http://127.0.0.1:18979> 为真实前端＋合成数据，不读取生产库，不采集、不调用模型。允许 GET 和严格限定的固定会话读取回放，业务写操作全部拒绝。退出时在终端 Ctrl+C。
+默认测试使用合成数据和临时目录；私有数据、实网集成及付费标注不属于默认验收。完整验证结果和未通过项见本版更新记录。测试不替代真实站点登录、发送和长期稳定性验收。
 
-升级前确认无活动采集/打标/分析，备份数据库与私有配置后人工重启。源码推送不代表运行服务已重载。
-
-## 第三方与责任
-
-[D3、Marked、DOMPurify 及地图来源](THIRD_PARTY_NOTICES.md)。采集/模型须遵守条款、授权与隐私要求；不支持任意命令、自动投递、验证码破解或绕过账号保护。
+历史图文说明记录旧版本，可能含已移除的入口或目标条数配置；当前功能以本 README、本版更新和代码为准。第三方说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，不改变原第三方许可。
