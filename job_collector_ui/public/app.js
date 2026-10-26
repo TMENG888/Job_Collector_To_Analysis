@@ -1,25 +1,29 @@
 import {cohortConditionValue} from './insight-cohorts.js';
 import { patchHtml, updateLog } from './dom-updates.js';
-import {renderInsightWorkspace} from './insight-dashboard.js?v=20261018-semantic-cloud';
+import {renderInsightWorkspace} from './insight-dashboard.js?v=20261024-concrete-skills';
 import {installWordCloudInteractions} from './insight-wordcloud.js';
-import {loadJobAssistant} from './job-assistant.js';
+import {loadJobAssistant} from './job-assistant.js?v=20261022-interview-retrieval';
 import {installSkillTermReview} from './skill-term-review.js';
 installWordCloudInteractions();
 import {mergeLiveProgress, collectionProgress} from './collection-progress.js';
-import {renderCollectionDashboard} from './collection-dashboard.js';
+import {renderCollectionDashboard} from './collection-dashboard.js?v=20261026-verification-state';
+import {formatCollectionFlowLog} from './collection-flow-log.js?v=20261022-flow-log';
+import {renderInterviewPanel,installInterviewTools} from './interview-tools.js?v=20261023-interview-unlimited';
 import { fetchJsonWithTimeout } from './http-client.js';
 import { localPathKey, finalDatasetCatalog, selectLegacyTaskDataset,resolveLatestInsightSource } from './insight-transfer.js';
 import {loadInsightCatalog,populateInsightPickers} from './insight-dataset-picker.js';
-import {installInsightClassifier} from './insight-classifier.js?v=20261018-supervised-only';
-import {installSemanticCloud} from './insight-semantic.js?v=20261018-semantic-cloud';
+import {installInsightClassifier} from './insight-classifier.js?v=20261023-trial-workflow';
+import {insightReportContext} from './insight-classifier-state.js?v=20261023-trial-workflow';
+import {installSemanticCloud} from './insight-semantic.js?v=20261024-concrete-skills';
 import {installJobBrowserWorkspace} from './browser-workspace.js?v=20261019-interaction-fix-9';
+import {installPersonalWiki} from './personal-wiki.js?v=20261022-single-organizer';
 const state = { tasks: [], selectedId: null, insight: null, insightDatasets: [], insightRenderKey: null, insightFormInitialized: false, insightDatasetRequest: 0, view: 'tasks', timer: null, logTimer: null };
 const normalizedLocalPath = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
 const $ = (selector) => document.querySelector(selector);
 const number = (value) => new Intl.NumberFormat('zh-CN').format(Number(value || 0));
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const stageLabel = { collection: '多平台采集', public: '多平台采集', zhaopin: '多平台采集', yupao: '多平台采集', boss: '多平台采集', login_boss: 'BOSS登录', login_zhaopin: '智联登录', login_yupao: '鱼泡验证', finalize: '导出交付', workbook: '导出交付' };
-const statusLabel = { ready: '就绪', running: '运行中', completed: '已完成', partial: '未达目标', failed: '需处理', paused: '已暂停', stopping: '停止中' };
+const statusLabel = { ready: '待启动', running: '运行中', completed: '已完成', partial: '未达目标', failed: '需处理', paused: '已暂停', stopping: '停止中' };
 const platformLabel = { shixiseng: '实习僧', iguopin: '国聘', mohrss: '公共招聘网', job51: '前程无忧', jobonline: '就业在线', zhaopin: '智联招聘', liepin:'猎聘', yupao: '鱼泡直聘', boss: 'BOSS直聘' };
 const authLabels={unknown:'未确认',saved_unverified:'会话已保存，未验证登录',human_confirmed:'人工已确认',login_required:'需要登录'};
 const verificationLabels={unchecked:'未检查',waiting_human:'等待人工验证',clear:'当前页面通过',session_closed:'会话已关闭'};
@@ -116,10 +120,11 @@ function renderDetail() {
       ${task.hybridCollection?.results?.length?`<p role="status">本轮取数方式：${task.hybridCollection.results.map(row=>escapeHtml((platformLabel[row.platform]||row.platform)+'：'+(row.transport==='browser_dom'?'页面 RPA':row.transport==='http'?'HTTP':'暂停')+(row.reason?' · '+row.reason:''))).join('；')}</p>`:''}
       ${task.pausedPlatforms?.length?'<p role="status">暂停渠道（数据与断点保留）：'+task.pausedPlatforms.map(item=>escapeHtml((platformLabel[item.key]||item.key)+'：'+item.reason)).join('；')+'</p>':''}
       ${renderCollectionDashboard(task,{number,escapeHtml})}
+      ${renderInterviewPanel(task,{number,escapeHtml})}
       ${task.latestExport?`<p class="latest-export-status">最新导出：${escapeHtml(task.latestExport.status==='running'?'正在处理':task.latestExport.status==='failed'?'失败':task.latestExport.status==='partial'?'CSV已更新，Excel未更新':'CSV／Excel已更新')} ${task.latestExport.rows?number(task.latestExport.rows)+' 条':''} ${escapeHtml(task.latestExport.updatedAt?new Date(task.latestExport.updatedAt).toLocaleString('zh-CN'):'')} ${escapeHtml(task.latestExport.warning||task.latestExport.error||'')}</p>`:''}
       <div class="task-config">${chips.filter(Boolean).map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join('')}</div>
-      <div class="log-head"><h3>实时运行日志</h3><span>${isRunning ? `已运行 ${task.runningSeconds || 0} 秒 · 2秒刷新` : '最近输出'}</span></div>
-      <pre class="log" id="taskLog">正在读取日志…</pre>
+      <div class="log-head"><h3>执行流程</h3><span>${isRunning ? '自动更新' : '最近事件'}</span></div>
+      <pre class="log" id="taskLog">正在读取流程…</pre>
       <div class="path"><span>输出</span><code title="${escapeHtml(task.outputDir)}">${escapeHtml(task.outputDir)}</code></div>
       ${task.legacyOutputDir ? `<div class="path"><span>历史目录（未自动混入）</span><code>${escapeHtml(task.legacyOutputDir)}</code></div>` : ''}
       <div class="detail-actions"><button class="ghost" data-action="archive" ${isRunning ? 'disabled' : ''}>从任务列表移除</button></div>
@@ -145,7 +150,7 @@ function syncRoute(replace = false) {
 
 function restoreRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
-  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'insights','browser'].includes(parts[0]) ? parts[0] : 'tasks';
+  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'insights','browser','profile'].includes(parts[0]) ? parts[0] : 'tasks';
   const id = parts[1] ? decodeURIComponent(parts[1]) : null;
   if (view === 'tasks') state.selectedId = id;
   switchView(view, { history: false });
@@ -162,9 +167,9 @@ function switchView(view, options = {}) {
     if (link.dataset.view === view) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   });
-  const titles = { tasks: '采集任务', insights: '岗位洞察', assistant: '求职助手',browser:'求职浏览器' };
+  const titles = { tasks: '采集任务', insights: '岗位洞察', assistant: '求职助手',browser:'求职浏览器',profile:'个人 Wiki 与简历库' };
   $('#pageTitle').textContent = titles[view];
-  $('#newTaskBtn').classList.toggle('hidden', ['insights', 'assistant','browser'].includes(view));
+  $('#newTaskBtn').classList.toggle('hidden', ['insights', 'assistant','browser','profile'].includes(view));
   $('#newTaskBtn').innerHTML = '<span>＋</span> 新建采集任务';
   if (options.history !== false) syncRoute();
   if (view === 'tasks') refresh(false);
@@ -216,20 +221,25 @@ function renderInsightStatus() {
   const insight = state.insight || { status: 'empty', message: '尚未生成岗位市场洞察' };
   const status = $('#insightStatus');
   const report = insight.report;
-  const completedMessage = report && insight.status === 'completed' ? `${report.detected_role?.name || report.role || '岗位'}分析完成：${number(report.sample_rows)}/${number(report.total_rows)} 条` : insight.message;
+  const context=insightReportContext({report,inputFile:$('#insightForm input[name="inputFile"]').value,running:insight.status==='running',normalize:normalizedLocalPath});
+  const completedMessage = report && insight.status === 'completed' ? `${report.experimental?'[试分析 · 候选未达标] ':''}${report.detected_role?.name || report.role || '岗位'}分析完成：${number(report.sample_rows)}/${number(report.total_rows)} 条` : insight.message;
   const updatedAt = report?.generated_at || insight.updatedAt;
-  status.innerHTML = `<div class="insight-run-state ${escapeHtml(insight.status)}"><span class="pulse"></span><div><b>${escapeHtml(completedMessage)}</b><small>${insight.status === 'running' ? `已运行 ${number(insight.runningSeconds)} 秒` : updatedAt ? `最近更新 ${new Date(updatedAt).toLocaleString('zh-CN')}` : '选择数据后生成分析'}</small></div></div>`;
+  status.classList.toggle('insight-report-stale',context.hideReport);
+  status.innerHTML = `<div class="insight-run-state ${escapeHtml(insight.status)}"><span class="pulse"></span><div><b>${escapeHtml(context.title||completedMessage)}</b><small>${context.hideReport?'上次报告与当前数据集不同':insight.status === 'running' ? `已运行 ${number(insight.runningSeconds)} 秒` : updatedAt ? `最近更新 ${new Date(updatedAt).toLocaleString('zh-CN')}` : '选择数据后生成分析'}</small></div></div>`;
   if (report) {
     const changed = normalizedLocalPath($('#insightForm input[name="inputFile"]').value) !== normalizedLocalPath(report.input_file);
     const historicalManual = report.detected_role?.mode === 'manual_override' && !report.selection_contract;
     const sourceLabel=String(report.input_file||'').startsWith('kb://')?`${report.detected_role?.name||report.role||'全部岗位'} · 知识库`:String(report.input_file||'').split(/[/\\]/).at(-1);
-    status.insertAdjacentHTML('beforeend', `<p class="insight-report-source" title="${escapeHtml(report.input_file)}">报告：${escapeHtml(sourceLabel)}${insight.status === 'failed' ? ' · 本次失败，保留上次报告' : changed ? ' · 数据源已更改，请重新生成' : historicalManual ? ' · 历史报告，建议重新生成' : ''}</p>`);
+    status.insertAdjacentHTML('beforeend', `<div class="insight-report-actions"><p class="insight-report-source" title="${escapeHtml(report.input_file)}">${changed?'上次报告':'报告'}：${escapeHtml(sourceLabel)}${insight.status === 'failed' ? ' · 本次失败，保留上次报告' : historicalManual ? ' · 历史报告，建议重新生成' : ''}</p>${context.hideReport?`<button type="button" class="ghost" data-insight-history aria-controls="insightDashboard" aria-expanded="${!!state.insightHistoryVisible}">${state.insightHistoryVisible?'收起':'查看'}上次报告</button>`:''}</div>`);
   }
+  $('#insightDashboard').hidden=context.hideReport&&!state.insightHistoryVisible;
+  status.querySelector('[data-insight-history]')?.addEventListener('click',()=>{state.insightHistoryVisible=!state.insightHistoryVisible;renderInsightStatus();});
   const button = $('#runInsight');
   if (button) {
-    const ready=button.dataset.supervisedReady==='true'&&button.dataset.classifierSource===$('#insightForm input[name="inputFile"]').value;
-    button.disabled = insight.status === 'running'||!ready;
-    button.textContent = insight.status === 'running' ? '分析运行中…' : ready?'生成全量分析':'请先训练分类器';
+    const ready=button.dataset.analysisReady==='true'&&button.dataset.classifierSource===$('#insightForm input[name="inputFile"]').value;
+    const running=insight.status==='running'||button.dataset.submitting==='true';
+    button.disabled = running||!ready;
+    button.textContent = running ? '分析运行中…' : button.dataset.classifierMode==='candidate-trial'?'生成全量试分析':'生成全量分析';
   }
 }
 
@@ -271,7 +281,7 @@ function renderInsightDashboard() {
     return;
   }
   logInsightFilterAudit(report);
-  container.innerHTML='<div id="cohortExplorer"></div>';
+  container.innerHTML=(report.experimental?'<p class="insight-trial-banner" role="note">试分析 · 分类器未通过验收，结果仅供探索，未发布为正式知识库分析。</p>':'')+'<div id="cohortExplorer"></div>';
   disposeInsightWorkspace=renderInsightWorkspace($('#cohortExplorer'),report,{drawCityMap,drawCityDetail});
 }
 
@@ -371,8 +381,12 @@ function renderInsight() {
 }
 
 async function loadInsight(silent = true) {
+  if(state.insightLoading)return;
+  state.insightLoading=true;
   try {
-    state.insight = await api('/api/insights');
+    const next=await api('/api/insights?summary=1');
+    const report=!next.reportVersion?null:next.reportVersion===state.insight?.reportVersion?state.insight.report:await api('/api/insights/report',{timeoutMs:60000});
+    state.insight = {...next,report};
     if(!state.insightFormInitialized && state.insight.report) {
       const report=state.insight.report;
       // The previous report is a result, not the default source for a new analysis.
@@ -382,6 +396,7 @@ async function loadInsight(silent = true) {
     }
     renderInsight();
   } catch (error) { if (!silent) toast(error.message, true); }
+  finally{state.insightLoading=false;}
 }
 
 async function refresh(silent = true) {
@@ -422,13 +437,34 @@ async function loadLog() {
   try {
     const data = await api(`/api/tasks/${encodeURIComponent(id)}/logs`);
     if (state.view !== 'tasks' || id !== state.selectedId || log !== $('#taskLog')) return;
-    updateLog(log, data.content || '尚无运行日志。'); log._logLoaded = true;
+    updateLog(log, formatCollectionFlowLog(data.content)); log._logLoaded = true;
   } catch {}
   finally { log._logLoading = false; }
 }
 
+const pendingVerifications=new Set();
 async function handleAction(task, action) {
   try {
+    const verificationAction=action.match(/^verify-(open|finish|close|recheck|session)-(job51|liepin)$/);
+    if(verificationAction){
+      const [,operation,platform]=verificationAction,key=task.id+':'+platform;
+      if(pendingVerifications.has(key))return;
+      pendingVerifications.add(key);
+      const controls=[...document.querySelectorAll('button.channel-verify-control,button.channel-verify-trigger')].filter(button=>button.dataset.action?.endsWith('-'+platform));
+      const labels=controls.map(button=>button.textContent);
+      controls.forEach(button=>{button.disabled=true;button.setAttribute('aria-busy','true');if(button.dataset.action===action)button.textContent=operation==='recheck'?'复检中…':'处理中…';});
+      try{
+        const opening=operation==='open'||operation==='session';
+        const options={mode:operation==='session'?'collector':'ordinary',browserId:'edge'};
+        if(opening){
+          const capabilities=await api('/api/channel-verification/capabilities').catch(()=>null);
+          if(!capabilities?.ordinaryBrowser)throw Error('普通浏览器入口需要重启后台生效；已阻止旧版打开受管理窗口');
+        }
+        const data=await api(`/api/tasks/${encodeURIComponent(task.id)}/channels/${platform}/verification/${opening?'open':operation}`,{method:'POST',body:JSON.stringify(opening?options:{}),timeoutMs:60000});
+        toast(data.message);await refresh();
+      }finally{pendingVerifications.delete(key);controls.forEach((button,i)=>{if(button.isConnected){button.disabled=false;button.removeAttribute('aria-busy');button.textContent=labels[i];}});}
+      return;
+    }
     if(action==='export-latest'){
       const data=await api(`/api/tasks/${encodeURIComponent(task.id)}/export-latest`,{method:'POST',body:'{}'});
       toast(data.message);return refresh();
@@ -480,6 +516,7 @@ document.querySelectorAll('[data-close]').forEach((button) => button.addEventLis
 $('#showGuide').addEventListener('click', () => $('#guideDialog').showModal());
 document.querySelectorAll('[data-close-guide]').forEach((button) => button.addEventListener('click', () => $('#guideDialog').close()));
 $('#refreshBtn').addEventListener('click', () => refresh(false));
+installInterviewTools({api,toast,refresh,getTask:()=>state.tasks.find(task=>task.id===state.selectedId),escapeHtml,number});
 // Mark edits immediately, before any delayed initial report can restore fields.
 for (const eventName of ['input', 'change']) $('#insightForm').addEventListener(eventName, () => {
   state.insightFormInitialized = true;
@@ -490,10 +527,12 @@ $('#insightDataset').addEventListener('change', (event) => {
   if (event.currentTarget.value) $('#insightForm input[name="inputFile"]').value = event.currentTarget.value;
   const selected=state.insightDatasets.find(item=>item.path===event.currentTarget.value);
   state.insightTransfer=null;
+  state.insightHistoryVisible=false;
   if(['latest_snapshot','knowledge'].includes(selected?.resolution)){
     state.insightTransfer={...selected,role:selected.role};
     renderInsightStatus();
   }
+  
 });
 
 function updateCollectionMode(){
@@ -509,6 +548,7 @@ $('#taskForm').addEventListener('submit', async (event) => {
   const body = Object.fromEntries(form.entries());
   body.platforms = form.getAll('platforms');
   body.cities = form.getAll('cities');
+  body.interviewEnabled = true;
   try {
     if (body.platforms.includes('boss') && !(await api('/api/state')).capabilities?.bossCollection) throw new Error('BOSS接入需要更新服务，请在当前采集停止后重启控制台');
     if(body.transportMode==='http_preferred_browser_fallback'&&!(await api('/api/state')).capabilities?.hybridCollection)throw new Error('请先更新并重启采集服务，当前服务不支持浏览器回退');
@@ -527,23 +567,29 @@ $('#taskForm').addEventListener('submit', async (event) => {
 
 $('#insightForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const button=$('#runInsight');if(button.dataset.submitting==='true'||state.insight?.status==='running')return;
   const body = Object.fromEntries(new FormData(event.currentTarget).entries());
   body.analysisMode = 'full';
   body.sheetName = '岗位数据';
   if (state.insightTransfer && !state.insightTransfer.requiresManualSource && localPathKey(body.inputFile) === localPathKey(state.insightTransfer.path) && state.insightTransfer.taskId) body.sourceTaskId = state.insightTransfer.taskId;
   try {
-    if($('#runInsight').dataset.supervisedReady!=='true'||$('#runInsight').dataset.classifierSource!==body.inputFile)throw new Error('请先为当前岗位标注并训练合格的监督分类器');
+    if(button.dataset.analysisReady!=='true'||button.dataset.classifierSource!==body.inputFile)throw new Error('当前数据集尚无可用模型，请先完成标注与训练');
+    body.classifierMode=button.dataset.classifierMode||'qualified';
+    if(body.classifierMode==='candidate-trial')body.classifierRunId=button.dataset.classifierRunId;
+    button.dataset.submitting='true';renderInsightStatus();
     if (!(await api('/api/state')).capabilities?.insightSourceRole) throw new Error('岗位来源自动识别需要重启更新后的服务；本轮尚未启动分析');
     const data = await api('/api/insights/run', { method: 'POST', body: JSON.stringify(body) });
     toast(data.message || '岗位分析已启动');
     await loadInsight(false);
   } catch (error) { toast(error.message, true); }
+  finally{delete button.dataset.submitting;renderInsightStatus();}
 });
 
 installSkillTermReview({api,toast});
-installInsightClassifier({api,toast,onActivated:()=>{const form=$('#insightForm');form.requestSubmit();}});
+installInsightClassifier({api,toast});
 installJobBrowserWorkspace({api,toast});
-installSemanticCloud({api,toast,onApply:()=>$('#insightForm').requestSubmit()});
+installPersonalWiki({api,toast});
+installSemanticCloud({api,toast});
 restoreRoute();
 state.timer = setInterval(() => {
   if (document.hidden) return;

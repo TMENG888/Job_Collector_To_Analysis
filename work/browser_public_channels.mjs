@@ -87,3 +87,6 @@ export async function collectJobonline(keyword,city,{checkpointPath,request={},m
   }catch(error){error.stopChannel=error.code!=='pagination_stalled';error.partialRows=[...records.values()];completed=false;await save({error:error.message});if(page)await evidence(page,checkpointPath,error);throw error}
   finally{if(page)await page.close().catch(()=>{});if(context)await context.close()}
 }
+
+
+

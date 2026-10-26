@@ -6,6 +6,9 @@ test('local workspace only; no credentials or external origin',()=>{
   assert.equal(checkedBaseURL(),'http://127.0.0.1:8788');
   for(const url of ['https://evil.com','http://localhost:8788','http://127.0.0.1:8788/evil','http://a:b@127.0.0.1:8788','http://127.0.0.1:8788/#x'])assert.throws(()=>checkedBaseURL(url));
   assert.equal(workspaceURL('http://127.0.0.1:8788','insights'),'http://127.0.0.1:8788/insights');
+  assert.equal(workspaceURL('http://127.0.0.1:8788','profile'),'http://127.0.0.1:8788/profile');
+  assert.equal(workspaceViewForURL('http://127.0.0.1:8788/profile','http://127.0.0.1:8788'),'profile');
+  assert.equal(COMMANDS.has('recruiter-select'),true);
   assert.throws(()=>workspaceURL('http://127.0.0.1:8788','browser'));
   assert.equal(isWorkspaceURL('http://127.0.0.1:8788/tasks','http://127.0.0.1:8788'),true);
   assert.equal(isWorkspaceURL('http://127.0.0.1:8789/tasks','http://127.0.0.1:8788'),false);

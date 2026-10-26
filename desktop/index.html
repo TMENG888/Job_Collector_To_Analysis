@@ -14,10 +14,12 @@
       <button data-route="tasks">采集任务</button>
       <button data-route="insights" class="active">岗位洞察</button>
       <button data-route="assistant">求职助手</button>
+      <button data-route="profile">个人资料</button>
       <button id="browserMode">求职浏览器</button>
     </nav>
     <span class="local"><i></i> 本地运行</span>
   </header>
+  <section id="workspaceRecovery" hidden role="status"><h2>工作台暂未加载</h2><p id="workspaceError"></p><button id="workspaceRetry" class="primary">重新加载</button></section>
   <section id="browserChrome" hidden>
     <div class="tabbar"><div id="tabs" role="tablist" aria-label="招聘网页"></div></div>
     <form id="navigation" class="navigation">
@@ -33,13 +35,55 @@
   <section id="empty" hidden><div><span class="empty-symbol">⌘</span><h1>打开招聘网站</h1><p>直接点击、滚动与输入</p><div id="sites"></div></div></section>
   <section id="pageError" hidden><div><h1>网页未正常显示</h1><p id="pageErrorText"></p><button id="recoverBack">返回上一页</button></div></section>
   <aside id="tools" hidden>
-    <div class="panel-heading"><div><span class="eyebrow">JOB TOOLS</span><h2>岗位插件</h2></div><span class="badge">只读原型</span></div>
+    <div class="panel-heading"><h2>岗位插件</h2></div>
+    <section class="recruiter">
+      <h3>简历</h3>
+      <div class="tool-actions"><button id="resumeUpload">上传PDF</button><button id="resumePreview" disabled>逐页预览</button><button id="resumeClear" disabled>清除</button></div>
+      <p id="resumeInfo" class="muted">未上传简历</p>
+      <div class="tool-actions"><select id="resumeLibrary" aria-label="简历库版本"><option value="">简历库暂无版本</option></select><button id="resumeSelect">选用</button><button id="resumeLibraryOpen">管理</button></div>
+      <div id="resumePages" hidden></div>
+      <button id="resumeAck" disabled hidden>确认核对</button>
+      <label class="check"><input id="shareConsent" type="checkbox">允许DeepSeek使用脱敏简历、Wiki和JD进行匹配</label>
+      <label class="check"><input id="libraryMode" type="checkbox" checked>优选本批已批准的库存简历</label>
+      <label class="check"><input id="autoTailor" type="checkbox" checked>库存不适配时用Wiki生成草稿，暂停待人工审核</label>
+      <button id="recruiterPlan" class="primary">生成检索词</button>
+      <details id="recruiterQueryDetails" hidden><summary id="recruiterQuerySummary">检索词</summary><div id="recruiterQueries"></div></details>
+      <div class="recruiter-options">
+        <label>城市<input id="recruiterCity" placeholder="全国或广州" value=""></label>
+        <label>最多查看岗位<input id="recruiterCount" type="number" min="1" max="300" value="100"></label>
+        <label>证据覆盖（%）<input id="recruiterCoverage" type="number" min="50" max="100" value="60"></label>
+        <label>预算（元）<input id="recruiterBudget" type="number" min="0.05" max="2" step="0.05" value="0.5"></label>
+      </div>
+      <div class="delivery-settings">
+        <h3>自动沟通 · BOSS</h3>
+        <div class="recruiter-options"><label>沟通人数（1–5）<input id="recruiterRecipients" type="number" min="1" max="5" value="3"></label><label>间隔（60–300秒）<input id="recruiterInterval" type="number" min="60" max="300" value="90"></label></div>
+        <label class="check"><input id="deliveryConsent" type="checkbox">授权本批开启沟通，发送招呼及所选已批准版本的截图（含个人信息）；新草稿不发送</label>
+        <details class="delivery-notice"><summary>发送须知</summary><p class="muted">开启沟通可能触发平台默认招呼或简历发送。遇验证或发送结果不明即停；不自动重试。24小时最多10次尝试（含结果不明），不保证免于平台限流。</p></details>
+      </div>
+      <div class="tool-actions"><button id="recruiterDryRun" disabled>预览（不发送）</button><button id="recruiterSend" class="primary" disabled aria-describedby="recruiterStartHelp">授权并开始</button></div>
+      <p id="recruiterStartHelp" class="muted start-help" role="status" aria-live="polite" hidden></p>
+      <button id="recruiterStop" disabled hidden>停止本批</button>
+      <p id="recruiterStatus" role="status" class="muted"></p>
+      <section id="recruiterResultsPanel" class="result-panel" hidden aria-label="岗位结果">
+        <div class="result-toolbar"><h3 id="recruiterResultTotal">岗位结果 · 0</h3><select id="recruiterResultFilter" aria-label="筛选岗位状态"><option value="all">全部</option></select></div>
+        <div class="result-updates"><span id="recruiterResultRange" aria-live="polite"></span><button id="recruiterResultNew" hidden>新增0条</button></div>
+        <div id="recruiterResults" tabindex="0" aria-label="分页岗位列表"></div>
+        <p id="recruiterResultEmpty" class="muted" hidden>暂无此类岗位</p>
+        <nav class="result-pagination" aria-label="岗位结果分页"><button id="recruiterResultPrevious">上一页</button><span id="recruiterResultPage">1 / 1</span><button id="recruiterResultNext">下一页</button></nav>
+      </section>
+      <details class="usage-details"><summary>模型与用量</summary><p id="recruiterModel" class="muted"></p><p id="recruiterUsage" class="muted"></p></details>
+    </section>
+    <details class="manual-tools"><summary>当前页读取与分类</summary>
     <div class="tool-actions"><button id="detail" class="primary">读取当前详情</button><button id="list">整理当前页</button></div>
     <div id="readStatus" class="muted">打开岗位详情后读取</div>
-    <section class="classification"><h3>有监督岗位筛选</h3><select id="models" aria-label="岗位分类器"><option value="">加载分类器…</option></select><button id="classify" disabled>使用本地分类器</button><div id="classification" role="status"></div></section>
+    <section class="classification"><h3>岗位语义筛选</h3><select id="models" aria-label="岗位语义参照"><option value="">加载参照…</option></select><button id="classify" disabled>按语义参照分类</button><div id="classification" role="status"></div></section>
     <div id="results" aria-live="polite"></div>
+    </details>
   </aside>
   <footer><span id="status" role="status">连接本地工作台…</span><span id="transport">本地工作台</span></footer>
   <script src="shell.js"></script>
+  <script src="recruiter-eligibility.js"></script>
+  <script src="recruiter-results.js"></script>
+  <script src="recruiter-ui.js"></script>
 </body>
 </html>

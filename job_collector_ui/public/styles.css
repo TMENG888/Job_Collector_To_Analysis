@@ -337,6 +337,23 @@ summary { cursor: pointer; color: #52616d; font-size: 11px; font-weight: 700; }
 .collection-channel-details .table-scroll { margin-top:12px; }
 .collection-channel-details p { font-size:11px; line-height:1.6; color:var(--muted); margin:10px 0 0; }
 .collection-channel-details .has-errors { color:#b7791f; }
+.channel-verification-actions { display:inline-flex; gap:8px; align-items:center; justify-content:flex-end; flex-wrap:wrap; }
+.channel-verify-trigger,.channel-verify-control { border:0; background:transparent; padding:3px 0; font:inherit; font-size:12px; min-height:0; border-radius:3px; cursor:pointer; box-shadow:none; }
+.channel-verify-trigger { text-align:right; text-decoration:underline; text-decoration-style:dotted; text-underline-offset:4px; }
+.channel-verify-control { color:var(--teal-dark); white-space:nowrap; }
+.channel-verify-trigger:disabled,.channel-verify-control:disabled { cursor:wait; opacity:.6; }
+.channel-verification-reason { display:block; margin-top:4px; color:var(--muted); max-width:320px; overflow-wrap:anywhere; }
+.channel-heartbeat { display:inline-flex; flex-direction:column; align-items:flex-end; gap:4px; color:var(--muted); white-space:nowrap; }
+.channel-heartbeat-label { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; }
+.channel-heartbeat-label i { width:7px; height:7px; border-radius:50%; background:currentColor; flex-shrink:0; }
+.channel-heartbeat small { font-size:10px; font-weight:400; color:var(--muted); }
+.channel-heartbeat.is-healthy { color:var(--teal-dark); }
+.channel-heartbeat.is-healthy .channel-heartbeat-label i { box-shadow:0 0 0 3px #e7f6f3; }
+.channel-heartbeat.is-delayed,.channel-heartbeat.is-paused { color:#a36b16; }
+.channel-heartbeat.is-lost,.channel-heartbeat.is-blocked { color:#b74242; }
+.channel-heartbeat.is-completed { color:#667f79; }
+.channel-verify-trigger:hover,.channel-verify-control:hover { background:transparent; text-decoration:underline; }
+.channel-verify-trigger:focus-visible,.channel-verify-control:focus-visible { outline:2px solid var(--teal-dark); outline-offset:3px; }
 .profile-cloud-panel,.profile-chart-panel { min-width:0; padding:18px; border:1px solid #e2eae8; border-radius:14px; background:#fff; }
 .profile-cloud-panel h4,.profile-chart-panel h4 { margin:0 0 12px; color:#244d46; font-size:15px; }
 .profile-cloud-panel .insight-wordcloud { background:linear-gradient(130deg,#f5faf8,#fafbfe); border-radius:10px; }

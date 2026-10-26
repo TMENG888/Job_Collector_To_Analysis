@@ -6,7 +6,7 @@ export const BROWSER_HEIGHT = 152;
 export const FOOTER_HEIGHT = 26;
 export const PANEL_WIDTH = 340;
 export const MAX_TABS = 8;
-export const COMMANDS = new Set(['state','workspace','browser','open','select','close','navigate','back','forward','reload','stop','read','models','classify']);
+export const COMMANDS = new Set(['state','workspace','browser','open','select','close','navigate','back','forward','reload','stop','read','models','classify','recruiter-state','recruiter-upload','recruiter-select','recruiter-preview','recruiter-ack','recruiter-plan','recruiter-start','recruiter-cancel','recruiter-clear']);
 
 export function checkedBaseURL(value = 'http://127.0.0.1:8788') {
   const u = new URL(value);
@@ -14,7 +14,7 @@ export function checkedBaseURL(value = 'http://127.0.0.1:8788') {
   return u.origin;
 }
 export function workspaceURL(base, route) {
-  const routes = {tasks:'/tasks', insights:'/insights', assistant:'/?view=assistant'};
+  const routes = {tasks:'/tasks', insights:'/insights', assistant:'/?view=assistant',profile:'/profile'};
   if (!Object.hasOwn(routes, route)) throw Error('未知工作台页面');
   return checkedBaseURL(base) + routes[route];
 }
@@ -26,7 +26,7 @@ export function workspaceViewForURL(value, base) {
   const u = new URL(value);
   if (u.searchParams.get('view') === 'assistant') return 'assistant';
   const first = u.pathname.split('/').filter(Boolean)[0];
-  if (['tasks','insights','browser'].includes(first)) return first;
+  if (['tasks','insights','browser','profile'].includes(first)) return first;
   return u.pathname === '/' ? 'tasks' : null;
 }
 export function recruitingURL(value) {return safeBrowserURL(value);}

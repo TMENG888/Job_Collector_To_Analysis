@@ -1,0 +1,3 @@
+#!/bin/sh
+# Inspect the actual index, not a potentially different working-tree file.
+exec node scripts/check-git-safety.mjs --staged

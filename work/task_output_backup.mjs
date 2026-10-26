@@ -12,7 +12,7 @@ async function atomic(file,bytes){await fs.mkdir(path.dirname(file),{recursive:t
 async function json(file){return JSON.parse(await fs.readFile(file,'utf8'));}
 function safeId(id){if(!id||/[\\/:]|^\.{1,2}$/.test(id))throw fail('无效备份任务 ID');return id;}
 function backupDirectory(task,root){const directory=path.join(path.resolve(root),safeId(task.id));if(samePath(directory,task.outputDir)||within(task.outputDir,directory)||within(directory,task.outputDir))throw fail('备份必须位于原任务目录之外，且不能互相包含');return directory;}
-function critical(relative){return relative==='任务归属.json'||relative==='岗位配置.json'||relative==='统一采集数据.sqlite'||/^(断点数据|原始数据)[\\/].*\.json$/.test(relative)&&!relative.endsWith('.diagnostic.json');}
+function critical(relative){return relative==='任务归属.json'||relative==='岗位配置.json'||relative==='统一采集数据.sqlite'||/^面经数据[\\/](?:nowcoder\.checkpoint|status)\.json$/.test(relative)||/^(断点数据|原始数据)[\\/].*\.json$/.test(relative)&&!relative.endsWith('.diagnostic.json');}
 async function noLinks(base,file){let current=file;while(true){const stat=await fs.lstat(current).catch(error=>{if(error.code==='ENOENT')return null;throw error;});if(stat?.isSymbolicLink())throw fail('恢复/备份不接受符号链接或目录联接');if(path.resolve(current)===path.resolve(base))break;const parent=path.dirname(current);if(parent===current)throw fail('路径越界');current=parent;}}
 
 async function acquireLock(lockPath){
@@ -86,7 +86,7 @@ export async function snapshotTaskOutput(task,{root=defaultTaskBackupRoot()}={})
   if(registered&&(registered.task_id!==task.id||!samePath(registered.output_dir,task.outputDir)))throw fail('备份槽已绑定其他任务或目录');
   await atomic(path.join(directory,'注册.json'),JSON.stringify({task_id:task.id,label:task.label,output_dir:path.resolve(task.outputDir),updatedAt:new Date().toISOString()}));
   let count=0;
-  async function walk(base){for(const entry of await fs.readdir(base,{withFileTypes:true})){if(entry.isSymbolicLink())throw fail('任务目录含链接，拒绝跟随');const file=path.join(base,entry.name),relative=path.relative(task.outputDir,file);if(entry.isDirectory()&&['断点数据','原始数据'].includes(relative))await walk(file);else if(entry.isDirectory()&&relative.startsWith('断点数据'+path.sep))await walk(file);else if(entry.isFile()&&critical(relative)&&relative!=='统一采集数据.sqlite'){await putVersion(directory,relative,await fs.readFile(file));count++;}}}
+  async function walk(base){for(const entry of await fs.readdir(base,{withFileTypes:true})){if(entry.isSymbolicLink())throw fail('任务目录含链接，拒绝跟随');const file=path.join(base,entry.name),relative=path.relative(task.outputDir,file);if(entry.isDirectory()&&['断点数据','原始数据','面经数据'].includes(relative))await walk(file);else if(entry.isDirectory()&&relative.startsWith('断点数据'+path.sep))await walk(file);else if(entry.isFile()&&critical(relative)&&relative!=='统一采集数据.sqlite'){await putVersion(directory,relative,await fs.readFile(file));count++;}}}
   await walk(task.outputDir);await backupTaskDatabase(task,{root});
   return {task_id:task.id,directory,files:count,updatedAt:new Date().toISOString()};
 }

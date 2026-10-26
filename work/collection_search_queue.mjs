@@ -1,11 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {writeJsonAtomic} from './collector_storage.mjs';
 import {isZhaopinCheckpointExhausted} from './zhaopin_api.mjs';
 import {isConditionScopedStop,retainedChannelErrors} from './task_collection_config.mjs';
 import {collectionChannelAvailable} from './channel_availability.mjs';
 import {unverifiedLegacyCompletion} from './jobonline_pagination_health.mjs';
 import {untilExhausted} from './collection_goal.mjs';
+import {mohrssCheckpointNeedsContinuation,mohrssConsumedPages} from './mohrss_related_search.mjs';
+import {zhaopinSessionCheckpointPath,validateZhaopinSessionCheckpoint,zhaopinSessionCheckpointState} from './zhaopin_session_checkpoint.mjs';
 
 const unique=values=>[...new Set(values.map(x=>String(x||'').trim()).filter(Boolean))];
 const safeName=value=>String(value).replace(/[\\/:*?"<>|]/g,'_');
@@ -25,15 +28,17 @@ export function checkpointSearchState(platform,saved,settings={}){
   if(saved.acquisition_mode==='browser_dom')return saved.completed?(saved.records?.length?'query_finished':'empty_unverified'):saved.budget_finished?'browser_budget_limit':saved.stop_reason||'pending';
   if(isConditionScopedStop({code:saved.stop_reason}))return saved.stop_reason;
   if(platform==='jobonline'&&unverifiedLegacyCompletion(saved))return 'legacy_pagination_unverified';
+  if(platform==='mohrss'&&mohrssCheckpointNeedsContinuation(saved,{keyword:saved.keyword,city:saved.city,settings,taskId:saved.task_id??null}))return 'pending';
   if(saved.low_yield)return 'low_yield_deferred';
   if(platform==='zhaopin'){
+    if(saved.acquisition_mode==='session_json_api')return zhaopinSessionCheckpointState(saved,settings);
     if(isZhaopinCheckpointExhausted(saved))return 'query_finished';
     if(Number(settings.maxRows)>0&&(saved.records||[]).length>=Number(settings.maxRows))return 'row_limit';
     if(Number(saved.next_card_index||0)===0&&Number(saved.last_page_index||0)>=Number(settings.maxPages||Infinity))return 'page_limit';
     return 'pending';
   }
   if(saved.completed)return saved.completion_reason||'query_finished';
-  const rows=(saved.records||saved.list||[]).length;
+  const rows=(saved.records||saved.list||saved.rows||[]).length;
   if(platform!=='jobonline'&&Number(settings.maxRows)>0&&rows>=Number(settings.maxRows))return 'row_limit';
   if(platform==='shixiseng'){
     if(saved.listComplete){
@@ -42,29 +47,32 @@ export function checkpointSearchState(platform,saved,settings={}){
     }
     if(Number(saved.lastListPage||1)>=Number(settings.maxPages||Infinity))return 'page_limit';
   }else if(platform==='iguopin'||platform==='mohrss'){
-    if(Number(saved.lastPage||0)>=Number(settings.maxPages||Infinity))return 'page_limit';
+    if((platform==='mohrss'?mohrssConsumedPages(saved):Number(saved.lastPage||0))>=Number(settings.maxPages||Infinity))return 'page_limit';
   }else if(platform==='liepin'){
-    if(Number(saved.nextPageNo||0)>=Number(settings.maxPages||100))return 'page_limit';
+    if(Number(saved.nextPageNo??saved.lastPage??0)>=Number(settings.maxPages||100))return 'page_limit';
   }else if(Number(saved.nextPageNo||saved.pageNo||1)>Number(settings.maxPages||500))return 'page_limit';
   return 'pending';
 }
 
-export async function readCollectionSearchQueue(task,{channelAvailable=key=>collectionChannelAvailable(key,task)}={}){
+export async function readCollectionSearchQueue(task,{channelAvailable=key=>collectionChannelAvailable(key,task),rateStateDir=process.env.JOB_HTTP_RATE_DIR||path.resolve(import.meta.dirname,'../ui_data/http_rate_limits'),now=Date.now}={}){
   const config=await read(task.publicConfigPath);
   if(config?.task_id!==task.id)throw Error('采集调度配置任务 ID 不匹配');
   const manifest=await read(path.join(task.outputDir,'采集清单.json'));
   if(manifest&&manifest.task_id!==task.id)throw Error('采集调度清单任务 ID 不匹配');
   const parallel=await read(path.join(task.outputDir,'并发渠道状态.json'));
   if(parallel&&parallel.task_id!==task.id)throw Error('采集调度并发状态任务 ID 不匹配');
-  const logged=task.platforms.includes('zhaopin')&&channelAvailable('zhaopin')?await read(task.zhaopinConfigPath):null;
+  const sessionMode=config.platforms?.zhaopin?.enabled===true;
+  const logged=task.platforms.includes('zhaopin')&&channelAvailable('zhaopin')&&task.zhaopinConfigPath?await read(task.zhaopinConfigPath):null;
   if(logged&&logged.task_id!==task.id)throw Error('采集调度智联配置任务 ID 不匹配');
-  if(task.platforms.includes('zhaopin')&&channelAvailable('zhaopin')&&!logged)throw Error('缺少智联采集调度配置');
+  if(task.platforms.includes('zhaopin')&&channelAvailable('zhaopin')&&!logged&&!sessionMode)throw Error('缺少智联采集调度配置');
+  const rateKey=createHash('sha256').update('https://fe-api.zhaopin.com').digest('hex').slice(0,24);
+  const rate=rateStateDir&&task.platforms.includes('zhaopin')?await read(path.join(rateStateDir,rateKey+'.json')):null;
   const combos=[];
   for(const platform of task.platforms){
     if(!channelAvailable(platform))continue;
-    const settings=platform==='zhaopin'?logged:config.platforms?.[platform];
+    const settings=platform==='zhaopin'&&!sessionMode?logged:config.platforms?.[platform];
     if(!settings||(platform!=='zhaopin'&&!settings.enabled))continue;
-    const blocked=platform==='zhaopin'
+    const blocked=platform==='zhaopin'&&!sessionMode
       ? parallel?.results?.some(row=>row.platform==='zhaopin'&&row.code!==0&&!(row.errors?.length&&row.errors.every(isConditionScopedStop)))
       : retainedChannelErrors(manifest,task.id,platform,'skip').length>0;
     const totalLimited=platform==='jobonline'&&Number(settings.totalMaxRows||settings.maxRows)>0
@@ -79,24 +87,38 @@ export async function readCollectionSearchQueue(task,{channelAvailable=key=>coll
         const direct=await read(path.join(task.outputDir,'断点数据','智联招聘_HTTP',`${safeName(keyword)}_${safeName(city.name)}.json`));
         // A legacy browser cursor cannot certify that the new no-credential
         // contract was verified. Its rows remain available to the worker.
-        saved=direct||(legacy?{...legacy,api_first_page_verified:false,low_yield:null,stop_reason:null,last_page_index:0}:null);
+        const session=await read(zhaopinSessionCheckpointPath(task.outputDir,keyword,city));
+        validateZhaopinSessionCheckpoint(session,{taskId:task.id,keyword,city});
+        saved=session||(sessionMode?null:direct||(legacy?{...legacy,api_first_page_verified:false,low_yield:null,stop_reason:null,last_page_index:0}:null));
       }
       if(task.transportMode==='http_preferred_browser_fallback'){
         const browser=await read(path.join(task.outputDir,'断点数据','RPA',platform,`${safeName(keyword)}_${safeName(city.name)}.json`));
         if(browser)saved=browser;
       }
       if(saved&&saved.task_id!==task.id)throw Error('采集调度断点任务 ID 不匹配');
+      if(platform==='mohrss'&&saved&&(saved.keyword!=null&&saved.keyword!==keyword||saved.city?.name&&saved.city.name!==city.name))throw Error('公共招聘网采集调度断点查询条件不匹配');
       // Some legacy checkpoints have no task id. Never silently adopt one here.
-      const conditionError=manifest?.platforms?.[platform]?.errors?.some(error=>error.keyword===keyword&&error.city?.name===city.name&&!isConditionScopedStop(error));
-      const state=blocked?'channel_blocked':totalLimited?'total_limit':conditionError?'condition_error':checkpointSearchState(platform,saved,settings);
+      const conditionError=manifest?.platforms?.[platform]?.errors?.some(error=>!error.resolved_at&&error.keyword===keyword&&error.city?.name===city.name&&!isConditionScopedStop(error));
+      let state=blocked?'channel_blocked':totalLimited?'total_limit':conditionError?'condition_error':checkpointSearchState(platform,saved,settings);
+      // A finished query is finished even while the origin is cooling. Every
+      // unfinished condition waits on the same source instead of being retired.
+      if(platform==='zhaopin'&&state==='pending'&&Number(rate?.cooldownUntil)>now())state='origin_cooldown';
       // Cursor/count metadata only: no credential, job text or record id is
       // exposed in the scheduling journal. Detect a stuck condition even when
       // a different channel in the same batch is still making progress.
-      const progress=JSON.stringify(saved?[saved.records?.length??saved.list?.length??0,saved.nextPageNo,saved.pageNo,saved.lastPage,saved.lastListPage,saved.last_page_index,Object.values(saved.details||{}).filter(value=>value.ok).length]:null);
-      combos.push({platform,keyword,city,state,progress});
+      const progress=JSON.stringify(saved?[saved.records?.length??saved.list?.length??saved.rows?.length??0,saved.nextPageNo,saved.pageNo,saved.lastPage,saved.lastListPage,saved.last_page_index,saved.nextPage,Object.values(saved.details||{}).filter(value=>value.ok).length]:null);
+      combos.push({platform,keyword,city,state,progress,...(state==='origin_cooldown'?{retryAfter:new Date(rate.cooldownUntil).toISOString()}: {})});
     }
   }
   return combos;
+}
+
+export function collectionQueueStopReason(queue){
+  if(queue.some(c=>c.state==='origin_cooldown'))return 'waiting_cooldown';
+  if(queue.length&&queue.every(c=>c.state==='channel_blocked'))return 'channels_blocked';
+  if(queue.some(c=>c.state==='channel_blocked'))return 'partially_blocked';
+  if(queue.some(c=>!['query_finished','source_finished','public_search_window_end','confirmed_empty'].includes(c.state)))return 'conditions_deferred';
+  return 'search_queue_exhausted';
 }
 
 // Each condition is attempted independently. A no-growth batch retires only its
@@ -132,7 +154,7 @@ export async function runAdaptiveCollection({task,count,run,activateKeyword,onRo
         await persist('keyword_added');
         continue;
       }
-      const reason=!lastQueue.length&&!task.platforms.some(key=>collectionChannelAvailable(key,task))?'no_direct_http_channels':lastQueue.length&&lastQueue.every(combo=>combo.state==='channel_blocked')?'channels_blocked':'search_queue_exhausted';
+      const reason=!lastQueue.length&&!task.platforms.some(key=>collectionChannelAvailable(key,task))?'no_direct_http_channels':collectionQueueStopReason(lastQueue);
       await persist(reason);return {rounds,valid,reason,targetReached:false};
     }
     rounds++;
@@ -151,8 +173,8 @@ export async function runAdaptiveCollection({task,count,run,activateKeyword,onRo
       if(combo.state==='pending'&&beforeProgress.has(searchCombinationKey(combo))&&beforeProgress.get(searchCombinationKey(combo))===combo.progress)retired.add(searchCombinationKey(combo));
     }
     history.push({type:'round',round:rounds,before,valid,combinations:pending.map(({platform,keyword,city})=>({platform,keyword,city:city.name})),at:new Date().toISOString()});
-    // No new valid rows is not a global stop: move on to other conditions.
-    if(valid<=before)for(const combo of pending)retired.add(searchCombinationKey(combo));
+    // A page may advance without adding a valid job (duplicates or incomplete
+    // descriptions). Cursor progress must not be discarded by a batch counter.
   }
   const reached=!openEnded&&valid>=target,reason=reached?'target_reached':'round_budget_finished';
   if(!isCancelled())lastQueue=(await readQueue(task)).map(combo=>blockedPlatforms.has(combo.platform)?{...combo,state:'channel_blocked'}:retired.has(searchCombinationKey(combo))&&combo.state==='pending'?{...combo,state:'no_valid_growth'}:combo);

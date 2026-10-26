@@ -20,7 +20,9 @@ export async function synchronizePublicKeywords(task) {
   return {changed:changed||loggedChanged, keywords};
 }
 
-export const isConditionScopedStop=error=>['pagination_stalled','legacy_pagination_unverified','empty_unverified'].includes(error?.code);
+// 条件级停止：只让出当前「关键词 + 城市」条件，不阻塞整个渠道。
+// origin_cooldown 属于站点侧冷却（换任务/换条件即可继续），不是渠道级受阻，必须归到这里。
+export const isConditionScopedStop=error=>error?.conditionScoped===true&&error?.stopChannel===false||['pagination_stalled','legacy_pagination_unverified','empty_unverified','origin_cooldown'].includes(error?.code);
 
 export function readCollectionRound(taskId,value=process.env.JOB_COLLECTION_ROUND){
   if(!value)return null;
@@ -42,5 +44,5 @@ export function filterCollectionCombinations(round,platform,combinations){
 
 export function retainedChannelErrors(manifest, taskId, platform, policy) {
   if (policy !== 'skip' || !taskId || manifest?.task_id !== taskId) return [];
-  return (manifest.platforms?.[platform]?.errors || []).filter(error=>error.stopChannel&&!isConditionScopedStop(error));
+  return (manifest.platforms?.[platform]?.errors || []).filter(error=>!error.resolved_at&&error.stopChannel&&!isConditionScopedStop(error));
 }

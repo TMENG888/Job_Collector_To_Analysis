@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { chromium } from 'playwright';
 import { summarizeCohort, cityName, quantile } from '../job_collector_ui/public/insight-cohorts.js';
 
@@ -38,8 +37,7 @@ try{
   const matching=model.observed_samples.filter(r=>Object.keys(profile).every(k=>r[k]===profile[k]) && skills.every(s=>r.skills.includes(s)));
   assert.equal(await page.locator('#salaryEstimateSupport').innerText(),`${matching.length} 条`);
   if(matching.length>=5)assert.equal(await page.locator('#salaryEstimateValue').innerText(),`${quantile(matching.map(r=>r.salary_midpoint_k),.5).toFixed(1)}K/月`);
-  const out=path.resolve('outputs','crawler-insight-test');
-  await fs.mkdir(out,{recursive:true});
+  const out='C:\\Users\\YS-Insight\\Documents\\Codex\\outputs\\crawler-insight-20261002';
   await page.locator('#cohortExplorer').scrollIntoViewIfNeeded();
   await page.screenshot({path:`${out}\\岗位洞察_桌面验证.png`});
   await page.setViewportSize({width:390,height:844});

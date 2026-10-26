@@ -2,7 +2,7 @@
 // No contextBridge, Node access or generic IPC is exposed to page scripts.
 const {ipcRenderer} = require('electron');
 if (process.isMainFrame && location.protocol === 'http:' && location.hostname === '127.0.0.1') {
-  const views = new Set(['tasks','insights','assistant','browser']);
+  const views = new Set(['tasks','insights','assistant','browser','profile']);
   let attached = false, lastView = null;
   const attach = () => {
     if (!document.documentElement || !document.body || attached) return false;

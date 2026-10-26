@@ -15,12 +15,11 @@ await fs.writeFile(path.join(dir,'jobonline_标准化数据.csv'),headers.join('
 assert.equal(await otherChannelValidCount(dir,'zhaopin','fixture-task'),3);
 await assert.rejects(otherChannelValidCount(dir,'zhaopin','wrong-task'),/归属不符/);
 const profile=path.join(dir,'profile.json');await fs.writeFile(profile,JSON.stringify({task_id:'fixture-task',label:'数据分析',strict_valid_rows:true,trim_to_target:true}));
-const python=process.env.JOB_UI_PYTHON||'python';
-const result=spawnSync(python,['work/finalize_configurable_dataset.py',dir,profile,'2'],{encoding:'utf8'});
+const result=spawnSync('C:/Users/YS-Insight/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe',['work/finalize_configurable_dataset.py',dir,profile,'2'],{encoding:'utf8'});
 assert.equal(result.status,0,result.stderr);
 const quality=JSON.parse(await fs.readFile(path.join(dir,'数据质量报告.json'),'utf8'));
 assert.equal(quality.output_rows,2);assert.equal(quality.validity_excluded_rows,1);assert.equal(quality.trimmed_rows,1);assert.equal(quality.target_reached,true);assert.equal(quality.task_id,'fixture-task');
-const insufficient=spawnSync(python,['work/finalize_configurable_dataset.py',dir,profile,'5'],{encoding:'utf8'});
+const insufficient=spawnSync('C:/Users/YS-Insight/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe',['work/finalize_configurable_dataset.py',dir,profile,'5'],{encoding:'utf8'});
 assert.equal(insufficient.status,0,insufficient.stderr);
 const short=JSON.parse(await fs.readFile(path.join(dir,'数据质量报告.json'),'utf8'));
 assert.equal(short.output_rows,3);assert.equal(short.target_reached,false);assert.equal(short.validity_excluded_rows,1);

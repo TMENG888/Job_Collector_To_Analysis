@@ -6,7 +6,7 @@ import { savePlatformLoginStatus } from './platform_login_status.mjs';
 import {connectManagedContext,browserProfileRoot} from './managed_browser.mjs';
 import {navigatePlatformLogin} from './platform_login_navigation.mjs';
 
-const outputDir = path.resolve(process.argv[2] || 'outputs/platform-sessions');
+const outputDir = path.resolve(process.argv[2] || 'C:/Users/YS-Insight/Desktop/多平台招聘数据采集_2026-09-24');
 const requested = String(process.argv[3] || 'all').toLowerCase();
 const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const profileRoot = browserProfileRoot();

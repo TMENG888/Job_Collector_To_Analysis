@@ -82,8 +82,8 @@ export function renderInsightWorkspace(root,report,{drawCityMap=()=>{},drawCityD
     $('#salaryEstimator').innerHTML=salaryDetail(salary,selected.length);
     const semanticRows=report.semantic_cloud?.mode==='model-only'?selected.filter(row=>row.semantic_labeled):[],semanticSummary=summarizeCohort(semanticRows);
     const reused=semanticRows.length-new Set(semanticRows.map(row=>row.semantic_key||row.job_id)).size;
-    const notice=`<p class="insight-card-caption">Qwen实际抽样 ${number(report.semantic_cloud?.sampled||0)} 条 · 当前模型覆盖 ${number(semanticRows.length)} / ${number(selected.length)} 条${reused?`（含 ${number(reused)} 条同文标签复用）`:''} · 非全量词频</p>`;
-    for(const[id,key,title]of [['cohortSkills','skills','技能与技术栈词云'],['cohortTasks','tasks','工作内容词云'],['cohortDomains','business_domains','业务方向词云'],['cohortIndustries','industries','公司行业词云']])$('#'+id).innerHTML=semanticRows.length?notice+renderProfileCloud(semanticSummary[key],title,key==='industries'):'<p class="insight-chart-empty">当前范围尚无模型语义标签，请点击“模型提取词云”后重新生成分析；不使用规则词云。</p>';
+    const notice=`<p class="insight-card-caption">AI累计标注 ${number(report.semantic_cloud?.sampled||0)} 条 · 当前范围覆盖 ${number(semanticRows.length)} / ${number(selected.length)} 条${reused?`（含 ${number(reused)} 条同文标签复用）`:''} · 仅统计已提取岗位</p>`;
+    for(const[id,key,title]of [['cohortSkills','skills','技能与技术栈词云'],['cohortTasks','tasks','工作内容词云'],['cohortDomains','business_domains','业务方向词云'],['cohortIndustries','industries','公司行业词云']])$('#'+id).innerHTML=semanticRows.length?notice+renderProfileCloud(semanticSummary[key],title,key==='industries'):'<p class="insight-chart-empty">当前筛选范围没有已应用的 AI 语义标签。请检查上方联合标注结果，再点击“生成全量分析”；已保存标签可直接复用，无需重复付费。</p>';
     $('#cohortSalaryExperience').innerHTML=renderSalaryExperienceLine(selected);
     $('#cohortEducationDonut').innerHTML=renderDonut(selected,'education','学历要求占比');
     $('#cohortCityDonut').innerHTML=renderDonut(selected,'city','城市岗位占比');

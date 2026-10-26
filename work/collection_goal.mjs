@@ -15,5 +15,14 @@ export function collectionOutcome(task,{valid,reason,issues=[]}){
   if(!untilExhausted(task))return {status:valid>=task.targetRows?'completed':'partial',targetReached:valid>=task.targetRows};
   // A depleted queue may contain page/row budgets, stalls and access blocks.
   // Never translate that into "the whole platform is exhausted".
-  return {status:issues.length||['channels_blocked','round_budget_finished','no_direct_http_channels'].includes(reason)?'partial':'completed',targetReached:false};
+  return {status:issues.length||reason!=='search_queue_exhausted'?'partial':'completed',targetReached:false};
+}
+
+// An old export's boolean is not evidence for a later, larger target. Prefer
+// the coordinator's validated unique count; accept only strict owned exports.
+export function collectionTargetReached(task,{quality}={}){
+  if(untilExhausted(task)||!Number.isSafeInteger(task.targetRows)||task.targetRows<1)return false;
+  if(Number.isSafeInteger(task.validRows))return task.validRows>=task.targetRows;
+  return quality?.task_id===task.id&&quality.strict_valid_rows===true&&
+    Number.isSafeInteger(quality.output_rows)&&quality.output_rows>=task.targetRows;
 }

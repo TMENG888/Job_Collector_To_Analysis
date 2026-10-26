@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {snapshotTaskOutput,inspectTaskBackup,restoreTaskBackup} from './task_output_backup.mjs';
+import {writeJsonAtomic} from './collector_storage.mjs';
+import {writeNativeChannelRows,nativeTaskCounts} from './collector_native_sink.mjs';
+import {assertTaskOutputOwnership} from './task_dataset_scope.mjs';
+
+const base=await fs.mkdtemp(path.join(os.tmpdir(),'task-backup-test-')),root=path.join(base,'independent-backup');
+const task={id:'fixture-one',label:'测试岗位',outputDir:path.join(base,'source','任务数据','fixture-one')};
+await fs.mkdir(path.join(task.outputDir,'断点数据'),{recursive:true});
+const marker=path.join(task.outputDir,'任务归属.json'),checkpoint=path.join(task.outputDir,'断点数据','fixture.json');
+await writeJsonAtomic(marker,{task_id:task.id,backup_root:root});
+await fs.writeFile(checkpoint,JSON.stringify({task_id:task.id,records:[1],completed:false}));
+await snapshotTaskOutput(task,{root});
+assert.equal((await inspectTaskBackup(task,{root})).files.length,2);
+await writeJsonAtomic(checkpoint,{task_id:task.id,records:[1,2],completed:false});
+assert.deepEqual(JSON.parse(await fs.readFile(path.join(root,task.id,'files','断点数据','fixture.json'),'utf8')).records,[1,2]);
+assert.deepEqual(JSON.parse(await fs.readFile(path.join(root,task.id,'files','断点数据','fixture.json.previous'),'utf8')).records,[1]);
+// An interrupted sidecar write must not silently omit a checkpoint from restore.
+const checkpointDescriptor=path.join(root,task.id,'files','断点数据','fixture.json.sha256');
+await fs.unlink(checkpointDescriptor);
+await assert.rejects(inspectTaskBackup(task,{root}),/备份校验失败/);
+await writeJsonAtomic(checkpoint,{task_id:task.id,records:[1,2],completed:false});
+assert.equal((await inspectTaskBackup(task,{root})).files.length,2);
+await writeNativeChannelRows(task.outputDir,task.id,[{platform:'智联招聘',job_id:'one',job_name:'测试工程师',job_description:'原生数据库恢复测试'}]);
+assert.ok((await inspectTaskBackup(task,{root})).files.some(file=>file.relative==='统一采集数据.sqlite'));
+// Simulate a missing directory by moving this test's own directory within its
+// unique temporary root. Nothing is deleted and no production path is touched.
+const removed=path.join(base,'simulated-lost-source');await fs.rename(task.outputDir,removed);
+await assert.rejects(writeJsonAtomic(checkpoint,{records:[]}),/禁止自动创建空目录/);
+assert.equal(await fs.stat(task.outputDir).catch(()=>null),null);
+const restored=await restoreTaskBackup(task,{root});assert.equal(restored.restored,3);
+await assertTaskOutputOwnership(task);assert.equal((await nativeTaskCounts(task.outputDir,task.id)).rows,1);
+assert.deepEqual(JSON.parse(await fs.readFile(checkpoint,'utf8')).records,[1,2]);
+assert.equal((await restoreTaskBackup(task,{root})).restored,0);
+const dbBackup=path.join(root,task.id,'files','统一采集数据.sqlite');
+await fs.rename(dbBackup,`${dbBackup}.test-held`);
+await assert.rejects(inspectTaskBackup(task,{root}),/备份校验失败：缺少/);
+await fs.rename(`${dbBackup}.test-held`,dbBackup);
+const registration=path.join(root,task.id,'注册.json');
+const registeredBytes=await fs.readFile(registration);
+await fs.writeFile(registration,JSON.stringify({task_id:'foreign',output_dir:task.outputDir}));
+await assert.rejects(writeNativeChannelRows(task.outputDir,task.id,[]),e=>e.code==='OUTPUT_LOCKED'&&e.stopChannel&&/备份失败/.test(e.message));
+await fs.writeFile(registration,registeredBytes);
+await fs.writeFile(checkpoint,JSON.stringify({records:['newer']}));
+await assert.rejects(restoreTaskBackup(task,{root}),/拒绝覆盖/);
+assert.deepEqual(JSON.parse(await fs.readFile(checkpoint,'utf8')).records,['newer']);
+await assert.rejects(inspectTaskBackup({...task,outputDir:path.join(base,'other')},{root}),/不匹配/);
+await assert.rejects(snapshotTaskOutput({...task,id:'other'},{root}),/归属/);
+await assert.rejects(snapshotTaskOutput(task,{root:task.outputDir}),/之外/);
+const backupFile=path.join(root,task.id,'files','断点数据','fixture.json');await fs.appendFile(backupFile,'bad');
+await assert.rejects(restoreTaskBackup(task,{root}),/校验失败/);
+await fs.unlink(marker);await assert.rejects(writeJsonAtomic(checkpoint,{records:[]}),/归属标记已丢失/);
+console.log(JSON.stringify({ok:true,base,networkRequests:0,checksCovered:['independent baseline','live checkpoint mirror','previous version','transactional SQLite backup','missing directory blocked without recreation','full restore','native counts intact','idempotent restore','missing sidecar rejected and repaired','missing backup data rejected','database backup failure stops collection','newer files not overwritten','foreign path and task rejected','nested backup rejected','corruption rejected','missing marker stops writes']}));

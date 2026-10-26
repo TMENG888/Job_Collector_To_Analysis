@@ -16,7 +16,7 @@ export function publicToolFailure(error){
   const trusted=String(error.code||'').startsWith('TOOL_');
   return {status:'failed',failure_code:trusted?error.code:'TOOL_EXECUTION_FAILED',phase:trusted?error.phase:'execution',
     message:trusted?error.message:'工具执行异常，未取得有效查询结果；请查看本机服务诊断。',
-    ...(trusted?{details:error.details}:{}),recovery:{retry_allowed:trusted&&error.code!=='TOOL_RETRY_BLOCKED',action:trusted?'use_effective_scope':'report_failure'}};
+    ...(trusted?{details:error.details}:{}),recovery:{retry_allowed:trusted&&error.code!=='TOOL_RETRY_BLOCKED',action:error.code==='TOOL_MODE_MISMATCH'?'use_available_tools':trusted?'use_effective_scope':'report_failure'}};
 }
 export function scopedFilters(base,args,index){
   if(!args||typeof args!=='object'||Array.isArray(args))throw new Error('工具参数必须是对象');

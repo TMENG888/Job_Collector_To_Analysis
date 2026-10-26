@@ -38,3 +38,4 @@ try{
   const challengeStart=Date.now();await assert.rejects(collect51Records('目标',city,{...options,checkpointPath:path.join(dir,'late-captcha.json'),contextFactory:()=>factory(lateCaptchaHtml,()=>null)}),e=>e.code==='verification_required'&&e.records.length===0);assert.ok(Date.now()-challengeStart<2500,'challenge stops even when no API response arrives');
   assert.equal(closed,11,'all context leases released');console.log(JSON.stringify({ok:true,checks:['API fields','site-client pagination without buttons','same-page resume without repeated detail','legacy checkpoints','1000 cap without history truncation','no relevance filter','HTTP403/429 immediate stop and partial delivery','late captcha detection','optional recommendation CTA vs real login gate','context release'],dir}));
 }finally{await browser.close()}
+

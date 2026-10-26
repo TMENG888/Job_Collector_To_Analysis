@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {redactClassifierText} from './insight-classifier-input.mjs';
 
 export const DATA_ANALYSIS_CLASSIFIER_VERSION='data-analysis-tfidf-lr-v1';
 export const DATA_ANALYSIS_CLASSIFIER_SHA256='44cb86ca5f03b01905ef5dc94a474e51511ad047df733e6a61f1f3b405a96d37';
@@ -26,15 +27,29 @@ export function prepareClassifierInput(row){
   return {text:chars(title).slice(0,60).join('')+'。主要工作：'+part,duties:part,mode,compressed,body_chars:chars(body).length,title,body};
 }
 
+// Versioned scoped input: learn technical requirements from original JD text,
+// not from training-only AI tags that would be unavailable at bulk inference.
+export function prepareClassifierInputV2(row){
+  const title=redactClassifierText(row['岗位名称']??row.job_name??row.title??''),body=redactClassifierText(row['岗位描述']??row.job_description??row.body??'');
+  const base=prepareClassifierInput({job_name:title,job_description:body});
+  let detail=body.replace(spaces,' ').trim();
+  const footer=/福利待遇|薪酬福利|公司简介|关于我们|联系方式|投递方式/.exec(detail);
+  if(footer&&footer.index>=80)detail=detail.slice(0,footer.index);
+  const points=chars(detail),compressed=points.length>2400;
+  if(compressed){const middle=Math.floor(points.length/2);detail=points.slice(0,1200).join('')+' … '+points.slice(middle-300,middle+300).join('')+' … '+points.slice(-600).join('');}
+  return {...base,text:chars(title).slice(0,60).join('')+'。主要工作：'+base.duties+'。岗位与任职要求：'+detail,feature_body:base.duties+'。'+detail,mode:'duties-and-requirements-v2',compressed:base.compressed||compressed};
+}
+
 export function createRoleClassifierMatcher(filename,{sha256,version,family,threshold}){
   const bytes=fs.readFileSync(filename);
   if(createHash('sha256').update(bytes).digest('hex')!==sha256)throw new Error(`${family}筛选模型校验失败，已停止；不会静默回退关键词方案`);
   const model=JSON.parse(bytes),spec=model.tfidf,weights=model.head.coef;
+  if(model.input_preprocessing&&!['duties-v1','scoped-jd-v2'].includes(model.input_preprocessing))throw new Error('模型输入契约不受支持，停止分类');
   if(model.version!==version||model.family!==family||model.threshold!==threshold||!(threshold>0&&threshold<1)||weights.length!==spec.idf.length||!weights.every(Number.isFinite)||!spec.idf.every(Number.isFinite)||!Number.isFinite(model.head.intercept)||Object.keys(spec.vocabulary).length!==weights.length||!Object.values(spec.vocabulary).every(i=>Number.isInteger(i)&&i>=0&&i<weights.length)||new Set(Object.values(spec.vocabulary)).size!==weights.length)throw new Error(`${family}筛选模型结构无效，已停止`);
   const vocabulary=new Map(Object.entries(spec.vocabulary)),terms=Array(weights.length);
   for(const [term,index] of vocabulary)terms[index]=term;
   function match(row){
-    const input=prepareClassifierInput(row);
+    const input=model.input_preprocessing==='scoped-jd-v2'?prepareClassifierInputV2(row):prepareClassifierInput(row);
     const evidence={model_version:model.version,artifact_sha256:sha256,threshold:model.threshold,
       input_mode:input.mode,compressed:input.compressed,body_chars:input.body_chars,score:null,
       score_semantics:'未校准分类分数，不是正确概率；特征贡献不代表因果或逐句职责判断'};
@@ -45,7 +60,7 @@ export function createRoleClassifierMatcher(filename,{sha256,version,family,thre
     // Do not silently truncate an out-of-scope JD into an apparent confident decision.
     if(!input.title.trim()||input.body_chars<80||input.body_chars>9000)return result('review',`标题缺失或正文不在已评估的80–9000字符范围，待复核且不计入${family}统计`);
     // A familiar title must not admit an entirely out-of-vocabulary body.
-    const bodyPoints=chars(input.duties.toLowerCase().replace(repeatedSpaces,' '));let knownBody=false;
+    const bodyPoints=chars((input.feature_body??input.duties).toLowerCase().replace(repeatedSpaces,' '));let knownBody=false;
     for(let n=2;n<=4&&!knownBody;n++)for(let i=0;i+n<=bodyPoints.length;i++)if(vocabulary.has(bodyPoints.slice(i,i+n).join(''))){knownBody=true;break;}
     if(!knownBody)return result('review','正文没有已知模型特征，待复核；不回退标题纳入');
     const points=chars(input.text.toLowerCase().replace(repeatedSpaces,' ')),counts=new Map();

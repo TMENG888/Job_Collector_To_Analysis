@@ -1,29 +1,42 @@
-import {app, BrowserWindow, WebContentsView, session, ipcMain, Menu} from 'electron';
+import {app, BrowserWindow, WebContentsView, session, ipcMain, Menu, dialog} from 'electron';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {browserSites,checkedBaseURL,workspaceURL,isWorkspaceURL,workspaceViewForURL,isRecruitingURL,recruitingURL,allowRecruitingResource,navigationDecision,viewBounds,MAX_TABS,COMMANDS} from './policy.mjs';
 import {readBrowserPlugin} from '../work/job-browser-plugins.mjs';
+import {createNativeRecruiterRPC} from './recruiter-rpc.mjs';
+import {createDesktopRecruiter} from '../work/job-desktop-recruiter.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shellURL = pathToFileURL(path.join(here,'index.html')).href;
 const preferences = {nodeIntegration:false, contextIsolation:true, sandbox:true, webSecurity:true, allowRunningInsecureContent:false, navigateOnDragDrop:false};
 const isSameSite=(value,site)=>{const host=new URL(value).hostname;return host===site.domain||host.endsWith('.'+site.domain);};
 
-export async function createDesktop({runtime, baseURL=process.env.JOB_DESKTOP_BASE_URL || 'http://127.0.0.1:8788', visible=true, setupSession, screening:injectedScreening}={}) {
+export async function createDesktop({runtime, baseURL=process.env.JOB_DESKTOP_BASE_URL || 'http://127.0.0.1:8788', visible=true, setupSession, screening:injectedScreening, recruiterOptions={}}={}) {
   const base = checkedBaseURL(baseURL);
   const window = new BrowserWindow({width:1440,height:980,minWidth:1000,minHeight:680,show:false,title:'岗位工作台 · 桌面预览',backgroundColor:'#f5f7f8',webPreferences:{...preferences,preload:path.join(here,'preload.cjs')}});
   const tabs = new Map(), usedSessions = new Set();
   let mode='workspace', workspaceRoute='insights', selectedId=null, notice='', disposed=false, reading=false, currentRead=null;
   let screening=injectedScreening;
+  let recruiter=null,recruiterInit=null;
+  const nativeRPC=createNativeRecruiterRPC({tabs,state,open,activate:id=>{if(!tabs.has(id))throw Error('标签已关闭');selectedId=id;currentRead=null;mode='browser';layout();emit();},navigate:(id,url)=>{const t=tabs.get(id);if(!t)throw Error('标签不存在');t.loading=true;t.view.webContents.loadURL(url).catch(()=>{});}});
+  async function recruitment(){if(!recruiterInit)recruiterInit=(async()=>{await models();if(disposed)throw Error('窗口已关闭');recruiter=createDesktopRecruiter({dataDir:process.env.JOB_UI_DATA_DIR||path.resolve(here,'../ui_data'),runtimeDir:path.join(runtime,'recruiter'),rpc:nativeRPC,screening,...recruiterOptions});return recruiter;})().catch(e=>{recruiterInit=null;throw e;});return recruiterInit;}
   const localSession = session.fromPartition('persist:job-desktop-workspace-v1');
   localSession.setPermissionRequestHandler((_w,_p,done) => done(false));
   localSession.setPermissionCheckHandler(() => false);
   const workspace = new WebContentsView({webPreferences:{...preferences,session:localSession,preload:path.join(here,'workspace-preload.cjs')}});
   window.contentView.addChildView(workspace);
+  let workspaceStatus='loading',workspaceError='',workspaceTimer=null;
+  function workspaceFailed(message){clearTimeout(workspaceTimer);workspaceStatus='error';workspaceError=message;layout();emit();}
+  function workspaceLoading(){
+    clearTimeout(workspaceTimer);workspaceStatus='loading';workspaceError='';layout();emit();
+    workspaceTimer=setTimeout(()=>workspaceFailed('本地页面加载超时，请重试；招聘浏览器仍可独立使用'),20000);
+  }
+  function loadWorkspace(url){workspaceLoading();workspace.webContents.loadURL(url).catch(error=>{if(error.code!=='ERR_ABORTED')workspaceFailed('本地页面连接失败，请检查后台服务后重试');});}
 
   function state() {
-    return {version:'0.1.0',mode,workspaceRoute,selectedId,reading,notice,baseURL:base,
+    return {version:'0.1.0',mode,workspaceRoute,workspaceStatus,workspaceError,selectedId,reading,notice,baseURL:base,
       sites:browserSites.map(({id,name,url})=>({id,name,url})),
       tabs:[...tabs.values()].map(t=>({id:t.id,site:t.site,title:t.title,url:t.view.webContents.getURL(),loading:t.loading,error:t.error,back:t.view.webContents.navigationHistory.canGoBack(),forward:t.view.webContents.navigationHistory.canGoForward()}))};
   }
@@ -31,7 +44,7 @@ export async function createDesktop({runtime, baseURL=process.env.JOB_DESKTOP_BA
   function layout() {
     if (window.isDestroyed()) return;
     const [width,height]=window.getContentSize();
-    workspace.setVisible(mode==='workspace');
+    workspace.setVisible(mode==='workspace'&&workspaceStatus!=='error');
     if(mode==='workspace') workspace.setBounds(viewBounds(width,height,mode));
     for(const tab of tabs.values()) {const shown=mode==='browser'&&tab.id===selectedId&&!(tab.error&&!isRecruitingURL(tab.view.webContents.getURL()));tab.view.setVisible(shown);if(shown)tab.view.setBounds(viewBounds(width,height,mode));}
   }
@@ -39,7 +52,7 @@ export async function createDesktop({runtime, baseURL=process.env.JOB_DESKTOP_BA
   function setMode(value) {mode=value;layout();emit();}
   function syncWorkspaceView(view) {
     if(view==='browser'){setMode('browser');return;}
-    if(['tasks','insights','assistant'].includes(view)) {workspaceRoute=view;emit();}
+    if(['tasks','insights','assistant','profile'].includes(view)) {workspaceRoute=view;emit();}
   }
   function syncWorkspaceURL(value) {syncWorkspaceView(workspaceViewForURL(value,base));}
   function visibleFocus() {if(mode==='browser'&&tabs.has(selectedId))current().view.webContents.focus();else if(mode==='workspace')workspace.webContents.focus();}
@@ -138,7 +151,26 @@ export async function createDesktop({runtime, baseURL=process.env.JOB_DESKTOP_BA
   async function command(name,value={}) {
     if(!COMMANDS.has(name)||!value||typeof value!=='object'||Array.isArray(value)||JSON.stringify(value).length>4096)throw Error('无效桌面操作');
     if(name==='state')return state();
-    if(name==='workspace'){const url=workspaceURL(base,value.route);workspaceRoute=value.route;setMode('workspace');if(workspace.webContents.getURL()!==url)workspace.webContents.loadURL(url).catch(()=>{});return state();}
+    if(name.startsWith('recruiter-')){
+      const service=await recruitment();
+      if(name==='recruiter-state')return service.status();
+      if(name==='recruiter-upload'){
+        const picked=await dialog.showOpenDialog(window,{title:'上传原版式PDF简历',properties:['openFile'],filters:[{name:'PDF简历（DOCX请先另存PDF）',extensions:['pdf']}]});
+        if(picked.canceled)return {cancelled:true};
+        const file=picked.filePaths[0],stat=await fs.stat(file);if(!stat.isFile()||stat.size>3*1024*1024)throw Error('只支持3MB以内的PDF');
+        const bytes=await fs.readFile(file);if(bytes.length>3*1024*1024)throw Error('PDF超过3MB');
+        return service.upload({filename:path.basename(file),base64:bytes.toString('base64')});
+      }
+      if(name==='recruiter-select')return service.selectResume(value.id);
+      if(name==='recruiter-preview')return service.preview();
+      if(name==='recruiter-ack')return service.acknowledge(value);
+      if(name==='recruiter-plan')return service.generate(value);
+      if(name==='recruiter-start')return service.start(value);
+      if(name==='recruiter-cancel')return service.cancel();
+      if(name==='recruiter-clear')return service.clear();
+    }
+    if(recruiter?.busy&&['workspace','browser','open','select','close','navigate','back','forward','reload','stop'].includes(name))recruiter.cancel();
+    if(name==='workspace'){const url=workspaceURL(base,value.route);workspaceRoute=value.route;setMode('workspace');if(value.retry||workspaceStatus==='error'||workspace.webContents.getURL()!==url)loadWorkspace(url);return state();}
     if(name==='browser'){setMode('browser');return state();}
     if(name==='open') {const site=browserSites.find(s=>s.id===value.site);return {id:await open(value.url||site?.url)};}
     if(name==='select'){if(!tabs.has(value.id))throw Error('标签页不存在');selectedId=value.id;currentRead=null;setMode('browser');visibleFocus();return state();}
@@ -184,26 +216,33 @@ export async function createDesktop({runtime, baseURL=process.env.JOB_DESKTOP_BA
   workspace.webContents.on('did-navigate-in-page',(event,url,isMainFrame)=>{if(event.isMainFrame??isMainFrame)syncWorkspaceURL(event.url||url);});
   const onWorkspaceView=(event,view)=>{
     if(event.sender!==workspace.webContents||event.senderFrame!==workspace.webContents.mainFrame||!isWorkspaceURL(event.senderFrame.url,base))return;
-    syncWorkspaceView(view);
+    clearTimeout(workspaceTimer);workspaceStatus='ready';workspaceError='';layout();syncWorkspaceView(view);
   };
   ipcMain.on('job-desktop:workspace-view',onWorkspaceView);
-  workspace.webContents.on('did-fail-load',(_e,code,_description,_url,isMainFrame)=>{if(isMainFrame&&code!==-3)emit('本地服务未连接。请先启动原岗位服务，再点击任务或洞察重连；招聘浏览器可独立使用');});
+  // pushState also emits did-start-loading but does not rerun the preload.
+  // Only full main-frame navigations need a new readiness acknowledgement.
+  workspace.webContents.on('did-start-navigation',(event,_url,inPlace,isMainFrame)=>{
+    if((event.isMainFrame??isMainFrame)&&!(event.isSameDocument??event.isInPlace??inPlace))workspaceLoading();
+  });
+  workspace.webContents.on('did-fail-load',(_e,code,_description,_url,isMainFrame)=>{if(isMainFrame&&code!==-3)workspaceFailed(`本地页面加载失败（${code}），请检查后台服务后重试`);});
+  workspace.webContents.on('render-process-gone',()=>workspaceFailed('本地页面进程已退出，请点击重新加载'));
   window.webContents.on('will-navigate',event=>event.preventDefault());
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.on('resize',layout);
   window.on('closed',()=>{
-    disposed=true;ipcMain.removeHandler('job-desktop:command');
+    disposed=true;clearTimeout(workspaceTimer);ipcMain.removeHandler('job-desktop:command');
+    recruiter?.dispose();
     ipcMain.removeListener('job-desktop:workspace-view',onWorkspaceView);
     for(const tab of tabs.values())if(tab.view.webContents&&!tab.view.webContents.isDestroyed())tab.view.webContents.close();
     tabs.clear();if(workspace.webContents&&!workspace.webContents.isDestroyed())workspace.webContents.close();
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},
-    {label:'查看',submenu:[{label:'刷新当前页面',accelerator:'F5',click:()=>{if(mode==='browser'&&tabs.has(selectedId))current().view.webContents.reload();else workspace.webContents.reload();}},{label:'返回',accelerator:'Alt+Left',click:()=>{if(mode==='browser'&&tabs.has(selectedId))void command('back');}},{label:'前进',accelerator:'Alt+Right',click:()=>{if(mode==='browser'&&tabs.has(selectedId))void command('forward');}},{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},
+    {label:'查看',submenu:[{label:'刷新当前页面',accelerator:'F5',click:()=>{if(mode==='browser'&&tabs.has(selectedId))void command('reload');else workspace.webContents.reload();}},{label:'返回',accelerator:'Alt+Left',click:()=>{if(mode==='browser'&&tabs.has(selectedId))void command('back');}},{label:'前进',accelerator:'Alt+Right',click:()=>{if(mode==='browser'&&tabs.has(selectedId))void command('forward');}},{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},
     {label:'窗口',submenu:[{role:'minimize'},{role:'close'}]}
   ]));
   await window.loadFile(path.join(here,'index.html'));
-  workspace.webContents.loadURL(workspaceURL(base,workspaceRoute)).catch(()=>{});
+  loadWorkspace(workspaceURL(base,workspaceRoute));
   layout();emit();
   if(visible)window.show();
   return {window,workspace,tabs,command,state,open,runtime};

@@ -144,7 +144,7 @@ export async function switchManagedBrowser(key,{url='https://www.yupao.com/zhaog
     await releaseStartup?.();await releaseWorker();
   }
 }
-export async function connectManagedContext(key,{lease=true}={}){
+export async function connectManagedContext(key,{lease=true,existingOnly=false,timeoutMs=30000}={}){
   assertBrowserPlatform(key);
   let releaseLease;
   if(lease){
@@ -156,8 +156,9 @@ export async function connectManagedContext(key,{lease=true}={}){
   }
   let browser;
   try{
-    const entry=await ensureManagedBrowser(key);
-    browser=await chromium.connectOverCDP(entry.endpoint);
+    const entry=existingOnly?await managedBrowserState(key):await ensureManagedBrowser(key);
+    if(!entry)throw Object.assign(Error('采集会话未连接，请先打开采集会话并完成登录'),{code:'session_required'});
+    browser=await chromium.connectOverCDP(entry.endpoint,{timeout:timeoutMs});
     const context=browser.contexts()[0];if(!context)throw Error('受管理浏览器没有默认会话');
     let released=false;
     const close=async()=>{if(released)return;released=true;try{await browser.close();}finally{await releaseLease?.();}};

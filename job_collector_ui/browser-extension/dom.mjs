@@ -16,7 +16,7 @@ export async function pageOperation(args){
   function viewport(){const elements=[...document.querySelectorAll('*')].filter(visible);return {documentId,revision:globalThis.__localJobMirrorRevision,url:location.href,width:innerWidth,height:innerHeight,dpr:devicePixelRatio,scroll:[scrollX,scrollY],panels:elements.filter(e=>(e.scrollHeight>e.clientHeight+2||e.scrollWidth>e.clientWidth+2)&&/auto|scroll/.test(getComputedStyle(e).overflow+getComputedStyle(e).overflowY+getComputedStyle(e).overflowX)).slice(0,60).map(e=>[nodeId(e),e.scrollLeft,e.scrollTop,e.clientWidth,e.clientHeight]),targets:elements.filter(e=>{const b=e.getBoundingClientRect();return b.bottom>0&&b.right>0&&b.top<innerHeight&&b.left<innerWidth;}).slice(0,4000).map(targetState),focus:document.activeElement?nodeId(document.activeElement):null};}
   if(args.op==='viewport')return viewport();
   const text=(document.body?.innerText||'').slice(0,15000);
-  if(/\/(?:403|429|verify|captcha)(?:\.html)?(?:\/|$)/i.test(location.pathname)||/Security Verification|安全验证|人机验证/i.test(document.title)||/请完成安全验证|请拖动滑块|请按住滑块|访问过于频繁|访问异常|账号存在异常|请求过于频繁/.test(text)||all('#WAF_NC_WRAPPER,.geetest_panel,.nc-container,.captcha-dialog,.verify-wrap').length)throw Error('网站要求验证或限制访问；请手动处理，插件不执行或重试');
+  if(/\/(?:403|429|verify|captcha)(?:\.html)?(?:\/|$)/i.test(location.pathname)||/Security Verification|Just a moment|安全验证|人机验证/i.test(document.title)||/请完成安全验证|请拖动滑块|请按住滑块|访问过于频繁|访问异常|账号存在异常|请求过于频繁|确认您是真人|正在验证连接安全性/.test(text)||all('#WAF_NC_WRAPPER,.geetest_panel,.aliyunCaptcha-sliding-body,.nc-container,.captcha-dialog,[class*="captcha-container"],.verify-wrap').length)throw Error('网站要求验证或限制访问；请手动处理，插件不执行或重试');
   if(/\/(?:login|passport|web\/user)(?:\/|$)/i.test(location.pathname)||all('.login-dialog,.login-modal').length)throw Error('请在网站手动登录，再读取岗位');
   const spec={boss:{links:'a[href*="/job_detail/"]',title:'.job-detail-header .job-title,.job-detail-info .job-title,.job-detail-box h1,.job-banner h1,h1',details:'.job-sec-text,.job-detail-section .text,.job-detail-body .job-desc'},liepin:{links:'a[href*="/job/"],a[href*="/a/"]',title:'h1,.name-box .job-title',company:'.job-title-container .company-name,.job-title-content .company-name,.company-info .company-name',details:'.job-intro-container,.job-intro-content,.job-description'},zhaopin:{links:'a[href*="jobs.zhaopin.com/"],a[href*="/jobdetail/"]',details:'.describtion__detail-content,.job-detail-describe,.job-description'},job51:{links:'a[href*="jobs.51job.com/"],a[href*="/jobdetail"]',details:'.job_msg,.job-detail-description,.job-description'},iguopin:{links:'a[href*="/job/detail"],a[href*="/job_detail"],a[href*="/jobs/detail"]',details:'.job-description,.job-content,.position-description'},shixiseng:{links:'a[href*="/intern/"],a[href*="/job/"]',details:'.job_detail,.job-desc,.job-description'}}[site];
   if(args.op==='mirror-input'){
@@ -56,8 +56,28 @@ export async function pageOperation(args){
   }
   function detail(){const row={url:location.href,title:get(spec.title||'h1'),company:site==='liepin'&&location.pathname.startsWith('/a/')?'':get(spec.company||'.company-name,.company__title,.companyName'),salary:get('.salary,.job-salary,.job-salary__text'),city:get('.job-area,.job-address,.work-city'),description:get(spec.details).slice(0,30000)};if(!row.title||row.description.length<30)throw Error('当前页不是完整岗位详情，请打开具体岗位');return row;}
   if(args.op==='read-detail')return {rows:[detail()],documentId};
+  if(args.op==='advance-results'){
+    if(site!=='boss'||!/^\/web\/geek\/jobs?(?:\/|$)/.test(location.pathname))throw Error('仅允许在BOSS检索结果页继续遍历');
+    const next=all('.options-pages .next,.pagination .next,.pagination-next,[aria-label="下一页"],button,a').filter(e=>e.matches('.options-pages .next,.pagination .next,.pagination-next,[aria-label="下一页"]')||/^(?:下一页|下一页\s*[>›»])$/.test(e.innerText.trim()));
+    if(next.length>1)throw Error('无法唯一确认下一页，停止遍历');
+    if(next.length===1){const e=next[0];if(e.disabled||e.getAttribute('aria-disabled')==='true'||e.matches('.disabled,.is-disabled')||e.closest('.disabled,.is-disabled'))return {advanced:false,exhausted:true,reason:'next-disabled'};if(e.tagName==='A'&&e.href){const u=new URL(e.href);if(u.origin!==location.origin||u.pathname!==location.pathname)throw Error('下一页跳转不在当前检索路径，停止');}e.click();return {advanced:true,method:'next-page'};}
+    const lists=all('.job-list-container,.job-list-box,.job-list,.search-job-result');
+    if(lists.some(e=>/没有更多(?:了|岗位)?|暂无更多|已经到底|已到底/.test(e.innerText.slice(-160))))return {advanced:false,exhausted:true,reason:'explicit-end'};
+    const scrollables=lists.filter(e=>e.scrollHeight>e.clientHeight+2&&/auto|scroll/.test(getComputedStyle(e).overflowY));
+    if(scrollables.length>1)throw Error('存在多个可滚动岗位列表，停止，不猜测目标');
+    const container=scrollables[0]||document.scrollingElement;
+    if(!container||container.scrollHeight<=container.clientHeight+2)return {advanced:false,exhausted:false,reason:'no-pagination'};
+    // Continue near the last rendered job, not an arbitrary document bottom:
+    // this advances ordinary lists without skipping unrendered virtual cards.
+    const links=all(spec.links).filter(a=>container===document.scrollingElement||container.contains(a));
+    const top=container===document.scrollingElement?0:container.getBoundingClientRect().top;
+    const last=links.at(-1)?.getBoundingClientRect().bottom;
+    const target=Math.max(container.scrollTop+Math.max(200,Math.round(container.clientHeight*.85)),Number.isFinite(last)?container.scrollTop+last-top-container.clientHeight*.3:0);
+    container.scrollTo({top:target,behavior:'instant'});return {advanced:true,method:'scroll-results'};
+  }
   if(args.op==='collect-page'){
-    const seen=new Set();const rows=all(spec.links).map(a=>{const card=a.closest('article,li,.job-card-wrapper,.job-card-box,.joblist-box__item,.job-card,.job-list-item,.job-item')||a.parentElement;const read=s=>card?.querySelector(s)?.innerText?.trim()||'';return {url:a.href,title:(a.title||read('.job-name,.job-title,.jobinfo__title')||a.innerText).trim().slice(0,180),company:read('.company-name,.company__title'),salary:read('.salary,.job-salary'),city:read('.job-area,.city'),description:''};}).filter(r=>r.title&&!seen.has(r.url)&&seen.add(r.url)).slice(0,100);if(!rows.length)throw Error('当前页没有可识别的岗位卡片');return {rows,documentId};
+    const limit=Number.isInteger(args.limit)&&args.limit>=1&&args.limit<=300?args.limit:100;
+    const seen=new Set();const rows=all(spec.links).map(a=>{const card=a.closest('article,li,.job-card-wrapper,.job-card-box,.joblist-box__item,.job-card,.job-list-item,.job-item')||a.parentElement;const read=s=>card?.querySelector(s)?.innerText?.trim()||'';return {url:a.href,title:(a.title||read('.job-name,.job-title,.jobinfo__title')||a.innerText).trim().slice(0,180),company:read('.company-name,.company__title'),salary:read('.salary,.job-salary'),city:read('.job-area,.city'),description:''};}).filter(r=>r.title&&!seen.has(r.url)&&seen.add(r.url)).slice(0,limit);if(!rows.length)throw Error('当前页没有可识别的岗位卡片');return {rows,documentId};
   }
   if(['delivery-context','delivery-message','delivery-image'].includes(args.op)){
     if(site!=='boss')throw Error('批次发送仅适配BOSS；其他网站请手动操作');

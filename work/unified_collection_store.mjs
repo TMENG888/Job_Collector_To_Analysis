@@ -4,6 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {parseChannelCsv} from './public_channel_csv.mjs';
 import {writeAtomic,writeJsonAtomic} from './collector_storage.mjs';
 import {publishLatestCsv} from './latest_dataset.mjs';
+import {ensureChannelHeartbeatSchema,recordChannelIngestion,meaningfulIngestionChange} from './collector_channel_heartbeat.mjs';
 
 const channels=['shixiseng','iguopin','mohrss','jobonline','job51','zhaopin','liepin','yupao','boss'];
 const text=value=>String(value||'').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').trim();
@@ -38,6 +39,7 @@ export async function updateUnifiedDataset(task,{publishCsv=false}={}) {
     const existing=db.prepare('SELECT task_id FROM metadata').get();
     if(existing && existing.task_id!==task.id)throw new Error('数据库属于其他任务');
     db.prepare('INSERT OR IGNORE INTO metadata VALUES (?)').run(task.id);
+    ensureChannelHeartbeatSchema(db);
     const sources=channels.map(channel=>path.join(task.outputDir,`${channel}_标准化数据.csv`));
     const checkpointDir=path.join(task.outputDir,'断点数据');
     const names=await fs.readdir(checkpointDir).catch(()=>[]);
@@ -55,6 +57,7 @@ export async function updateUnifiedDataset(task,{publishCsv=false}={}) {
       }else rows=parseChannelCsv(content);
       db.exec('BEGIN IMMEDIATE');
       try {
+        const changes=new Map();
         for(const raw of rows) {
           if(raw.task_id && raw.task_id!==task.id)throw new Error('记录混入其他任务');
           if(!raw.platform||!raw.job_id)continue;
@@ -66,8 +69,12 @@ export async function updateUnifiedDataset(task,{publishCsv=false}={}) {
           if(String(previous.job_description||'').length>String(raw.job_description||'').length)merged.job_description=previous.job_description;
           merged.task_id=task.id;
           merged.query_keywords=[...new Set([...(previous.query_keywords||[]),previous.query_keyword,raw.query_keyword].filter(Boolean))];
-          db.prepare('INSERT INTO jobs VALUES (?,?,?) ON CONFLICT(platform,job_id) DO UPDATE SET data=excluded.data').run(String(raw.platform),String(raw.job_id),JSON.stringify(merged));
+          const encoded=JSON.stringify(merged);if(old?.data===encoded)continue;
+          db.prepare('INSERT INTO jobs VALUES (?,?,?) ON CONFLICT(platform,job_id) DO UPDATE SET data=excluded.data').run(String(raw.platform),String(raw.job_id),encoded);
+          if(old&&!meaningfulIngestionChange(previous,merged))continue;
+          const change=changes.get(String(raw.platform))||{inserted:0,updated:0};change[old?'updated':'inserted']++;changes.set(String(raw.platform),change);
         }
+        recordChannelIngestion(db,changes,new Date(stat.mtimeMs).toISOString());
         db.prepare('INSERT INTO sources VALUES (?,?) ON CONFLICT(file) DO UPDATE SET signature=excluded.signature').run(file,signature);
         db.exec('COMMIT');changed=true;
       }catch(error){db.exec('ROLLBACK');throw error;}

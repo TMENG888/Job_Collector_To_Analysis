@@ -46,15 +46,16 @@ export function setAssistantMarkdown(root,value,sources=[],prefix='assistant-ans
   const walker=doc.createTreeWalker(root,4),textNodes=[];
   while(walker.nextNode())if(!walker.currentNode.parentElement.closest('pre,code,a'))textNodes.push(walker.currentNode);
   for(const node of textNodes){
-    const matches=[...node.textContent.matchAll(/\[((?:K[a-f0-9]{24})|(?:J\d+))\]/g)];
+    const matches=[...node.textContent.matchAll(/\[((?:[KI][a-f0-9]{24})|(?:J\d+))\]/g)];
     if(!matches.some(match=>citations.has(match[1])))continue;
     const fragment=doc.createDocumentFragment();let offset=0;
     for(const match of matches){
       const citation=citations.get(match[1]);if(!citation)continue;
       fragment.append(doc.createTextNode(node.textContent.slice(offset,match.index)));
       const link=doc.createElement('a');link.className='assistant-citation';link.href='#'+sourceAnchorId(prefix,citation.index);
-      link.textContent=`[${citation.index+1}]`;link.title=citation.source.title||'查看岗位证据';
-      link.setAttribute('aria-label',`查看岗位证据 ${citation.index+1}：${citation.source.title||''}`);
+      const kind=citation.source.source_type==='interview'?'面经':'岗位';
+      link.textContent=`[${citation.index+1}]`;link.title=citation.source.title||`查看${kind}证据`;
+      link.setAttribute('aria-label',`查看${kind}证据 ${citation.index+1}：${citation.source.title||''}`);
       fragment.append(link);offset=match.index+match[0].length;
     }
     fragment.append(doc.createTextNode(node.textContent.slice(offset)));node.replaceWith(fragment);

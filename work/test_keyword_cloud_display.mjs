@@ -15,12 +15,10 @@ assert.equal(buildKeywordCloudDisplay(rows.slice(0,4),family),null,'No fabricate
 assert.equal(buildKeywordCloudDisplay(rows,family,{limit:2}).terms.length,2);
 const boundary=rows.map(r=>({...r,'岗位描述':r['岗位描述'].replace(/Python和SQL以及Excel/,'MySQL数据库')}));
 assert.ok(!buildKeywordCloudDisplay(boundary,family).terms.some(t=>t.name==='SQL'),'SQL must not match MySQL');
-if(process.env.JOB_TEST_PRIVATE_FIXTURES==='1'){
 const report=JSON.parse(await fs.readFile('ui_data/insights/岗位市场洞察.json','utf8'));
 const raw=parseChannelCsv(await fs.readFile(report.input_file,'utf8')).map((r,i)=>({...r,row_no:i+2,'岗位名称':r.job_name,'岗位描述':r.job_description}));
 const actual=buildKeywordCloudDisplay(raw,family);
 const reference=JSON.parse(await fs.readFile('ui_data/insights/comparisons/wordcloud-20261010/results.json','utf8')).variants.find(v=>v.id==='fusion');
 assert.deepEqual(actual.terms.map(t=>t.name),reference.terms.map(t=>t.name),'Production word list equals tested fusion');
 assert.equal(actual.seed_rows,1204);assert.equal(actual.terms.length,100);
-}
-console.log('PASS display-only isolation, requirements, evidence, cold start, SQL boundary, immutable inputs; private parity opt-in');
+console.log('PASS display-only isolation, requirements, evidence, cold start, SQL boundary, immutable inputs, tested 100-word parity');

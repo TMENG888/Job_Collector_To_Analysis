@@ -7,9 +7,26 @@
 //  - 响应为明文 JSON：object.searchList
 //  - 无服务端分页；按 关键词 × 城市 组合扩量（每组合约 20 条）
 // 说明：公钥/SM 算法来自网站公开前端 bundle；不伪造设备指纹、不绕过验证码。
-import sm from 'sm-crypto';
-
-const { sm2, sm3, sm4 } = sm;
+import {createRequire} from 'node:module';
+const require = createRequire(import.meta.url);
+let cryptoImplementation;
+function loadJobonlineCrypto() {
+  if (cryptoImplementation) return cryptoImplementation;
+  try {
+    const sm = require('sm-crypto');
+    if (typeof sm.sm2?.doEncrypt !== 'function' || typeof sm.sm3 !== 'function' || typeof sm.sm4?.encrypt !== 'function') throw Error('unsupported crypto API');
+    cryptoImplementation=sm;
+    return sm;
+  } catch {
+    throw fail('缺少或无法加载 sm-crypto 运行依赖；请运行 npm run install:collector -- <E盘依赖目录> <E盘缓存目录>，修复前不发请求', 'dependency_missing');
+  }
+}
+// Call once before keyword × city loops so a local installation failure does
+// not produce dozens of identical query errors or make any network request.
+export function checkJobonlineDependencies() {
+  try {loadJobonlineCrypto();return {ok:true};}
+  catch(error){return {ok:false,code:error.code,message:error.message,stopChannel:true};}
+}
 const ENDPOINT = 'https://api.jobonline.cn/jobtbao-es-api/elastic/api/position/common/v1/showlist';
 const TARGET = 'SEARCH_RESULT_PAGE';
 // 网站前端 bundle 中硬编码的服务器 SM2 公钥（非用户凭据）。
@@ -44,8 +61,9 @@ export function jobonlineHeaders(extra = {}) {
 }
 
 // 构造一次加密请求：返回 {url, options}。每次调用生成新的随机会话密钥（与页面行为一致）。
-export function jobonlineRequest(keyword, city, { encrypt = { sm2, sm3, sm4 } } = {}) {
+export function jobonlineRequest(keyword, city, { encrypt } = {}) {
   if (typeof keyword !== 'string' || !keyword.trim()) throw fail('关键词无效', 'invalid_config');
+  encrypt ??= loadJobonlineCrypto();
   const cityCode = city?.code && /^\d{6}$/.test(String(city.code)) ? Number(city.code) : null;
   const A = rand32(), y = rand32(), w = rand32(), x = rand32();
   const plain = {

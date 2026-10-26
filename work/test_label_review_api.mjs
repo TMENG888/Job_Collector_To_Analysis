@@ -25,7 +25,7 @@ try {
   assert.ok(ready, '隔离测试服务未启动');
   const create = await fetch(`${baseUrl}/api/labels`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ inputFile: process.env.JOB_TEST_DATASET || path.resolve('outputs','爬虫工程师岗位_5000条.xlsx'), outputDir: path.join(directory, 'labels'), jobFamily: '爬虫/数据采集', platform: 'rules', sampleSize: 1 }),
+    body: JSON.stringify({ inputFile: 'C:\\Users\\YS-Insight\\Desktop\\陈晓锋\\测试采集数据集\\岗位分析数据集\\历史数据集\\爬虫工程师岗位_5000条.xlsx', outputDir: path.join(directory, 'labels'), jobFamily: '爬虫/数据采集', platform: 'rules', sampleSize: 1 }),
   });
   assert.equal(create.status, 201);
   const { job } = await create.json();

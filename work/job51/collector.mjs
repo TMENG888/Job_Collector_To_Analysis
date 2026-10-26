@@ -42,3 +42,5 @@ export async function collect51Records(keyword,city,{checkpointPath,request={},m
   }catch(error){error.stopChannel=true;error.records=[...records.values()];error.total=total;completed=false;await save({error:error.message});if(page)await evidence(page,checkpointPath,error);throw error}
   finally{if(page)await page.close().catch(()=>{});if(context)await context.close()}
 }
+
+

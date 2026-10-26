@@ -24,6 +24,9 @@ export const collectionStopMessages={
   low_yield_deferred:'连续低收益，已保留断点并停止自动补采',
   search_queue_exhausted:'已配置及相关关键词的可执行条件已处理；停滞和受阻条件保留，不代表平台岗位已全部采完',
   channels_blocked:'当前渠道均需人工处理，已保留数据和断点；不自动重试登录、验证码或访问限制',
+  partially_blocked:'可执行查询已处理，部分渠道仍需人工验证；保留数据和断点，尚未完成全部条件',
+  waiting_cooldown:'部分查询等待来源冷却结束；未完成条件与断点已保留，请稍后续采，不代表已采完',
+  conditions_deferred:'部分查询因分页保护、停滞或无进展暂缓；断点保留，未认定为已采完',
   round_budget_finished:'已达到自动补采轮次预算；尚未处理的条件和断点保留，可查看调度状态',
 };
 export const collectionStopMessage=reason=>collectionStopMessages[reason]||'';

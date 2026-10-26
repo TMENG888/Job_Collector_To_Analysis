@@ -11,7 +11,7 @@ import {YieldWindow,yieldNote} from './collection_yield.mjs';
 import {assertTaskOutputOwnership} from './task_dataset_scope.mjs';
 import {readCollectionRound,filterCollectionCombinations} from './task_collection_config.mjs';
 
-const outputDir = path.resolve(process.argv[2] || 'outputs/zhaopin-batch');
+const outputDir = path.resolve(process.argv[2] || 'C:/Users/YS-Insight/Desktop/全栈开发岗位5000条_2026-09-25');
 let targetUnique = Number(process.argv[3] || 3934);
 const batchConfigPath = process.argv[4] ? path.resolve(process.argv[4]) : null;
 const batchConfig = batchConfigPath ? JSON.parse(await fs.readFile(batchConfigPath, 'utf8')) : {};

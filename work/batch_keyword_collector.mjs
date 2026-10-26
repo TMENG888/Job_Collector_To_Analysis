@@ -4,7 +4,7 @@ import path from 'node:path';
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const catalogPath = path.resolve(args.find((arg) => !arg.startsWith('--')) || path.join('ui_data', 'keyword_catalog', '岗位检索关键词目录.json'));
-const outputRoot = path.resolve(args.filter((arg) => !arg.startsWith('--'))[1] || 'outputs/datasets');
+const outputRoot = path.resolve(args.filter((arg) => !arg.startsWith('--'))[1] || 'C:/Users/YS-Insight/Desktop/陈晓锋/测试采集数据集');
 const baseUrl = process.env.JOB_COLLECTOR_URL || 'http://127.0.0.1:8765';
 const batchRoot = path.join(outputRoot, '批量岗位采集');
 const datasetRoot = path.join(outputRoot, '岗位分析数据集', '新采集');

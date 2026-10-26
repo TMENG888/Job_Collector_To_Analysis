@@ -24,7 +24,7 @@ export function installSkillTermReview({api,toast}){
       recovered('review');
       const run=scan.run;status.textContent=`待审 ${data.counts.pending||0} · 已批准 ${data.counts.approved||0} · 已拒绝 ${data.counts.rejected||0}`+(run?` ｜ 最近扫描：${({running:'运行中',completed:'完成',failed:'已停止',stopping:'等待旧进程退出',interrupted:'服务重启中断'})[run.status]||run.status} ${run.completed}/${run.total} 条岗位，新增 ${run.added} 个候选${run.message?'；'+run.message:''}`:'');
       panel.querySelector('[data-term-scan]').disabled=working||['running','stopping'].includes(run?.status)||!scan.model.available;
-      if(!scan.model.available)notice.textContent='本机模型文件未安装完整；现有规则词云仍可正常使用。';
+      if(!scan.model.available)notice.textContent='本机模型文件未安装完整；既有分析报告仍可查看。';
       const html=data.items.map(renderSkillTermCandidate).join('')||'<p>当前页没有候选；可扫描下一批，或切换审核状态。</p>';
       // Do not replace unchanged buttons while a reviewer is focused on them.
       if(list.dataset.html!==html){list.innerHTML=html;list.dataset.html=html;}

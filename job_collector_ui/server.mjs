@@ -20,12 +20,14 @@ import {otherChannelValidCount} from '../work/task_collection_target.mjs';
 import {collectionChannelAvailable,collectionChannelPauseReason,assertDirectHttpCollection,retiredCollectionChannels} from '../work/channel_availability.mjs';
 import {collectionTransportPolicy} from '../work/channel_acquisition.mjs';
 import {liveCollectionMetrics} from '../work/live_collection_metrics.mjs';
+import {deriveChannelDiagnostics} from '../work/channel_collection_diagnostics.mjs';
 import {synchronizePublicKeywords} from '../work/task_collection_config.mjs';
 import {updateUnifiedDataset} from '../work/unified_collection_store.mjs';
 import {createKnowledgeAssistantStore} from '../work/job_decision_assistant.mjs';
 import {knowledgeStore} from '../work/job_knowledge_store.mjs';
 import {createKnowledgeHandler} from '../work/job_knowledge_http.mjs';
 import {nativeTaskCounts} from '../work/collector_native_sink.mjs';
+import {deriveChannelHeartbeats} from '../work/collector_channel_heartbeat.mjs';
 import {createAssistantHandler} from '../work/job_assistant_http.mjs';
 import {createAssistantCredentialStore} from '../work/job_assistant_credentials.mjs';
 import {createAssistantSessionStore} from '../work/job_assistant_sessions.mjs';
@@ -34,11 +36,15 @@ import {createCollectionControl} from '../work/job_assistant_collection.mjs';
 import {zhaopinCities,jobonlineCities} from '../work/collection_cities.mjs';
 import {liepinCities} from '../work/liepin_cities.mjs';
 import {channelAcquisition,collectionPolicyFor,collectionMode,HYBRID_MODE} from '../work/channel_acquisition.mjs';
+import {createChannelVerification} from '../work/channel_manual_verification.mjs';
+import {verificationDiagnostic} from '../work/channel_verification_state.mjs';
 import {prepareStructuredCollection} from '../work/structured_collection_plan.mjs';
 import {runAdaptiveCollection} from '../work/collection_search_queue.mjs';
 import {PipelineRuns} from '../work/pipeline_runs.mjs';
 import {collectionStopMessage} from '../work/jobonline_pagination_health.mjs';
-import {collectionGoal,untilExhausted,goalText,collectionOutcome} from '../work/collection_goal.mjs';
+import {collectionCounts} from '../work/collection_counts.mjs';
+import {collectionGoal,untilExhausted,goalText,collectionOutcome,collectionTargetReached} from '../work/collection_goal.mjs';
+import {updateTaskCollectionGoal,synchronizeCollectionGoal} from '../work/task_collection_goal.mjs';
 import {migrateLegacyCollectionGoals} from '../work/legacy_collection_goal.mjs';
 import {createInsightSupervised,createInsightSupervisedHandler} from '../work/insight-supervised.mjs';
 import {selectManualRole} from '../work/insight-role-selection.mjs';
@@ -47,6 +53,11 @@ import {roleClassifier} from '../work/role-classifier-registry.mjs';
 import {createBrowserWorkspace} from '../work/job-browser-workspace.mjs';
 import {createBrowserScreening} from '../work/job-browser-screening.mjs';
 import {createSemanticCloud,createSemanticCloudHandler} from '../work/insight-semantic-cloud.mjs';
+import {createInsightReportCache} from '../work/insight-report-cache.mjs';
+import {createPersonalWikiHandler} from '../work/personal-wiki-http.mjs';
+import {interviewSettings,readInterviewSnapshot,interviewPaths} from '../work/nowcoder_interviews.mjs';
+import {createInterviewKnowledgeStore} from '../work/job_assistant_interviews.mjs';
+import {createInterviewSupervised,createInterviewSupervisedHandler} from '../work/interview-supervised.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -63,24 +74,41 @@ const insightDataDir = path.join(dataDir, 'insights');
 const insightStatePath = path.join(insightDataDir, 'state.json');
 const insightConfigPath = path.join(insightDataDir, 'config.json');
 const insightReportPath = path.join(insightDataDir, '岗位市场洞察.json');
+const insightReportCache=createInsightReportCache(insightReportPath);
 const insightLogPath = path.join(insightDataDir, 'analysis.log');
 const knowledge=knowledgeStore(dataDir);
-const insightSupervised=createInsightSupervised(dataDir);
+const handlePersonalWiki=createPersonalWikiHandler(dataDir);
+let semanticCloud;
+const insightSupervised=createInsightSupervised(dataDir,{
+  beforeStart:async()=>{if((await semanticCloud?.status(''))?.busy)throw Error('已有词云标注任务运行中，请先等待或停止');},
+  publishJoint:data=>semanticCloud.importJoint(data),
+});
 const classifierScope=inputFile=>{
   const source=resolveInsightSourceRole({inputFile},tasks);
   return {inputFile,role:selectManualRole(roleFamilies,source.role)?.name||source.role};
 };
 const handleInsightClassifier=createInsightSupervisedHandler(insightSupervised,classifierScope);
-const semanticCloud=createSemanticCloud(dataDir,{supervised:insightSupervised,scope:classifierScope});
+semanticCloud=createSemanticCloud(dataDir,{supervised:insightSupervised,scope:classifierScope});
 const handleSemanticCloud=createSemanticCloudHandler(semanticCloud);
 const handleKnowledge=createKnowledgeHandler(dataDir);
-const insightDatasetRoot = path.resolve(process.env.JOB_INSIGHT_DATASET_ROOT || path.join(root, 'outputs'));
+const insightDatasetRoot = path.join(os.homedir(), 'Desktop', '陈晓锋', '测试采集数据集');
 const host = '127.0.0.1';
 const port = Number(process.env.JOB_UI_PORT || process.argv[2] || 8765);
 const browserWorkspace=createBrowserWorkspace(dataDir,{screening:createBrowserScreening({supervised:insightSupervised})});
-const handleJobAssistant = createAssistantHandler(createKnowledgeAssistantStore(dataDir,{readOnly:true}),createAssistantCredentialStore(path.join(dataDir,'assistant_private','model.json')),{repository:createAssistantSessionStore(await assistantSessionDirectory(dataDir)),collectionControl:createCollectionControl({baseUrl:`http://${host}:${port}`,storageDir:dataDir,dataDiskDir:path.dirname(knowledge.filename),getCities:()=>Object.keys(zhaopinCities)})});
+const interviewKnowledge=createInterviewKnowledgeStore(dataDir,{enrich:(posts,roles)=>interviewSupervised.enrich(posts,roles)});
+const interviewSupervised=createInterviewSupervised(dataDir,{readPosts:scope=>interviewKnowledge.trainingCorpus(scope)});
+const handleInterviewClassifier=createInterviewSupervisedHandler(interviewSupervised,{taskExists:async id=>tasks.some(task=>task.id===id&&!task.archived)});
+const handleJobAssistant = createAssistantHandler(createKnowledgeAssistantStore(dataDir,{readOnly:true}),createAssistantCredentialStore(path.join(dataDir,'assistant_private','model.json')),{interviewStore:interviewKnowledge,repository:createAssistantSessionStore(await assistantSessionDirectory(dataDir)),collectionControl:createCollectionControl({baseUrl:`http://${host}:${port}`,storageDir:dataDir,dataDiskDir:path.dirname(knowledge.filename),getCities:()=>Object.keys(zhaopinCities)})});
 const latestExports=new Map();
 const active = new Map();
+const channelVerification=createChannelVerification({beforeRecheck:async platform=>{
+  const origins=platform==='liepin'?['https://api-c.liepin.com','https://www.liepin.com']:['https://we.51job.com','https://cupid.51job.com'];
+  for(const origin of origins){
+    const file=path.join(process.env.JOB_HTTP_RATE_DIR||path.join(dataDir,'http_rate_limits'),createHash('sha256').update(origin).digest('hex').slice(0,24)+'.json');
+    const state=await fs.readFile(file,'utf8').then(JSON.parse).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+    if(Number(state?.cooldownUntil)>Date.now())throw Object.assign(Error('渠道仍在共享冷却期，未启动浏览器复检'),{code:'origin_cooldown'});
+  }
+}});
 const pipelineRuns=new PipelineRuns();
 let startingBoss = false;
 let activeInsight = null;
@@ -190,10 +218,8 @@ async function saveInsightState(patch) {
   return insightState;
 }
 
-async function publicInsight() {
-  let report = null;
-  try { report = JSON.parse(await fs.readFile(insightReportPath, 'utf8')); } catch {}
-  return { ...insightState, runningSeconds: activeInsight ? Math.floor((Date.now() - activeInsight.startedAt) / 1000) : 0, report };
+function publicInsightState() {
+  return {...insightState,runningSeconds:activeInsight?Math.floor((Date.now()-activeInsight.startedAt)/1000):0};
 }
 
 async function discoverInsightDatasets() {
@@ -209,8 +235,8 @@ async function startInsight(body) {
   if (!nativeInput&&(!requestedInput || !fsSync.existsSync(inputFile))) throw new Error('找不到输入数据');
   if (!nativeInput&&!['.xlsx', '.csv'].includes(path.extname(inputFile).toLowerCase())) throw new Error('请选择知识库岗位范围，或手工导入 XLSX/CSV');
   const classifierRole=selectManualRole(roleFamilies,sourceRole.role)?.name||sourceRole.role;
-  const insightClassifier=await insightSupervised.resolve(inputFile,classifierRole);
-  if(!insightClassifier&&!roleClassifier(classifierRole))throw new Error('该岗位尚无通过验收的监督分类器，请先选择具体岗位数据集并点击“Qwen 标注并训练”；岗位洞察不再使用规则筛选');
+  const insightClassifier=await insightSupervised.resolveAnalysis(inputFile,classifierRole,{mode:body.classifierMode||'qualified',runId:body.classifierRunId});
+  if(!insightClassifier&&!roleClassifier(classifierRole))throw new Error('该岗位尚无通过验收的专用监督分类器，请先联合标注并训练；不回退规则或语义参照');
   let transferSource = null;
   if (body.sourceTaskId) {
     const task = tasks.find((item) => item.id === String(body.sourceTaskId) && !item.archived);
@@ -244,12 +270,13 @@ async function startInsight(body) {
     reviewedLabelDir: '', prelabelDir: '', reviewedLabelJobId: '',
     consensusLabelDirs: [], consensusLabelJobIds: [], labelingEnabled: false,
     insightClassifier,
+    experimental:insightClassifier?.experimental===true,
     screeningPolicy: 'supervised-only',
-    semanticCloud: await semanticCloud.resolve(inputFile,classifierRole,insightClassifier),
+    semanticCloud: insightClassifier?.experimental?await insightSupervised.trialSemantics(insightClassifier):await semanticCloud.resolve(inputFile,classifierRole,insightClassifier),
   };
   await fs.writeFile(insightConfigPath, JSON.stringify(config, null, 2), 'utf8');
   await fs.writeFile(insightLogPath, `[${new Date().toLocaleString('zh-CN')}] 开始分析\n输入：${inputFile}\n模式：${config.analysisMode === 'full' ? '全量逐条匹配' : `抽样 ${config.sampleSize} 条`}\n`, 'utf8');
-  await saveInsightState({ status: 'running', message: '正在读取样本并计算岗位洞察', ...config, startedAt: now(), error: '' });
+  await saveInsightState({ status: 'running', message: config.experimental?'试分析 · 候选未达标，正在计算全量岗位洞察':'正在读取样本并计算岗位洞察', ...config, startedAt: now(), error: '' });
   const child = spawn(process.execPath, [path.join(root, 'work', 'analyze_job_market_sample.mjs'), insightConfigPath, insightReportPath], {
     cwd: root, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   });
@@ -269,7 +296,7 @@ async function startInsight(body) {
     if (code === 0) {
       try {
         const report = JSON.parse(await fs.readFile(insightReportPath, 'utf8'));
-        await saveInsightState({ status: 'completed', message: `${report.detected_role?.name || report.role}分析完成：${report.sample_rows}/${report.total_rows} 条`, error: '' });
+        await saveInsightState({ status: 'completed', message: `${report.experimental?'[试分析 · 候选未达标] ':''}${report.detected_role?.name || report.role}分析完成：${report.sample_rows}/${report.total_rows} 条`, error: '' });
         await fs.appendFile(insightLogPath, '\n[完成] 岗位市场洞察已生成。\n', 'utf8').catch(() => {});
       } catch (error) {
         await saveInsightState({ status: 'failed', message: '分析程序结束但报告读取失败', error: error.message });
@@ -373,6 +400,7 @@ async function runChild(task, stage, pipeline = false) {
       if (synced.changed) await appendLog(task.id, `\n[配置修复] 公开渠道同步全部 ${synced.keywords.length} 个任务关键词；断点与已采集数据保留。\n`);
     }
     if(['public','collection','zhaopin'].includes(stage)){
+      await synchronizeCollectionGoal(task);
       const plan=await prepareStructuredCollection(task);
       if(cancelled()){startingStages.delete(task.id);return {paused:true};}
       await appendLog(task.id,`\n[接口执行计划] ${plan.channels.map(channel=>channel.key+':'+channel.mode+(channel.maxPages?'，最多'+channel.maxPages+'页':'')).join('；')}\n`);
@@ -460,6 +488,10 @@ async function runPipeline(task, resumeFrom = '') {
       currentStage=stage;
       const fresh = taskById(tasks, task.id);
       if (!fresh || cancelled()) return;
+      if(!untilExhausted(fresh)&&await otherChannelValidCount(fresh.outputDir,'',fresh.id)>=fresh.targetRows){
+        await appendLog(task.id,'\n[数量目标已达] 跳过后续采集阶段，归集已落盘数据；不再请求招聘平台。\n');
+        break;
+      }
       const result = await runChild(fresh, stage, true);
       if (result.paused) return;
     }
@@ -589,6 +621,7 @@ async function createTask(body) {
   const publicCity = { name: '全国', code: '全国' };
   const publicConfig = {
     task_id:id,
+    interviews:interviewSettings({enabled:body.interviewEnabled,keywords:body.interviewKeywords||keywords,roleKey:label,maxPosts:body.interviewMaxPosts,halfLifeDays:body.interviewHalfLifeDays}),
     transportMode,browser:{maxPages:browserMaxPages,maxRows:browserMaxRows},
     apiExecutionVersion:2,
     taskTargetRows:targetRows||0,collectUntilExhausted,
@@ -602,7 +635,7 @@ async function createTask(body) {
         cities: cityNames.map((name) => ({ name, code: job51Cities[name] })).filter((item) => item.code),
         maxPages: 100,
       },
-      jobonline: { enabled: platforms.includes('jobonline'), cities: Object.entries(jobonlineCities).map(([name, code]) => ({ name, code })), maxRows: collectUntilExhausted?100000:Math.min(candidateTarget,2000) },
+      jobonline: { enabled: platforms.includes('jobonline'), cities: cityNames.map(name=>({name,code:jobonlineCities[name]})).filter(item=>item.code), maxRows: collectUntilExhausted?100000:Math.min(candidateTarget,2000) },
       liepin: { enabled: platforms.includes('liepin'), cities: cityNames.map(name=>({name,code:liepinCities[name]})).filter(item=>item.code), maxPages:100, maxRows:candidateTarget },
       iguopin: { enabled: platforms.includes('iguopin'), cities: [{ name: '全国', code: '' }], maxPages: collectUntilExhausted?250:25, maxRows: collectUntilExhausted?5000:Math.min(candidateTarget,2500) },
       mohrss: { enabled: platforms.includes('mohrss'), cities: [{ name: '全国', code: '' }], maxPages: collectUntilExhausted?400:40, maxRows: collectUntilExhausted?8000:Math.min(candidateTarget,2500) },
@@ -657,6 +690,7 @@ async function createTask(body) {
 
   const task = {
     id, label, primaryKeyword, keywords, ...goal, cities: cityNames, platforms, pace,transportMode,adaptiveSearch:body.adaptiveSearch!==false,
+    interviews:publicConfig.interviews,
     outputDir, outputBaseDir,datasetScopeVersion:2, configDir, publicConfigPath, zhaopinConfigPath, yupaoConfigPath, bossConfigPath, profilePath,
     status: 'ready', currentStage: '', message: '任务已创建', createdAt: now(), updatedAt: now(), archived: false,
   };
@@ -710,20 +744,27 @@ async function metricsFor(task) {
   const liveCollection = await liveCollectionMetrics(task);
   const native=await nativeTaskCounts(task.outputDir,task.id);
   for(const [key,count]of Object.entries(native.platformCounts))liveCollection.platformCounts[key]=Math.max(liveCollection.platformCounts[key]||0,count);
-  const nativePublic=['shixiseng','iguopin','mohrss','jobonline','job51','liepin'].reduce((n,key)=>n+(native.platformCounts[key]||0),0);
-  const publicRows = Math.max(Number(manifest?.total_rows || 0), liveCollection.publicRows,nativePublic);
-  const zhaopinRows = Math.max(native.platformCounts.zhaopin||0,await countCsvRows(path.join(task.outputDir, 'zhaopin_标准化数据.csv')));
-  const yupaoRows = Math.max(native.platformCounts.yupao||0,await countCsvRows(path.join(task.outputDir, 'yupao_标准化数据.csv')));
-  const bossRows = Math.max(native.platformCounts.boss||0,await countCsvRows(path.join(task.outputDir, 'boss_标准化数据.csv')));
+  const counts=collectionCounts({native,live:liveCollection,manifest,csv:{
+    zhaopin:await countCsvRows(path.join(task.outputDir,'zhaopin_标准化数据.csv')),
+    yupao:await countCsvRows(path.join(task.outputDir,'yupao_标准化数据.csv')),
+    boss:await countCsvRows(path.join(task.outputDir,'boss_标准化数据.csv')),
+  }});
+  const {publicRows,zhaopinRows,yupaoRows,bossRows}=counts;
+  Object.assign(liveCollection.platformCounts,counts.platformCounts);liveCollection.publicRows=publicRows;
   const unified=await fs.readFile(path.join(task.outputDir,'统一采集数据状态.json'),'utf8').then(JSON.parse).catch(()=>null);
   const knowledgeRows=Math.max(native.rows,unified?.task_id===task.id?Number(unified.rows||0):0);
   const finalRows = Number(quality?.output_rows || 0);
+  const verification=await channelVerification.taskStatus(task);
+  const channelDiagnostics=deriveChannelDiagnostics(task,manifest,{liveCollection});
+  for(const key of task.platforms||[])channelDiagnostics[key]=verificationDiagnostic(channelDiagnostics[key],verification[key]);
+  const channelHeartbeats=deriveChannelHeartbeats(task,{records:native.channelHeartbeats,diagnostics:channelDiagnostics,verification,runStartedAt:active.get(task.id)?.startedAt});
   return {
     publicRows, zhaopinRows, yupaoRows, bossRows, finalRows, knowledgeRows,liveCollection,
+    channelDiagnostics,channelHeartbeats,channelVerification:verification,
     validRows:Number.isSafeInteger(task.validRows)&&!['running','stopping'].includes(task.status)?task.validRows:null,
     hasFinalResult:Boolean(quality),finalResultMessage:quality?'本任务最终结果':'本任务尚未生成最终结果',
-    candidates: publicRows + zhaopinRows + yupaoRows + bossRows,
-    targetReached: !untilExhausted(task)&&((Number.isSafeInteger(task.validRows)?task.validRows>=task.targetRows:task.status==='completed'&&knowledgeRows>=task.targetRows)||Boolean(quality?.target_reached)),
+    candidates: counts.candidates,
+    targetReached: collectionTargetReached(task,{quality}),
     duplicatesRemoved: Number(quality?.duplicates_removed || 0),
     platformCounts: quality?.platform_counts || {},
   };
@@ -748,6 +789,7 @@ async function publicTask(task) {
     pace: task.pace, outputDir: task.outputDir, legacyOutputDir:task.legacyOutputDir||null,status: task.status, currentStage: task.currentStage,
     message: task.message, createdAt: task.createdAt, updatedAt: task.updatedAt,
     browserSession:null,
+    interviews:await readInterviewSnapshot(task),
     latestExport:await fs.readFile(path.join(task.outputDir,'最新导出状态.json'),'utf8').then(JSON.parse).catch(()=>null),
     collectionIssues:task.collectionIssues||[],collectionStopReason:task.collectionStopReason||null,
     collectionSchedule:await fs.readFile(path.join(task.outputDir,'采集调度状态.json'),'utf8').then(JSON.parse).then(state=>state.task_id===task.id?state:null).catch(()=>null),
@@ -791,6 +833,8 @@ const server = http.createServer(async (req, res) => {
   const pathname = decodeURIComponent(requestUrl.pathname);
   try {
     if (req.method === 'GET' && pathname === '/api/state') {
+      res.setHeader('x-job-interview-defaults','1');
+      res.setHeader('x-job-interview-count-target','2');
       const visible = tasks.filter((task) => !task.archived);
       return json(res, 200, { tasks: await Promise.all(visible.map(publicTask)), version: '1.17.0', capabilities: { insightSourceRole:true,multiRoleScreening:true,collectionTransportPolicy,hybridCollection:true,hybridTransportPolicy:collectionPolicyFor({transportMode:HYBRID_MODE}),adaptiveConditionQueue:true,conditionScopedStops:true,channelAcquisition,structuredDataCollection:true,structuredExecutionPlan:true,structuredTargetRounds:true,zhaopinCollection:true,mohrssHttpData:true,unifiedKnowledge:true,nativeCollection:true,optionalExports:true,automaticPartialDelivery:true,retiredChannels:[...retiredCollectionChannels],channelFailureIsolation:true,publicAllKeywords:true,bossCollection: false, job51Collection: true, jobonlineCollection: true, liepinCollection: true, publicChannelCheckpoints: true, nativeDatasets: true, platformLogin: false, aiLabeling: false, labelReview: false, labelPacing: false, resourceRouting: true, insightSelection: true, taskInsightTransfer: true, finalDatasetCatalog: true }, activeCount: new Set([...active.keys(),...pipelineRuns.runs.keys(),...startingStages]).size });
     }
@@ -801,12 +845,27 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && /^\/(?:platforms|labels)(?:\/|$)/.test(pathname)) {
       res.writeHead(302, { location: '/tasks', 'cache-control': 'no-store' });res.end();return;
     }
-    if (await browserWorkspace.handler(req,res,pathname)||await handleSemanticCloud(req,res,pathname)||await handleInsightClassifier(req,res,pathname)||await handleKnowledge(req,res,pathname)||await handleJobAssistant(req, res, pathname)) return;
+    if (await handlePersonalWiki(req,res,pathname)||await browserWorkspace.handler(req,res,pathname)||await handleSemanticCloud(req,res,pathname)||await handleInsightClassifier(req,res,pathname)||await handleInterviewClassifier(req,res,pathname)||await handleKnowledge(req,res,pathname)||await handleJobAssistant(req, res, pathname)) return;
     if (req.method === 'GET' && pathname === '/api/insights/datasets') {
       return json(res, 200, { root: knowledge.filename, catalog: 'knowledge-v1', datasets: await discoverInsightDatasets() });
     }
     if (req.method === 'GET' && pathname === '/api/insights') {
-      return json(res, 200, await publicInsight());
+      const report=await insightReportCache.load();
+      const state={...publicInsightState(),reportVersion:report?.version||null};
+      if(requestUrl.searchParams.get('summary')==='1')return json(res,200,state);
+      // Compatibility for read-only consumers; no repeat JSON parse/stringify.
+      res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      res.write(JSON.stringify(state).slice(0,-1)+',"report":');
+      res.write(report?.raw||'null');res.end('}');return;
+    }
+    if(req.method==='GET'&&pathname==='/api/insights/report'){
+      const report=await insightReportCache.load();
+      if(!report)return json(res,404,{error:'尚无岗位洞察报告'});
+      const etag='"'+report.version+'"';
+      if(req.headers['if-none-match']===etag){res.writeHead(304,{etag});res.end();return;}
+      const compressed=/\bgzip\b/.test(req.headers['accept-encoding']||'');
+      const data=compressed?report.gzip:report.raw;
+      res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-cache',etag,vary:'Accept-Encoding','content-length':data.length,...(compressed?{'content-encoding':'gzip'}:{})});res.end(data);return;
     }
     if (req.method === 'POST' && pathname === '/api/insights/run') {
       const body = await bodyJson(req);
@@ -827,6 +886,59 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { tasks: await Promise.all(tasks.filter(task => !task.archived).map(publicTask)), activeCount: new Set([...active.keys(),...pipelineRuns.runs.keys(),...startingStages]).size });
     }
     const taskResourceMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    const goalMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/goal$/);
+    if(goalMatch){
+      const requester=new URL('http://'+req.headers.host);
+      if(!['localhost','127.0.0.1'].includes(requester.hostname)||requester.port!==String(port)||req.headers['sec-fetch-site']==='cross-site'||req.headers.origin&&req.headers.origin!==requester.origin)return json(res,403,{error:'仅允许当前本机工作台修改采集目标'});
+      if(req.method!=='POST')return json(res,405,{error:'仅支持POST'});
+      if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))return json(res,415,{error:'请使用JSON操作'});
+      const item=taskById(tasks,goalMatch[1]);if(!item)return json(res,404,{error:'任务不存在'});
+      const busy=()=>active.has(item.id)||startingStages.has(item.id)||pipelineRuns.has(item.id)||latestExports.has(item.id)||['running','stopping'].includes(item.status);
+      if(busy())return json(res,409,{error:'请先暂停任务并等待导出结束再修改目标'});
+      const body=await bodyJson(req);
+      if(busy())return json(res,409,{error:'任务已开始，请停止后再修改'});
+      startingStages.add(item.id);
+      try{
+        await updateTaskCollectionGoal(item,body,{persistTask:async next=>{
+          await saveTasks(tasks.map(task=>task.id===item.id?next:task));
+          Object.assign(item,next);
+        }});
+        return json(res,200,{ok:true,task:await publicTask(item)});
+      }finally{startingStages.delete(item.id);}
+    }
+    const interviewMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/interviews$/);
+    if(interviewMatch){
+      const requester=new URL('http://'+req.headers.host);
+      if(!['localhost','127.0.0.1'].includes(requester.hostname)||req.headers['sec-fetch-site']==='cross-site'||req.headers.origin&&req.headers.origin!==requester.origin)return json(res,403,{error:'面经仅允许当前本机工作台访问'});
+      const item=taskById(tasks,interviewMatch[1]);if(!item)return json(res,404,{error:'任务不存在'});
+      if(req.method==='GET'){
+        const offset=Number(requestUrl.searchParams.get('offset')||0),limit=Number(requestUrl.searchParams.get('limit')||20);
+        if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>100)return json(res,400,{error:'分页参数无效'});
+        return json(res,200,await readInterviewSnapshot(item,{includePosts:true,offset,limit}));
+      }
+      if(req.method==='POST'){
+        if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))return json(res,415,{error:'请使用JSON操作'});
+        if(active.has(item.id)||startingStages.has(item.id)||pipelineRuns.has(item.id)||['running','stopping'].includes(item.status))return json(res,409,{error:'请在当前任务停止后修改面经配置'});
+        const body=await bodyJson(req);
+        if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>!['enabled','keywords','maxPages','maxPosts','maxRequests','halfLifeDays','retryBlocked'].includes(key)))return json(res,400,{error:'面经配置参数无效'});
+        const settings=interviewSettings({...item.interviews,...body,...(Object.hasOwn(body,'maxRequests')?{requestBudgetMode:'custom',collectionLimitVersion:2}:{}),roleKey:item.label},{keywords:item.keywords,roleKey:item.label});
+        if(active.has(item.id)||startingStages.has(item.id)||pipelineRuns.has(item.id)||['running','stopping'].includes(item.status))return json(res,409,{error:'任务已开始，请停止后再修改'});
+        startingStages.add(item.id);
+        try{
+          const config=JSON.parse(await fs.readFile(item.publicConfigPath,'utf8'));
+          if(config.task_id!==item.id)throw Error('配置任务归属不一致');
+          if(body.retryBlocked===true){
+            const file=interviewPaths(item.outputDir).checkpoint;
+            const checkpoint=await fs.readFile(file,'utf8').then(JSON.parse).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+            if(checkpoint){if(checkpoint.task_id!==item.id)throw Error('面经断点归属不一致');delete checkpoint.blocked;await writeJsonAtomic(file,checkpoint);}
+          }
+          await writeJsonAtomic(item.publicConfigPath,{...config,interviews:settings});
+          await setTask(item.id,{interviews:settings});
+          return json(res,200,{ok:true,message:'面经配置已保存；下次开始全部采集时与岗位渠道并发执行',settings});
+        }finally{startingStages.delete(item.id);}
+      }
+      return json(res,405,{error:'仅支持GET/POST'});
+    }
     const taskBackupMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/output-backup$/);
     if(taskBackupMatch){
       const item=taskById(tasks,taskBackupMatch[1]);if(!item)return json(res,404,{error:'任务不存在'});
@@ -851,6 +963,39 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && taskResourceMatch) {
       const item = taskById(tasks, taskResourceMatch[1]);
       return item && !item.archived ? json(res, 200, { task: await publicTask(item) }) : json(res, 404, { error: '采集任务不存在' });
+    }
+    if(req.method==='GET'&&pathname==='/api/channel-verification/capabilities')return json(res,200,{ordinaryBrowser:true,durableAcknowledgment:true,sessionRecheck:true,browserIds:['edge','chrome'],defaultBrowserId:'edge'});
+    const channelVerificationMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/channels\/(job51|liepin)\/verification\/(open|finish|close|recheck)$/);
+    if(req.method==='POST'&&channelVerificationMatch){
+      // Browsing is a local side effect: reject cross-origin/form submissions
+      // before reading task data or launching any process.
+      const origin=`http://${req.headers.host}`,local=new URL(origin);
+      if(!['127.0.0.1','localhost'].includes(local.hostname)||local.port!==String(port)||req.headers['sec-fetch-site']==='cross-site'||req.headers.origin&&req.headers.origin!==local.origin)return json(res,403,{error:'仅允许当前本机控制台打开验证窗口'});
+      if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))return json(res,415,{error:'请使用本机 JSON 操作'});
+      const [,id,platform,action]=channelVerificationMatch,task=taskById(tasks,id);
+      if(!task)return json(res,404,{error:'任务不存在'});
+      const verificationOptions=await bodyJson(req);
+      try{
+        if(action==='open'){
+          if(verificationOptions.mode==='collector'&&tasks.some(item=>item.platforms?.includes(platform)&&(active.has(item.id)||pipelineRuns.has(item.id)||startingStages.has(item.id)||['running','stopping'].includes(item.status))))return json(res,409,{error:'请先暂停使用该渠道的任务再打开采集会话'});
+          await assertTaskOutputOwnership(task);
+          const config=JSON.parse(await fs.readFile(task.publicConfigPath,'utf8'));
+          const manifest=JSON.parse(await fs.readFile(path.join(task.outputDir,'采集清单.json'),'utf8'));
+          return json(res,200,await channelVerification.open(task,platform,config,manifest,verificationOptions));
+        }
+        if(action==='finish'||action==='recheck'){
+          if(tasks.some(item=>item.platforms?.includes(platform)&&(active.has(item.id)||pipelineRuns.has(item.id)||startingStages.has(item.id)||['running','stopping'].includes(item.status))))return json(res,409,{error:'请先暂停使用该渠道的任务，避免核验与采集冲突'});
+          startingStages.add(id);
+          try{
+            if(action==='finish')return json(res,200,await channelVerification.finish(task,platform));
+            await assertTaskOutputOwnership(task);
+            const config=JSON.parse(await fs.readFile(task.publicConfigPath,'utf8'));
+            const manifest=JSON.parse(await fs.readFile(path.join(task.outputDir,'采集清单.json'),'utf8'));
+            return json(res,200,await channelVerification.recheck(task,platform,config,manifest));
+          }finally{startingStages.delete(id);}
+        }
+        return json(res,200,await channelVerification.close(task,platform));
+      }catch(error){return json(res,error.status||409,{error:error.status?error.message:'官网会话操作未完成，请检查本机会话或验证状态'});}
     }
     const actionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(run|pause|open|archive|confirm-verification|export-latest|refresh-latest)$/);
     if (req.method === 'POST' && actionMatch) {
@@ -884,6 +1029,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (action === 'run') {
         if (active.has(id) || pipelineRuns.has(id) || startingStages.has(id) || ['running', 'stopping'].includes(task.status)) throw new Error('该任务已有程序正在运行或正在检查启动条件');
+        channelVerification.assertAvailable(task);
         const { stage = 'all', resumeFrom = '' } = await bodyJson(req);
         if(stage==='all'||['public','zhaopin','yupao','boss'].includes(stage)){
           startingStages.add(id);
@@ -925,6 +1071,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (action === 'archive') {
         if (active.has(id)||pipelineRuns.has(id)||startingStages.has(id)) throw new Error('请先暂停任务');
+        if(Object.keys(channelVerification.status(id)).length)throw new Error('请先完成验证或关闭该任务的验证窗口');
         task.archived = true;
         await saveTasks(tasks);
         return json(res, 200, { ok: true, message: '任务已从控制台移除，输出文件未删除' });
@@ -946,7 +1093,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { content });
     }
     if (pathname.startsWith('/api/')) return json(res, 404, { error: '接口不存在' });
-    if (req.method === 'GET' && /^\/tasks(?:\/[^/]+)?\/?$|^\/(?:insights|browser)\/?$/.test(pathname)) return await serveStatic(req, res, '/');
+    if (req.method === 'GET' && /^\/tasks(?:\/[^/]+)?\/?$|^\/(?:insights|browser|profile)\/?$/.test(pathname)) return await serveStatic(req, res, '/');
     return await serveStatic(req, res, pathname);
   } catch (error) {
     console.error(error);
@@ -979,6 +1126,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     void insightSupervised.cancel();
     void semanticCloud.cancel();
+    void interviewSupervised.dispose();
     void browserWorkspace.dispose();
     for (const { child } of active.values()) child.kill('SIGTERM');
     if (activeInsight?.child) activeInsight.child.kill('SIGTERM');

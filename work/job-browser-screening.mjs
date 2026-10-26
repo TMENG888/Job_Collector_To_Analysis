@@ -21,8 +21,9 @@ export function createBrowserScreening({supervised}={}){
     async catalog(){return (await models()).map(({match,...meta})=>meta);},
     async screen(modelId,job){
       const model=(await models()).find(m=>m.id===modelId);
-      if(!model)throw Error('未找到已启用的岗位专用监督分类器；请先在岗位洞察训练并启用，不回退规则');
-      const result=model.match({'岗位名称':job.title,'岗位描述':job.description});
+      if(!model)throw Error('未找到已启用的岗位专用监督分类器；请重新生成搜索方案，不回退规则或语义参照');
+      const row={'岗位名称':job.title,'岗位描述':job.description};
+      const result=model.match(row);
       return {decision:result.decision,score:result.classifier_evidence?.score??null,threshold:model.threshold,modelId:model.id,role:model.role,version:model.version,method:result.method,reason:result.reasons?.[0]||'',metricsBasis:model.metricsBasis};
     }
   };

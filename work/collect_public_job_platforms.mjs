@@ -19,14 +19,29 @@ import {retainedChannelErrors,isConditionScopedStop,readCollectionRound,filterCo
 import {runChannels,loadShixiDetailCache,reuseShixiDetails} from './collection_concurrency.mjs';
 import {YieldWindow,yieldNote} from './collection_yield.mjs';
 import {assertTaskOutputOwnership} from './task_dataset_scope.mjs';
+import {collectNowcoderInterviews,taskInterviewSettings} from './nowcoder_interviews.mjs';
+import {collectNowcoderJobs,taskJobSettings,nowcoderJobPaths} from './nowcoder_jobs.mjs';
+import {collectMohrssCandidates} from './mohrss_related_search.mjs';
+import {withChannelHeartbeat} from './collector_channel_heartbeat.mjs';
+import {channelErrorDiagnostic} from './channel_collection_diagnostics.mjs';
+import {jsonRequestBody} from './json_request_body.mjs';
+import {nativeTaskCounts} from './collector_native_sink.mjs';
+import {zhaopinSessionCheckpointPath,validateZhaopinSessionCheckpoint} from './zhaopin_session_checkpoint.mjs';
 
 const configPath = path.resolve(process.argv[2] || 'work/job_collect_config.json');
 const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
 if(process.env.JOB_COLLECTOR_YIELD_RECOVERY==='1')config.lowYield={...config.lowYield,enabled:false};
-const outputDir = path.resolve(process.argv[3] || 'outputs/public-collection');
+const outputDir = path.resolve(process.argv[3] || 'C:/Users/YS-Insight/Desktop/多平台招聘数据采集_2026-09-24');
 const currentTaskId=config.task_id||process.env.JOB_COLLECTOR_TASK_ID||null;
 if(config.task_id&&process.env.JOB_COLLECTOR_TASK_ID&&config.task_id!==process.env.JOB_COLLECTOR_TASK_ID)throw Error('采集配置与进程任务 ID 不匹配');
 if(currentTaskId)process.env.JOB_COLLECTOR_TASK_ID=currentTaskId;
+if(currentTaskId&&(config.interviews?.roleKey||config.keywords?.length))config.interviews=taskInterviewSettings({interviews:config.interviews,keywords:config.keywords,label:config.interviews?.roleKey||config.keywords[0]});
+// 牛客岗位开关位于 config.platforms.nowcoder（公开渠道配置的通道键位），此前误读顶层 config.nowcoder，
+// 导致开关永远为假、通道静默跳过且不留任何痕迹。
+if(currentTaskId&&config.platforms?.nowcoder){
+  try{config.nowcoder=taskJobSettings({nowcoderJobs:config.platforms.nowcoder,keywords:config.keywords,label:config.interviews?.roleKey||config.keywords?.[0]});}
+  catch(error){console.error(`[牛客岗位] 配置不可用，本次跳过：${error.message}`);config.nowcoder={...config.platforms.nowcoder,enabled:false};}
+}
 if(currentTaskId)await assertTaskOutputOwnership({id:currentTaskId,outputDir});
 const requestedRound=readCollectionRound(currentTaskId);
 const rawDir = path.join(outputDir, '原始数据');
@@ -36,20 +51,40 @@ await fs.mkdir(checkpointDir, { recursive: true });
 
 const collectedAt = new Date().toISOString();
 const directHttpRequest=createPoliteHttpClient({stateDir:process.env.JOB_HTTP_RATE_DIR||path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../ui_data/http_rate_limits'),minimumIntervalMs:config.request?.minimumIntervalMs,jitterMs:config.request?.jitterMs,attempts:config.request?.attempts});
+// 智联会话接口单独限速：风控按短窗口请求量判定（实测约 30 次触发 isVerification）。
+// 最小间隔默认 8 秒；突发阈值默认 15 次即真实休息 15 分钟，靠断点续采补齐剩余页，
+// 而不是重放已采页面把风控额度烧光。
+const zhaopinRequest=createPoliteHttpClient({stateDir:process.env.JOB_HTTP_RATE_DIR||path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../ui_data/http_rate_limits'),minimumIntervalMs:Number(process.env.JOB_ZHAOPIN_INTERVAL_MS)||8000,jitterMs:2000,attempts:1,burstSize:Number(process.env.JOB_HTTP_BURST_SIZE)||15,burstRecoveryMs:Number(process.env.JOB_HTTP_BURST_RECOVERY_MS)||900000});
 const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const pendingOutputs = [];
 const shixiDetailCache=await loadShixiDetailCache(checkpointDir,config.task_id);
-const discoveredIds={shixiseng:new Set(),iguopin:new Set(),jobonline:new Set(),liepin:new Set()};
+const discoveredIds={shixiseng:new Set(),iguopin:new Set(),jobonline:new Set(),liepin:new Set(),nowcoder:new Set()};
 const deferredCombos=new Set();
 let jobonlineBudget=null;
 const comboKey=(platform,keyword,city)=>JSON.stringify([platform,keyword,city]);
+// 本轮实际尝试的平台：轮次文件里的平台集合，或 JOB_STRUCTURED_ROUND_ONLY 指定的平台。
+// 未尝试平台的历史 stopChannel 错误只登记为待人工处理，不继承为阻塞，避免单平台轮次被别的平台历史阻塞拖住退出码。
+const roundPlatforms=new Set([...(requestedRound?.combinations||[]).map(combo=>combo?.platform).filter(Boolean),...(process.env.JOB_STRUCTURED_ROUND_ONLY&&process.env.JOB_STRUCTURED_ROUND_ONLY!=='jobonline'?[process.env.JOB_STRUCTURED_ROUND_ONLY]:[])]);
+const roundCoversPlatform=platform=>roundPlatforms.size===0||roundPlatforms.has(platform);
+// 渠道级阻塞判定与 task_collection_config.retainedChannelErrors 保持同一口径：
+// 只有 stopChannel=true 且非条件级的错误才算「整渠道受阻」，用于退出码。
+// stopChannel 字段缺省视为 true（历史清单没有该字段），显式 false 才是条件级让位。
+const errorBlocksChannel=error=>Boolean(error)&&!error.resolved_at&&error.stopChannel!==false&&!error.conditionScoped&&!isConditionScopedStop(error);
+// 清单 total_rows 必须等于原生库真实去重行数：选择性轮次会按「本轮平台」跳过收尾合并，
+// 若沿用 allRows 长度就会比库少算本轮渠道（例如牛客 3164 条），下游会把清单口径当权威数字。
+async function deliveryTotalRows(fallbackRows,taskId){
+  if(process.env.JOB_COLLECTOR_NATIVE_STORE==='1'){
+    try{return (await nativeTaskCounts(outputDir,taskId)).rows;}catch(error){console.error(`[清单口径] 原生库计数失败，回退本轮去重计数：${error.message}`);}
+  }
+  return fallbackRows;
+}
 for(const name of await fs.readdir(checkpointDir)) {
   const platform=name.startsWith('shixiseng_')?'shixiseng':name.startsWith('iguopin_')?'iguopin':name.startsWith('jobonline_')?'jobonline':name.startsWith('liepin_')?'liepin':null;
   if(!platform || !name.endsWith('.json'))continue;
   const saved=JSON.parse(await fs.readFile(path.join(checkpointDir,name),'utf8'));
   if((saved.task_id??null)!==currentTaskId)continue;
-  for(const row of saved.list||saved.records||[]) {
+  for(const row of saved.list||saved.records||saved.rows||[]) {
     const id=platform==='shixiseng'?row.uuid:row.job_id;
     if(id!=null && String(id)!=='')discoveredIds[platform].add(String(id));
   }
@@ -217,10 +252,10 @@ async function collectIguopin(keyword, city) {
   const rowLimit=Math.max(1,Number(settings.maxRows)||Infinity);
   const endpoint = 'https://gp-api.iguopin.com/api/jobs/v1/recom-job';
   const firstBody = { search: { page: 1, page_size: 20, keyword }, recom: { update_time: true, company_nature: true, hot_job: true } };
-  const post = async (page) => parseIguopinPage(await checkedJsonResponse(await request(endpoint, {
-    method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://www.iguopin.com', referer: 'https://www.iguopin.com/' },
-    body: JSON.stringify({ ...firstBody, search: { ...firstBody.search, page } }),
-  }), '国聘'));
+  const post = async (page) => {
+    const encoded = jsonRequestBody({ ...firstBody, search: { ...firstBody.search, page } }, { origin: 'https://www.iguopin.com', referer: 'https://www.iguopin.com/' });
+    return parseIguopinPage(await checkedJsonResponse(await request(endpoint, { method: 'POST', headers: encoded.headers, body: encoded.body }), '国聘'));
+  };
   const checkpointPath=path.join(checkpointDir,`iguopin_${safeName(keyword)}_${safeName(city.name)}.json`);
   let saved=await readOwnedCheckpoint(checkpointPath);
   const first = saved.first||await post(1);
@@ -265,7 +300,7 @@ async function collectMohrss(keyword, city) {
   const settings=config.platforms.mohrss||{};
   const taskId=config.task_id||process.env.JOB_COLLECTOR_TASK_ID||null;
   const bound=value=>Number.isFinite(Number(value))&&Number(value)>0?Math.max(1,Math.floor(Number(value))):Infinity;
-  const pageLimit=bound(settings.maxPages),rowLimit=bound(settings.maxRows);
+  const rowLimit=bound(settings.maxRows);
   const checkpointPath=path.join(checkpointDir,`mohrss_${safeName(keyword)}_${safeName(city.name)}.json`);
   const rawPath=comboFile('中国公共招聘网',keyword,city.name);
   const searchUrl='http://job.mohrss.gov.cn/cjobs/jobinfolist/listJobinfolist';
@@ -279,16 +314,16 @@ async function collectMohrss(keyword, city) {
   if(!saved.records){
     // Older collectors saved one result page without a checkpoint. Reuse its
     // candidates, then request page 1 for authoritative pagination metadata.
-    try{const legacy=JSON.parse(await fs.readFile(rawPath,'utf8'));owned(legacy);if(Array.isArray(legacy.records))saved={records:legacy.records,migrated:true};}
+    try{const legacy=JSON.parse(await fs.readFile(rawPath,'utf8'));owned(legacy);if(Array.isArray(legacy.records))saved={task_id:taskId,keyword,city,records:legacy.records,migrated:true};}
     catch(error){if(error.code!=='ENOENT')throw error;}
   }
   if(saved.records&&(!Array.isArray(saved.records)||saved.records.some(row=>!row||typeof row!=='object'||row.acb200==null)))throw Object.assign(new Error('公共招聘网断点 records 结构异常'),{code:'api_schema_changed',stopChannel:true});
   if(saved.keyword!=null&&saved.keyword!==keyword||saved.city?.name&&saved.city.name!==city.name)throw Object.assign(new Error('公共招聘网断点查询条件不匹配'),{code:'TASK_OUTPUT_OWNERSHIP',stopChannel:true});
   if(saved.lastPage!=null&&(!Number.isSafeInteger(Number(saved.lastPage))||Number(saved.lastPage)<0))throw Object.assign(new Error('公共招聘网断点页码无效'),{code:'api_schema_changed',stopChannel:true});
   const records=new Map((saved.records||[]).filter(eligible).map(row=>[String(row.acb200),row]));
-  let lastPage=Number(saved.lastPage)||0,total=Number(saved.total)||0,totalPages=Number(saved.totalPages)||0,completed=Boolean(saved.completed),limitReason=null;
+  let total=Number(saved.total)||0;
   const normalize=()=>[...records.values()].slice(0,rowLimit).map((row) => ({
-    platform: '中国公共招聘网', query_keyword: keyword, query_city: city.name, job_id: String(row.acb200), job_name: row.aca112,
+    platform: '中国公共招聘网', query_keyword: row._mohrss_search_keyword||keyword, query_original_keyword:keyword, search_expansion:Boolean(row._mohrss_expanded), candidate_only:true, query_city: city.name, job_id: String(row.acb200), job_name: row.aca112,
     company_id: String(row.aab001 || ''), company_name: row.aab004, salary: row.acb241 || row.acb242 ? `${row.acb241 || ''}-${row.acb242 || ''} 元/月` : '',
     city: row.area_ || row.aab302, district: row.aab302, experience: row.acb240, education: row.acb239,
     employment_type: row.acb228, company_nature: row.aac024, company_size: '', industry: row.aca111_,
@@ -296,42 +331,23 @@ async function collectMohrss(keyword, city) {
     tags: [row.org_, row.isQualityJob && '优质岗位', row.isSkillJob && '技能岗位', row.isTechnologyJob && '技术岗位'].filter(Boolean).join(' | '),
     skills: row.keyWords, job_description: htmlToText(row.acb22a), address: row.acb202 || row.aae006,
     recruiter_name: row.aae004, recruiter_title: '', job_url: row.ace760 || new URL(`../jobinfolist/cb21/showgw?id=${row.acb200}`, searchUrl).href,
-    company_url: new URL(`../jobinfolist/cb21/showdw?id=${row.aab001}`, searchUrl).href, source_total: total,
+    company_url: new URL(`../jobinfolist/cb21/showdw?id=${row.aab001}`, searchUrl).href, source_total: row._mohrss_source_total??total,
     access_level: htmlToText(row.acb22a).length>=20?'公开服务端内嵌完整字段':'公开内嵌列表（描述不足）',detail_status:htmlToText(row.acb22a).length>=20?'成功':'列表字段不完整',acquisition_mode:'server_embedded_json', collected_at: collectedAt, contact_phone: row.aae005, source_agency: row.org_,
   }));
-  const save=()=>writeJsonAtomic(checkpointPath,{task_id:taskId,keyword,city,total,totalPages,lastPage,completed,records:[...records.values()],limit_reason:limitReason,migrated:Boolean(saved.migrated),acquisition_mode:'server_embedded_json'});
-  const saveRaw=()=>writeJsonAtomic(rawPath,{task_id:taskId,keyword,city,total,totalPages,lastPage,completed,records:[...records.values()].slice(0,rowLimit),acquisition_mode:'server_embedded_json'});
+  const persist=async snapshot=>{
+    await writeJsonAtomic(checkpointPath,snapshot);
+    await writeJsonAtomic(rawPath,{...snapshot,records:snapshot.records.slice(0,rowLimit)});
+  };
+  const applySnapshot=snapshot=>{if(!snapshot)return;records.clear();for(const row of snapshot.records)records.set(String(row.acb200),row);total=snapshot.total;};
   try{
-    // Metadata is intentionally recovered for a migrated one-page export even
-    // when it already reaches a requested row cap.
-    for(let page=lastPage+1;!completed&&page<=pageLimit&&(records.size<rowLimit||lastPage===0);page++){
-      const result=await fetchMohrssList({request,keyword,city,page,areaCode:settings.areaCode||city.areaCode||''});
-      total=result.total;totalPages=result.totalPages;
-      if(result.records.length===0&&total>0&&page<=totalPages)throw Object.assign(new Error('公共招聘网非空结果中出现空分页；保留断点停止'),{code:'api_schema_changed',stopChannel:true});
-      let pageTruncated=false;
-      for(const row of result.records){
-        if(!eligible(row))continue;
-        const id=String(row.acb200);
-        if(!records.has(id)&&records.size>=rowLimit){pageTruncated=true;break;}
-        records.set(id,row);
-      }
-      // A row limit cutting through a page must leave that page pending, so
-      // increasing the limit later cannot skip unprocessed records.
-      if(!pageTruncated)lastPage=page;
-      completed=!pageTruncated&&(totalPages===0||lastPage>=totalPages);
-      limitReason=pageTruncated||records.size>=rowLimit&&!completed?'max_rows':page>=pageLimit&&!completed?'max_pages':null;
-      await save();
-      console.log(`mohrss ${keyword}/${city.name}: ${records.size}/${total}, page ${page}/${totalPages}`);
-      if(pageTruncated||records.size>=rowLimit)break;
-    }
-    if(!completed&&!limitReason)limitReason=records.size>=rowLimit?'max_rows':lastPage>=pageLimit?'max_pages':null;
-    await save();await saveRaw();
+    applySnapshot(await collectMohrssCandidates({keyword,city,settings,taskId,saved,persist,fetchPage:args=>fetchMohrssList({request,...args}),onEvent:event=>{
+      if(event.type==='related_search')console.log(`[空结果补充检索] mohrss ${event.originalKeyword}/${event.city} → ${event.keyword}；仅新增待分类候选，城市与分页总预算不变`);
+      else console.log(`mohrss ${event.keyword}/${event.city}: ${event.records}/${event.total}, page ${event.page}/${event.totalPages}`);
+    }}));
     return normalize();
   }catch(error){
+    applySnapshot(error.partialMohrssSnapshot);
     error.partialRows=normalize();
-    // A failed page is never advanced. Atomic checkpoints already contain
-    // every successful page and remain available when output writing fails.
-    try{await save();await saveRaw();}catch(saveError){error.checkpointError=String(saveError.message||saveError);}
     throw error;
   }
 }
@@ -360,21 +376,41 @@ async function collectZhaopin(keyword, city) {
   // 会话直连：使用本机登录助手保存的本人登录 cookie，深翻页到 count 上限。
   // 匿名公开渠道仍每条件约100条/3页；登录后实测单条件可达约1000条/50页。
   const {loadZhaopinSession, collectZhaopinSession}=await import('./direct_zhaopin_session.mjs');
-  const session=await loadZhaopinSession();
-  if(!session)throw Object.assign(new Error('智联缺少本人登录会话；请先运行 zhaopin_login_helper.mjs 登录后保存 cookie'),{code:'session_required',stopChannel:true});
   const settings=config.platforms.zhaopin||{};
   const pageLimit=Math.max(1,Number(settings.maxPages)||100);
   const rowLimit=Math.max(1,Number(settings.maxRows)||Infinity);
-  const checkpointPath=path.join(checkpointDir,`zhaopin_session_${safeName(keyword)}_${safeName(city.name)}.json`);
+  const checkpointPath=zhaopinSessionCheckpointPath(outputDir,keyword,city);
   const saved=await readOwnedCheckpoint(checkpointPath);
-  const known=new Set((saved.rows||[]).map(row=>String(row.job_id)));
+  if(Object.keys(saved).length)validateZhaopinSessionCheckpoint(saved,{taskId:currentTaskId,keyword,city});
+  const savedRows=Array.isArray(saved.rows)?saved.rows:[];
+  const known=new Set(savedRows.map(row=>String(row.job_id)));
+  // 断点续采：已完成的条件直接复用断点，不再重放分页（重放会重复消耗风控额度且拿不到新增）。
+  const resumePage=Math.max(1,Number(saved.nextPage)||1);
+  if(saved.completed===true||known.size>=rowLimit||resumePage>pageLimit){
+    console.log(`zhaopin(session) ${keyword}/${city.name}: ${saved.completed?'断点已完成':'已达本轮分页或行数保护'}，复用 ${savedRows.length}/${saved.total||'-'} 条，不重放分页`);
+    await writeJsonAtomic(comboFile('智联招聘',keyword,city.name),{task_id:config.task_id,keyword,city,total:saved.total||savedRows.length,records:savedRows});
+    return savedRows.slice(0,rowLimit);
+  }
+  const session=await loadZhaopinSession({request:zhaopinRequest});
+  if(!session)throw Object.assign(new Error('智联缺少本人登录会话；请先运行 zhaopin_login_helper.mjs 登录后保存 cookie'),{code:'session_required',stopChannel:true});
   const result=await collectZhaopinSession(keyword, city, {
-    request, session, maxPages:pageLimit, maxRows:rowLimit,
-    onPage:p=>{if(p.page%10===0||p.page<=2)console.log(`zhaopin(session) ${keyword}/${city.name}: p${p.page} +${p.added} 累计${p.unique}/${p.total}`);},
+    request: zhaopinRequest, session, maxPages:pageLimit, maxRows:rowLimit,
+    startPage:resumePage, seenIds:[...known],
+    onPage:p=>{if(p.page%10===0||p.page<=resumePage+1)console.log(`zhaopin(session) ${keyword}/${city.name}: p${p.page} +${p.added} 累计${p.unique}/${p.total}`);},
+    onProgress:async p=>{
+      for(const row of p.rows){const id=String(row.job_id);if(!known.has(id)){known.add(id);savedRows.push(row);}}
+      await writeJsonAtomic(checkpointPath,{task_id:config.task_id,keyword,city,total:p.total,rows:savedRows,completed:false,nextPage:p.nextPage,acquisition_mode:'session_json_api'});
+      await writeJsonAtomic(comboFile('智联招聘',keyword,city.name),{task_id:config.task_id,keyword,city,total:p.total,records:savedRows});
+    },
+  }).catch(error=>{
+    // 让位（风控校验 / 来源冷却）会中断本条件，但 onProgress 已把前几页逐页写进断点。
+    // 这些行必须随错误一起带出去进本轮汇总，否则「断点有、库内无」，只能等下次运行才补上。
+    Object.assign(error,{partialRows:savedRows.slice(0,rowLimit||savedRows.length)});
+    throw error;
   });
-  const merged=[...(saved.rows||[])];
+  const merged=[...savedRows];
   for(const row of result.rows){const id=String(row.job_id);if(!known.has(id)){known.add(id);merged.push(row);}}
-  await writeJsonAtomic(checkpointPath,{task_id:config.task_id,keyword,city,total:result.total,rows:merged,completed:result.endReached,acquisition_mode:'session_json_api'});
+  await writeJsonAtomic(checkpointPath,{task_id:config.task_id,keyword,city,total:result.total,rows:merged,completed:result.endReached,nextPage:result.nextPage,pageLimitReached:result.pageLimitReached,acquisition_mode:'session_json_api'});
   await writeJsonAtomic(comboFile('智联招聘',keyword,city.name),{task_id:config.task_id,keyword,city,total:result.total,records:merged});
   return merged.slice(0,rowLimit);
 }
@@ -419,64 +455,82 @@ async function collectJobonlineHttp(keyword, city) {
   // 就业在线公开搜索接口（SM 加密请求，明文响应）。无服务端分页；按 关键词×城市 扩量。
   const { fetchJobonlinePage, normalizeJobonline } = await import('./direct_jobonline_adapter.mjs');
   const settings = config.platforms.jobonline || {};
-  const checkpointPath = path.join(checkpointDir, `jobonline_http_${safeName(keyword)}_${safeName(city.name)}.json`);
-  const saved = await readOwnedCheckpoint(checkpointPath);
-  const known = new Map((saved.rows || []).map(r => [String(r.job_id), r]));
+  const checkpointPath = path.join(checkpointDir, `jobonline_${safeName(keyword)}_${safeName(city.name)}.json`);
+  let saved = await readOwnedCheckpoint(checkpointPath);
+  if(!Object.keys(saved).length)saved=await readOwnedCheckpoint(path.join(checkpointDir,`jobonline_http_${safeName(keyword)}_${safeName(city.name)}.json`));
+  if(saved.keyword&&saved.keyword!==keyword||saved.city?.name&&saved.city.name!==city.name)throw Object.assign(Error('就业在线断点查询条件不匹配'),{code:'TASK_OUTPUT_OWNERSHIP',stopChannel:true});
+  const retained=saved.records??saved.rows??[];
+  if(!Array.isArray(retained)||retained.some(row=>!row.job_id||row.platform!=='就业在线'||row.task_id&&row.task_id!==currentTaskId))throw Object.assign(Error('就业在线断点记录归属不匹配'),{code:'TASK_OUTPUT_OWNERSHIP',stopChannel:true});
+  const known = new Map(retained.map(r => [String(r.job_id), r]));
+  const rowLimit=Math.max(1,Number(settings.maxRows)||Infinity);
+  if(saved.completed&&saved.direct_search_verified||known.size>=rowLimit)return [...known.values()].slice(0,rowLimit);
   // 会话相较完整：每次请求都新密钥；直接请求当前条件。
   const cityCode = /^\d{6}$/.test(String(city.code || '')) ? city : { ...city, code: '' };
-  const { list } = await fetchJobonlinePage(request, keyword, cityCode);
+  let list;try{({list}=await fetchJobonlinePage(request,keyword,cityCode));}catch(error){error.partialRows=[...known.values()];throw error;}
   const collectedAt = new Date().toISOString();
   for (const raw of list) {
     try { const row = normalizeJobonline(raw, keyword, city.name, collectedAt); if (!known.has(row.job_id)) known.set(row.job_id, row); }
     catch (error) { if (error.stopChannel) throw error; }
   }
-  const rows = [...known.values()].slice(0, Math.max(1, Number(settings.maxRows) || Infinity));
-  await writeJsonAtomic(checkpointPath, { task_id: config.task_id, keyword, city, rows, acquisition_mode: 'public_json_api', collected_at: collectedAt });
+  const rows = [...known.values()].slice(0,rowLimit);
+  // This public endpoint exposes a single search window, not paginated totals.
+  // Complete this condition only; do not claim the entire site's jobs exhausted.
+  const windowComplete=known.size<=rowLimit;
+  await writeJsonAtomic(checkpointPath, { task_id: currentTaskId, keyword, city, records:rows, completed:windowComplete,direct_search_verified:true,completion_reason:windowComplete?'public_search_window_end':'row_limit',acquisition_mode: 'public_json_api', collected_at: collectedAt });
   await writeJsonAtomic(comboFile('就业在线', keyword, city.name), { task_id: config.task_id, keyword, city, records: rows });
   console.log(`jobonline ${keyword}/${city.name}: ${rows.length}条`);
   return rows;
 }
 
 async function collectLiepinLimited(keyword,city) {
-  // 猎聘 HTTP 直连：本人过 IP 验证后的会话 cookie（与 51job 会话方案不同，这里为纯 HTTP）。
-  const {loadLiepinSession,fetchLiepinPage,normalizeLiepinCard}=await import('./direct_liepin_adapter.mjs');
-  const session=await loadLiepinSession();
-  if(!session)throw Object.assign(new Error('猎聘缺少本人会话；请先运行 liepin_captcha_helper.mjs 完成 IP 验证'),{code:'session_required',stopChannel:true});
+  const {collectLiepinWebsite}=await import('./liepin_website_session.mjs');
   const settings=config.platforms.liepin||{};
-  const pageLimit=Math.max(1,Number(settings.maxPages)||100);
+  const pageLimit=Math.max(1,Math.min(100,Math.floor(Number(settings.maxPages)||100)));
   const rowLimit=Math.max(1,Number(settings.maxRows)||Infinity);
   const checkpointPath=path.join(checkpointDir,`liepin_${safeName(keyword)}_${safeName(city.name)}.json`);
-  const saved=await readOwnedCheckpoint(checkpointPath);
-  const known=new Map((saved.rows||[]).map(r=>[String(r.job_id),r]));
-  let lastPage=Number(saved.lastPage||0);
-  const pageSize=40;
-  const collectedAt=new Date().toISOString();
-  for(let p=lastPage;known.size<rowLimit&&p<pageLimit;p++){
-    const result=await fetchLiepinPage(request,keyword,city.code,p,session,pageSize);
-    const cards=result.list;
-    for(const card of cards){try{const row=normalizeLiepinCard(card,keyword,city.name,collectedAt);if(!known.has(row.job_id))known.set(row.job_id,row);}catch(error){if(error.stopChannel)throw error;}}
-    lastPage=p+1;
-    await writeJsonAtomic(checkpointPath,{task_id:config.task_id,keyword,city,rows:[...known.values()],lastPage,completed:cards.length<pageSize,acquisition_mode:'session_json_api'});
-    console.log(`liepin ${keyword}/${city.name}: 第${p+1}页 +${cards.length} 累计${known.size}`);
-    if(cards.length<pageSize)break;
-  }
-  const rows=[...known.values()].slice(0,rowLimit);
+  const rows=await collectLiepinWebsite(keyword,city,{checkpointPath,taskId:currentTaskId,maxPages:pageLimit,maxRows:rowLimit,
+    profileDir:settings.browserProfileDir||undefined,minimumIntervalMs:config.request?.minimumIntervalMs,
+    onPage:()=>console.log('[官网会话流程] liepin 搜索响应已核验，断点已保存（仅列表字段）')});
   await writeJsonAtomic(comboFile('猎聘',keyword,city.name),{task_id:config.task_id,keyword,city,records:rows});
   return rows;
 }
 
 const collectors = { shixiseng: collectShixiseng, zhaopin: collectZhaopin, job51: collect51job, jobonline: collectJobonlineHttp, iguopin: collectIguopin, mohrss: collectMohrss, liepin:collectLiepinLimited };
 const allRows = [];
-const manifest = { task_id:config.task_id||process.env.JOB_COLLECTOR_TASK_ID||null,collected_at: collectedAt, config, platforms: {}, note: '无浏览器 HTTP 取数：JSON 接口及已核验公共招聘网页面内嵌数据；不执行页面脚本、不自动回退。未核验直连的渠道暂停，历史数据和断点保留；同站共享限速，访问受限即停。' };
+const manifest = { task_id:config.task_id||process.env.JOB_COLLECTOR_TASK_ID||null,collected_at: collectedAt, config, platforms: {}, note: 'HTTP 核验数据为主；猎聘为显式授权的官网页面会话搜索响应，不做 Node 会话重放或失败后浏览器回退。同站共享限速，验证或访问受限即停。' };
 const previousManifest = await fs.readFile(path.join(outputDir,'采集清单.json'),'utf8').then(JSON.parse).catch(()=>null);
 if(previousManifest&&previousManifest.task_id!==currentTaskId)throw Error('采集清单任务 ID 不匹配');
 if(requestedRound||process.env.JOB_STRUCTURED_ROUND_ONLY==='jobonline')manifest.platforms={...previousManifest?.platforms};
+// 牛客岗位不受本轮坐标轴限制，重跑时必须延续上一轮的渠道记录，否则会在清单里被抹掉。
+if(previousManifest?.platforms?.nowcoder)manifest.platforms.nowcoder={...previousManifest.platforms.nowcoder};
 let resourcePaused=false,outputPaused=false;
+const interviewRun=config.interviews?.enabled&&!requestedRound&&process.env.JOB_COLLECTOR_YIELD_RECOVERY!=='1'
+  ?collectNowcoderInterviews({taskId:currentTaskId,outputDir,settings:config.interviews,onEvent:message=>console.log(message),shouldStop:()=>resourcePaused||outputPaused}).catch(error=>{
+    if(error.code==='RESOURCE_PRESSURE')resourcePaused=true;
+    else if(collectionExitCode(error)===42)outputPaused=true;
+    console.error(`[面经流程] 独立通道异常：${error.message}`);
+    return {status:'blocked',reason:error.message};
+  }):Promise.resolve(null);
+// 牛客岗位与面经同源同锁，作为独立通道与岗位渠道并行；它不使用 keyword/city 条件轴，
+// 因此不进 collectors 组合循环，收尾时按「一渠道一文件」并入汇总。
+// 牛客岗位不占用坐标轴轮次，也不依赖其它渠道锁；回收轮次同样续跑（断点内已完成的组合为 0 请求）。
+// 无论开关真假都要留一行启动痕迹：此前关掉时整段静默，日志只剩启动/退出两行，
+// 「通道没坏但永远不跑」全靠翻配置才看得出来。
+if(config.platforms?.nowcoder)console.log(`[牛客岗位] 通道${config.nowcoder?.enabled?'开启':'关闭'}：分类 ${config.nowcoder?.careerJobIds?.length||0} × 类型 ${config.nowcoder?.recruitTypes?.length||0} ＋ 关键词 ${config.nowcoder?.keywords?.length||0} ＋ 城市 ${config.nowcoder?.cities?.length||0}；预算 ${config.nowcoder?.maxRequests??0}（${config.nowcoder?.requestBudgetMode||'custom'}）${config.nowcoder?.enabled?'':'；如需采集请在任务公开渠道配置里开启'}`);
+const nowcoderJobRun=config.nowcoder?.enabled
+  ?collectNowcoderJobs({taskId:currentTaskId,outputDir,settings:config.nowcoder,onEvent:message=>console.log(message),shouldStop:()=>resourcePaused||outputPaused}).catch(error=>{
+    if(error.code==='RESOURCE_PRESSURE')resourcePaused=true;
+    else if(collectionExitCode(error)===42)outputPaused=true;
+    console.error(`[牛客岗位] 独立通道异常：${error.message}`);
+    return {status:'blocked',reason:error.message,errorCode:channelErrorDiagnostic([error]).code};
+  }):Promise.resolve(null);
 
 const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,Number(config.request?.platformConcurrency)||2)),async platform=>{
   const settings = config.platforms[platform];
   if(requestedRound&&!requestedRound.combinations.some(combo=>combo.platform===platform))return;
   if(process.env.JOB_STRUCTURED_ROUND_ONLY==='jobonline'&&platform!=='jobonline')return;
+  if(!settings?.enabled)return;
+  return withChannelHeartbeat({outputDir,taskId:currentTaskId,platform,summary:()=>({...manifest.platforms[platform],paused:resourcePaused||outputPaused})},async()=>{
   if(!collectionChannelAvailable(platform)){
     if(!settings?.enabled)return;
     manifest.platforms[platform]={...previousManifest?.platforms?.[platform],rows:previousManifest?.platforms?.[platform]?.rows||0,errors:previousManifest?.platforms?.[platform]?.errors||[],transport_paused:true,pause_reason:collectionChannelPauseReason(platform),retained_history:true};
@@ -500,6 +554,12 @@ const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,N
   }catch(error){if(error.code!=='ENOENT')throw error;}
   if(['jobonline','liepin'].includes(platform))for(const row of rows)if(row.job_id)discoveredIds[platform].add(String(row.job_id));
   if(platform==='jobonline'){
+    const {checkJobonlineDependencies}=await import('./direct_jobonline_adapter.mjs');
+    const preflight=checkJobonlineDependencies();
+    if(!preflight.ok){
+      manifest.platforms[platform]={rows:rows.length,errors:[{keyword:null,city:null,code:preflight.code,error:preflight.message,stopChannel:true}],acquisition:channelAcquisition[platform]||null};
+      console.error(`[渠道预检] jobonline ${preflight.message}`);allRows.push(...rows);return;
+    }
     const targetRemaining=settings.totalMaxRows&&config.taskTargetRows?Math.max(0,Number(config.taskTargetRows)-await otherChannelValidCount(outputDir,'',currentTaskId)):Infinity;
     jobonlineBudget=jobonlineRoundBudget(settings,discoveredIds.jobonline.size,{targetRemaining});
     if(process.env.JOB_JOBONLINE_ROUND_BUDGET){
@@ -516,7 +576,10 @@ const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,N
   const selectedKeys=new Set(combinations.map(combo=>comboKey(platform,combo.keyword,combo.city.name)));
   // Selective rounds must retain another condition's failure without treating
   // it as a platform-wide login failure or forgetting it on the next round.
-  const errors=[...blockingErrors,...(requestedRound?(previousManifest?.platforms?.[platform]?.errors||[]).filter(error=>!blockingErrors.includes(error)&&!selectedKeys.has(comboKey(platform,error.keyword,error.city?.name))):[])];
+  // 渠道级阻塞（无关键词/城市、stopChannel=true）在选择性轮次里不参与判定，因此不得跨轮继承：
+  // 否则上一轮写下的整渠道阻塞会永久留在清单里，每轮都以「上轮渠道受阻」开始，退出码长期停在 44。
+  const inheritedErrors=requestedRound&&roundCoversPlatform(platform)?(previousManifest?.platforms?.[platform]?.errors||[]).filter(error=>!blockingErrors.includes(error)&&!selectedKeys.has(comboKey(platform,error.keyword,error.city?.name))&&!(error.stopChannel===true&&!error.conditionScoped&&!error.keyword)):[];
+  const errors=[...blockingErrors,...inheritedErrors];
   const previousRemaining=previousManifest?.task_id===manifest.task_id ? previousManifest.platforms?.[platform]?.scheduling?.remaining||[] : [];
   const priority=new Set(previousRemaining.map(row=>comboKey(platform,row.keyword,row.city.name)));
   combinations.sort((a,b)=>Number(priority.has(comboKey(platform,b.keyword,b.city.name)))-Number(priority.has(comboKey(platform,a.keyword,a.city.name))));
@@ -539,8 +602,14 @@ const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,N
         if(error.code==='RESOURCE_PRESSURE')resourcePaused=true;
         else if(collectionExitCode(error)===42)outputPaused=true;
         const stopChannel=Boolean(error.stopChannel)&&!isConditionScopedStop(error);
-        errors.push({ keyword, city, error: String(error.stack || error.message || error), code:error.code||'collection_error', stopChannel });
+        const conditionScoped=stopChannel?false:Boolean(error.conditionScoped)||isConditionScopedStop(error);
+        errors.push({ keyword, city, error: String(error.stack || error.message || error), code:error.code||'collection_error', stopChannel, ...(conditionScoped?{conditionScoped:true}:{}) });
         console.error(`${platform} failed ${keyword}/${city.name}: ${error.message || error}`);
+        if(error.code==='origin_cooldown'||error.conditionScoped&&error.code==='verification_required'){
+          scheduling={reason:'origin_cooldown',remaining:combinations.slice(comboIndex+1),at:new Date().toISOString()};
+          console.log(`[来源等待] ${platform} 已进入共享冷却，保留本条件与剩余条件，不逐个撞冷却闸门；稍后可人工续采`);
+          break channel;
+        }
         if(isConditionScopedStop(error))console.log(`[条件让位] ${platform} ${keyword}/${city.name} 分页停滞；保留该断点，继续其他关键词和城市，不自动重试当前条件`);
         if(stopChannel||outputPaused) { console.error(`${platform} 已停止后续城市请求，已采集数据保留在断点；人工处理后可续采`); break channel; }
       }
@@ -560,7 +629,23 @@ const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,N
   await writeCsv(path.join(outputDir, `${platform}_标准化数据.csv`), deduped);
   console.log(`${platform} complete: ${deduped.length}`);
   if(pendingOutputs.length)outputPaused=true;
+  });
 },()=>resourcePaused||outputPaused);
+const interviewOutcome=await interviewRun;
+if(interviewOutcome?.status==='blocked')console.log('[面经流程] 牛客通道已停止；不阻断其他岗位渠道，详情见面经进度');
+const nowcoderJobOutcome=await nowcoderJobRun;
+if(config.nowcoder?.enabled){
+  const paths=nowcoderJobPaths(outputDir);
+  let retained=[];
+  try{retained=JSON.parse((await fs.readFile(paths.records,'utf8')).replace(/^\ufeff/,''));}
+  catch(error){if(error.code!=='ENOENT')console.error(`[牛客岗位] 明细读取失败，保留原文件：${error.message}`);}
+  allRows.push(...retained);
+  for(const row of retained)if(row.source_id)discoveredIds.nowcoder.add(String(row.source_id));
+  // 只有终局失败才写渠道级阻塞：连通性/条件级/预算暂停（terminal=false）不能跨轮继承成渠道受阻。
+  const nowcoderTerminal=nowcoderJobOutcome?.status==='blocked'&&(nowcoderJobOutcome.terminal??!nowcoderJobOutcome.recoverable);
+  manifest.platforms.nowcoder={rows:retained.length,errors:nowcoderTerminal?[{keyword:null,city:null,error:nowcoderJobOutcome.reason,code:nowcoderJobOutcome.errorCode||'collection_error',stopChannel:true}]:[],acquisition:channelAcquisition.nowcoder||null,status:nowcoderJobOutcome?.status||'skipped',phase:nowcoderJobOutcome?.phase||null,records_file:path.relative(outputDir,paths.records).replace(/\\/g,'/')};
+  if(nowcoderTerminal)console.log('[牛客岗位] 通道已停止；不阻断其他岗位渠道，详情见牛客岗位数据/status.json');
+}
 for(const outcome of outcomes)if(outcome.error){
   const error=outcome.error;
   if(error.code==='RESOURCE_PRESSURE')resourcePaused=true;
@@ -569,10 +654,13 @@ for(const outcome of outcomes)if(outcome.error){
   console.error(`${outcome.item} 独立渠道异常，其他平台继续：${error.message}`);
 }
 
-if(resourcePaused||outputPaused){
+// 资源/输出暂停也必须落盘本轮已完成的成果（例如牛客岗位整通道、已完成渠道的增量），
+// 否则暂停分支会把 manifest 里的新记录连同渠道文件一起丢掉：只在最后改写退出码。
+const pausedThisRun=resourcePaused||outputPaused;
+if(pausedThisRun){
   await writeJsonAtomic(path.join(outputDir,'采集资源暂停状态.json'),{task_id:config.task_id,paused:true,at:new Date().toISOString(),platforms:manifest.platforms,pending_outputs:pendingOutputs,note:'资源或输出异常；原汇总与未处理渠道文件保持不变，处理后续采'});
-  process.exitCode=resourcePaused?43:42;
-}else{
+}
+{
 // A selective round must not discard other channels from the aggregate export.
 if(requestedRound||process.env.JOB_STRUCTURED_ROUND_ONLY==='jobonline')for(const platform of Object.keys(manifest.platforms)){
   if(requestedRound?requestedRound.combinations.some(combo=>combo.platform===platform):platform==='jobonline')continue;
@@ -585,18 +673,20 @@ if(requestedRound||process.env.JOB_STRUCTURED_ROUND_ONLY==='jobonline')for(const
   }
 }
 const allDeduped = [...new Map(allRows.map((row) => [`${row.platform}:${row.job_id}`, row])).values()];
-await writeJsonAtomic(path.join(outputDir, '采集清单.json'), { ...manifest, total_rows: allDeduped.length });
+const totalRows = await deliveryTotalRows(allDeduped.length, config.task_id || currentTaskId);
+await writeJsonAtomic(path.join(outputDir, '采集清单.json'), { ...manifest, total_rows: totalRows });
 await fs.copyFile(configPath, path.join(outputDir, '采集配置.json'));
 await writeCsv(path.join(outputDir, '多平台岗位标准化汇总.csv'), allDeduped);
-if(pendingOutputs.length)await writeJsonAtomic(path.join(outputDir,'采集清单.json'),{...manifest,total_rows:allDeduped.length,pending_outputs:pendingOutputs});
-console.log(JSON.stringify({ outputDir, total: allDeduped.length, platforms: manifest.platforms }));
-if(pendingOutputs.length)process.exitCode=42;
-else if(Object.values(manifest.platforms).some(p=>p.errors.length||p.transport_paused))process.exitCode=CHANNEL_PARTIAL;
+if(pendingOutputs.length)await writeJsonAtomic(path.join(outputDir,'采集清单.json'),{...manifest,total_rows:totalRows,pending_outputs:pendingOutputs});
+console.log(JSON.stringify({ outputDir, total: totalRows, exported: allDeduped.length, platforms: manifest.platforms }));
+if(pausedThisRun)process.exitCode=resourcePaused?43:42;
+else if(pendingOutputs.length)process.exitCode=42;
+else if(Object.values(manifest.platforms).some(p=>(p.errors||[]).some(errorBlocksChannel)||p.transport_paused))process.exitCode=CHANNEL_PARTIAL;
 // Exploration may temporarily defer a promising tail. Do not silently drop it:
 // revisit once, after other channels/conditions have had a chance to run.
-if(deferredCombos.size && !pendingOutputs.length && process.env.JOB_COLLECTOR_YIELD_RECOVERY!=='1') {
+if(!pausedThisRun && deferredCombos.size && !pendingOutputs.length && process.env.JOB_COLLECTOR_YIELD_RECOVERY!=='1') {
   console.log('[低收益补采] 首轮探索结束，自动恢复暂缓断点；本轮不再因重复率提前截断列表，已成功详情继续复用');
-  const recovery=spawn(process.execPath,[fileURLToPath(import.meta.url),configPath,outputDir],{env:{...process.env,JOB_COLLECTOR_YIELD_RECOVERY:'1',JOB_COLLECTOR_BLOCKED_POLICY:'skip',...(jobonlineBudget?{JOB_JOBONLINE_ROUND_BUDGET:JSON.stringify({...jobonlineBudget,task_id:currentTaskId})}:{})},windowsHide:true,stdio:'inherit'});
+  const recovery=spawn(process.execPath,[fileURLToPath(import.meta.url),configPath,outputDir],{env:{...process.env,JOB_COLLECTOR_YIELD_RECOVERY:'1',JOB_COLLECTOR_BLOCKED_POLICY:process.env.JOB_COLLECTOR_BLOCKED_POLICY||'retry',...(jobonlineBudget?{JOB_JOBONLINE_ROUND_BUDGET:JSON.stringify({...jobonlineBudget,task_id:currentTaskId})}:{})},windowsHide:true,stdio:'inherit'});
   const code=await new Promise((resolve,reject)=>{recovery.once('error',reject);recovery.once('close',value=>resolve(value??44));});
   process.exitCode=code;
 }

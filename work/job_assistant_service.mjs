@@ -10,10 +10,14 @@ import {assistantSessionDirectory} from './job_assistant_storage.mjs';
 import {createCollectionControl} from './job_assistant_collection.mjs';
 import {zhaopinCities} from './collection_cities.mjs';
 import {knowledgeDatabasePath} from './knowledge_storage.mjs';
+import {createInterviewKnowledgeStore} from './job_assistant_interviews.mjs';
+import {createInterviewSupervised} from './interview-supervised.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const port=Number(process.env.JOB_ASSISTANT_PORT||8791);
 const dataDir=process.env.JOB_UI_DATA_DIR?path.resolve(process.env.JOB_UI_DATA_DIR):path.join(root,'ui_data');
-const handle=createAssistantHandler(createKnowledgeAssistantStore(dataDir,{readOnly:true}),createAssistantCredentialStore(path.join(dataDir,'assistant_private','model.json')),{repository:createAssistantSessionStore(await assistantSessionDirectory(dataDir)),collectionControl:createCollectionControl({baseUrl:`http://127.0.0.1:${Number(process.env.JOB_UI_PORT||8788)}`,storageDir:dataDir,dataDiskDir:path.dirname(knowledgeDatabasePath(dataDir)),getCities:()=>Object.keys(zhaopinCities)})});
+const interviewKnowledge=createInterviewKnowledgeStore(dataDir,{enrich:(posts,roles)=>interviewSupervised.enrich(posts,roles)});
+const interviewSupervised=createInterviewSupervised(dataDir,{readPosts:scope=>interviewKnowledge.trainingCorpus(scope)});
+const handle=createAssistantHandler(createKnowledgeAssistantStore(dataDir,{readOnly:true}),createAssistantCredentialStore(path.join(dataDir,'assistant_private','model.json')),{interviewStore:interviewKnowledge,repository:createAssistantSessionStore(await assistantSessionDirectory(dataDir)),collectionControl:createCollectionControl({baseUrl:`http://127.0.0.1:${Number(process.env.JOB_UI_PORT||8788)}`,storageDir:dataDir,dataDiskDir:path.dirname(knowledgeDatabasePath(dataDir)),getCities:()=>Object.keys(zhaopinCities)})});
 const handleKnowledge=createKnowledgeHandler(dataDir);
 const allowed=new Set(['http://127.0.0.1:8788','http://127.0.0.1:8765','http://localhost:8788','http://localhost:8765',`http://127.0.0.1:${port}`,`http://localhost:${port}`]);
 const server=http.createServer(async(req,res)=>{

@@ -8,7 +8,7 @@ import {collectionChannelAvailable} from './channel_availability.mjs';
 import {createManualSearchSession} from './manual_search_session.mjs';
 import {otherChannelValidCount,validJobRecord} from './task_collection_target.mjs';
 
-const outputDir = path.resolve(process.argv[2] || 'outputs/yupao');
+const outputDir = path.resolve(process.argv[2] || 'C:/Users/YS-Insight/Desktop/鱼泡直聘采集');
 if(!collectionChannelAvailable('yupao')){
   console.log('鱼泡采集渠道已停用：跳过网站请求，保留已有数据和断点；继续其他渠道及合并导出。');
   process.exit(0);

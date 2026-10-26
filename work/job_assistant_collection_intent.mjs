@@ -40,10 +40,13 @@ export function parseCollectionIntent(message){
   if(/(?:日志|原文|示例|文档|网页|工具返回|上轮回答|模型回答|助手回复).{0,8}(?:[:：]|写着|显示|说|如下|内容为)/.test(text))return {...base,domain:scopeWords.test(text),kind:'read',read_tool:'collection_task_logs',reason_code:'quoted_evidence'};
   const followup=collectionFollowupIntent(text);
   if(followup)return {...base,domain:true,kind:'followup',followup,reason_code:'stored_plan_only'};
-  const career=/简历|匹配|薪资|技能|技术要求|岗位要求|求职|项目经历/.test(text);
+  // A profession named "爬虫/数据采集" is not an instruction to operate the
+  // collector. Protect business/career questions even without skill/salary words.
+  const career=/简历|匹配|薪资|技能|技术要求|岗位要求|求职|项目经历|商业模式|盈利|赚钱|业务方向|业务场景|就业|职业|前景/.test(text)||/(?:爬虫|数据采集|网页采集|网络爬虫)(?:开发)?(?:工程师|岗位|职位|开发岗)/.test(text);
   const direct=new RegExp(`^(?:(?:请|麻烦|帮我|给我|请帮我|请你|劳烦|现在|我要|我想|我需要|想要)\\s*)*(?:${collect}|创建|新建|续采|续爬|启动|暂停|停止|导出|下载)`).test(text);
-  if(career&&!direct&&!/采集中心|爬虫中心|采集任务/.test(text))return base;
-  if(/^(?:数据)?(?:采集|爬虫|爬取)(?:工程师|开发工程师|开发岗)/.test(text)&&career&&!/^(?:帮我|请)/.test(text))return base;
+  const taskQuery=/(?:查看|查询|检查|刷新|列出|看看).{0,60}任务.{0,20}(?:进度|状态|日志|列表)|(?:查看|查询|检查|刷新|列出|看看).{0,60}(?:进度|状态|日志).{0,20}任务/.test(text);
+  if(career&&!direct&&!taskQuery&&!/采集中心|爬虫中心|采集任务|爬虫任务/.test(text))return base;
+  if(/^(?:数据)?(?:采集|爬虫|爬取)(?:工程师|开发工程师|开发岗)/.test(text)&&career&&!direct&&!taskQuery&&!/采集中心|爬虫中心|采集任务|爬虫任务/.test(text))return base;
   const nativeDomain=scopeWords.test(text)||/暂停|停掉/.test(text)||/^(?:新建|创建)(?:任务|并启动)?$/.test(text)||/(?:导出|下载).{0,15}(?:数据|最新)/.test(text);
   const domain=nativeDomain||collectionEditRequest(text);
   if(!domain)return base;

@@ -3,6 +3,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash,randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
+import {setImmediate as yieldToLoop} from 'node:timers/promises';
 import {roleFamilies,skillRules,normalizeSalary,normalizeEmploymentType} from './job_knowledge_schema.mjs';
 import {roleSections} from './role-evidence-v2.mjs';
 import {cityName} from '../job_collector_ui/public/insight-cohorts.js';
@@ -11,7 +12,6 @@ import {updateUnifiedDataset} from './unified_collection_store.mjs';
 import {reviewState,labelKey,labelDigest} from './reviewed_job_labels.mjs';
 import {admitKnowledgeJobs,admissionSummary,ADMISSION_VERSION} from './job_data_admission.mjs';
 import {createTermReviewMethods} from './skill_term_review.mjs';
-import {dataAnalysisClassifierMetadata} from './data-analysis-classifier.mjs';
 import {roleClassifier,supervisedRoleFamilies,roleScreeningStatus,roleScreeningCacheKey} from './role-classifier-registry.mjs';
 import {knowledgeDatabasePath,storageError} from './knowledge_storage.mjs';
 
@@ -36,15 +36,10 @@ export function classifyKnowledgeRow(row){
   const full=[title,row.skills,body].join('\n');
   const skills=skillRules.filter(([,re])=>re.test(full)).map(([name])=>name);
   const technicalTitle=/工程师|开发|研发|架构|程序员|软件|算法|AI技术|技术专家|技术负责人/i.test(title);
-  const titleFamilies=roleFamilies.filter(f=>f.name!=='通用软件开发'&&f.title.test(title)&&(f.name!=='智能体/大模型应用'||technicalTitle)).map(f=>f.name);
-  const families=[...titleFamilies];
-  if(/固件|BSP|RTOS|单片机/i.test(title))families.push('嵌入式开发');
-  if(/数据分析|数据挖掘/.test(title))families.push(/数据挖掘/.test(title)?'数据挖掘':'数据分析');
-  if(/新媒体|短视频|内容运营/.test(title))families.push('新媒体运营');
+  const titleFamilies=[];
+  const families=[];
   // Generic backend titles may contain actual Agent engineering duties, not just AI tool use.
   const engineering=sections.filter(s=>s.location!=='requirements'&&/(?:智能体|\bagent\b|\brag\b|大模型应用)/i.test(s.quote)&&/开发|构建|搭建|编排|集成|接入|实现/.test(s.quote)&&!/探索|兴趣|了解|熟悉|优先|加分|辅助编程|代码助手/.test(s.quote));
-  if(engineering.length&&technicalTitle)families.push('智能体/大模型应用');
-  if(!families.length&&body.length>=16&&roleFamilies.find(f=>f.name==='通用软件开发').title.test(title))families.push('通用软件开发');
   // Apply last: title rules or historical Agent engineering hints cannot revive
   // a rejected supervised family. Other family memberships remain independent.
   const supervised={};
@@ -60,7 +55,7 @@ export function classifyKnowledgeRow(row){
     salary_basis:/天|日|小时/.test(String(row.salary))?'日/时薪折算（比较默认排除）':'招聘月薪中点',
     city:cityName(row.city),experience:String(row.experience||'未明确'),education:String(row.education||'未明确'),
     company_size:row.company_size||'未明确',employment_type:normalizeEmploymentType(row.employment_type),
-    industry:row.industry||'未明确',label_source:'岗位独立监督分类＋未上线岗位原文规则（非人工复核）',
+    industry:row.industry||'未明确',label_source:'岗位专用TF-IDF＋逻辑回归（非人工复核）',
     role_evidence:{primary:titleFamilies,secondary:engineering.length&&technicalTitle?['智能体/大模型应用']:[],
       engineering:engineering.slice(0,3),preferred:sections.filter(s=>/优先|加分|了解|熟悉/.test(s.quote)).slice(0,3),
       supervised,...(dataAnalysis?{data_analysis:dataAnalysis}:{})},
@@ -162,7 +157,7 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
     }finally{db.close();}
   }
   function status(db){return {revision:Number(db.prepare("SELECT value FROM metadata WHERE key='revision'").get().value),rows:Number(db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE job_key IN (SELECT m.job_key FROM memberships m JOIN tasks t ON t.task_id=m.task_id WHERE t.archived=0)').get().n),updated_at:new Date().toISOString(),storage:'sqlite',database:filename,
-    role_screening:{...roleScreeningStatus(),data_analysis:supervisedRoleFamilies().includes('数据分析')?dataAnalysisClassifierMetadata():{version:'legacy-universal-keywords'}}};}
+    role_screening:roleScreeningStatus()};}
   let lastSyncWarning='';
   async function ensure(){if(Date.now()-lastSync>15000){try{await sync({refresh:false});lastSyncWarning='';}catch(error){lastSyncWarning=storageError(error).message;
     // Queries can use already committed rows even if refreshing collectors fails.
@@ -212,27 +207,40 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
     }finally{db.close();}},
     async snapshot(uri){const data=await this.read(uri);const db=await open();try{const id=randomUUID();db.prepare('INSERT INTO snapshots VALUES(?,?,?,?,?)').run(id,data.revision,uri,JSON.stringify(data.rows),new Date().toISOString());return {uri:`kb://snapshot/${id}`,revision:data.revision,rows:data.rows.length};}finally{db.close();}},
     async publishAnalysis(report){const db=await open();try{const id=hash([report.role,report.generated_at,report.input_file]);db.prepare('INSERT OR REPLACE INTO analyses VALUES(?,?,?,?,?,?)').run(id,report.role,report.knowledge_revision??null,report.knowledge_snapshot||'',JSON.stringify(report),report.generated_at||new Date().toISOString());bump(db);return id;}finally{db.close();}},
-    async assistantData({readOnly=false}={}){if(!readOnly)await ensure();const db=readOnly?new DatabaseSync(filename,{readOnly:true}):await open();try{
+    async assistantData({readOnly=false,classificationCache,onProgress,signal}={}){if(!readOnly)await ensure();const db=readOnly?new DatabaseSync(filename,{readOnly:true}):await open();try{
+      signal?.throwIfAborted();onProgress?.({phase:'index_reading',message:'正在读取岗位库快照'});
       if(readOnly)db.exec('PRAGMA busy_timeout=10000');
       db.exec('BEGIN');
       const state=status(db),cacheKey=`knowledge:${state.revision}:${ADMISSION_VERSION}:${roleScreeningCacheKey()}`;
       if(assistantCache?.cacheKey===cacheKey)return assistantCache;
       const analyses=db.prepare('SELECT role,data FROM analyses ORDER BY created_at DESC LIMIT 20').all();
       const accepted=new Map();for(const analysis of analyses)for(const observation of JSON.parse(analysis.data).cohort_observations||[]){const key=`${observation.knowledge_key}:${observation.knowledge_hash}`;if(!accepted.has(key))accepted.set(key,{...observation,role:analysis.role});}
-      const jobs=selected(db).map((j,i)=>{
+      const selectedJobs=selected(db);
+      const jobs=[];let reused=0,classified=0;
+      for(let i=0;i<selectedJobs.length;i++){
+        const j=selectedJobs[i];
         // Recompute derived facts for every content version, including unchanged
         // historical rows. Never mutate raw/jobs/job_versions for a rule upgrade.
-        const raw=JSON.parse(j.raw),observation=classifyKnowledgeRow(raw),approved=approvedLabels(db,j);
+        const raw=JSON.parse(j.raw),saved=classificationCache?.get(j.job_key,j.content_hash);
+        let observation;
+        if(saved){observation=saved;reused++;}
+        else{observation=classifyKnowledgeRow(raw);classified++;classificationCache?.put(j.job_key,j.content_hash,observation);}
+        const approved=approvedLabels(db,j);
         const analysis=accepted.get(`${j.job_key}:${j.content_hash}`);
-        if(analysis){if(!['智能体/大模型应用',...supervisedRoleFamilies()].includes(analysis.role)||observation.role_families.includes(analysis.role))observation.role_families=[...new Set([...observation.role_families,analysis.role])];observation.skills=analysis.skills||observation.skills;observation.tasks=analysis.tasks||[];observation.domains=analysis.domains||[];observation.label_source='同内容版本洞察标签＋当前准入规则';}
+        if(analysis){observation.skills=analysis.skills||observation.skills;observation.tasks=analysis.tasks||[];observation.domains=analysis.domains||[];observation.label_source='同内容版本属性标签＋当前岗位专用监督筛选';}
         // Old immutable reports retain their labels, but must not reintroduce a
         // supplemental term whose per-job approval has since been withdrawn.
         if(analysis?.reviewed_term_skills?.length)observation.skills=observation.skills.filter(name=>!analysis.reviewed_term_skills.includes(name)||approved.skills.includes(name)||skillRules.some(([rule])=>rule===name));
         if(approved.skills.length||approved.tasks.length||approved.domains.length){for(const f of ['skills','tasks','domains'])observation[f]=[...new Set([...(observation[f]||[]),...approved[f]])];observation.label_source='岗位规则＋原文验证的人工批准标签';}
-        return {...observation,key:j.job_key,row_no:i+2,job_id:raw.job_id,platform:raw.platform,job_name:raw.job_name,company:raw.company_name||'',company_key:`${raw.platform}:${raw.company_id||raw.company_name||''}`,description:raw.job_description||'',salary_raw:String(raw.salary||''),education_raw:String(raw.education||''),explicitly_closed:raw.is_active===false||raw.status==='已关闭'||raw.status==='已下架',url:raw.job_url||'',source_verified:true,content_hash:j.content_hash};
-      });
+        jobs.push({...observation,key:j.job_key,row_no:i+2,job_id:raw.job_id,platform:raw.platform,job_name:raw.job_name,company:raw.company_name||'',company_key:`${raw.platform}:${raw.company_id||raw.company_name||''}`,description:raw.job_description||'',salary_raw:String(raw.salary||''),education_raw:String(raw.education||''),explicitly_closed:raw.is_active===false||raw.status==='已关闭'||raw.status==='已下架',url:raw.job_url||'',source_verified:true,content_hash:j.content_hash});
+        if((i+1)%256===0||i===selectedJobs.length-1){
+          classificationCache?.checkpoint();signal?.throwIfAborted();
+          onProgress?.({phase:'index_classifying',completed:i+1,total:selectedJobs.length,reused,classified,message:`岗位索引 ${Number(i+1).toLocaleString('zh-CN')}/${selectedJobs.length.toLocaleString('zh-CN')} · 复用 ${reused.toLocaleString('zh-CN')} · 新分类 ${classified.toLocaleString('zh-CN')}`});
+          await yieldToLoop();
+        }
+      }
       const governed=admitKnowledgeJobs(jobs);
-      assistantCache={jobs:governed,report:{role:'全岗位知识库',generated_at:state.updated_at,knowledge:true,revision:state.revision,roles:[...new Set(governed.filter(j=>j.admission.retrieval).flatMap(j=>j.role_families))].sort(),candidate_rows:jobs.length,data_quality:admissionSummary(governed)},cacheKey};return assistantCache;
+      assistantCache={jobs:governed,report:{role:'全岗位知识库',generated_at:state.updated_at,knowledge:true,revision:state.revision,roles:[...new Set(governed.filter(j=>j.admission.retrieval).flatMap(j=>j.role_families))].sort(),candidate_rows:jobs.length,data_quality:admissionSummary(governed)},cacheKey,indexBuild:{reused,classified,total:jobs.length}};return assistantCache;
     }finally{db.close();}},
   };
 }

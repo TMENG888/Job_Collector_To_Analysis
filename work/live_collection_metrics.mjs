@@ -32,7 +32,7 @@ export async function liveCollectionMetrics(task) {
       const snapshot = await cached(path.join(dir,name), task.id, text => {
         const data = JSON.parse(text);
         if (data.task_id !== task.id) return null;
-        let rows = platform === 'shixiseng' ? (data.list || data.records?.map(row=>row.list) || []) : (data.records || []);
+        let rows = platform === 'shixiseng' ? (data.list || data.records?.map(row=>row.list) || []) : (data.records || data.rows || []);
         if (platform === 'iguopin' && data.city?.name && data.city.name !== '全国') rows = rows.filter(row=>(row.district_list||[]).some(area=>String(area.area_cn||'').includes(data.city.name)));
         const rowIds = [...new Set(rows.map(idOf).filter(id=>id !== undefined && id !== null && id !== '').map(String))];
         const details = Object.values(data.details || {});

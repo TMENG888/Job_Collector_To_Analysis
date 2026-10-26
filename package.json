@@ -1,21 +1,14 @@
 {
-  "name": "job-collector-to-analysis",
-  "version": "0.2.0",
+  "name": "job-collector-workspace",
+  "version": "1.0.0",
   "private": true,
-  "type": "module",
-  "description": "本机岗位采集、数据去重、标注与岗位市场洞察控制台",
-  "license": "UNLICENSED",
-  "engines": { "node": ">=22.13" },
+  "description": "HTTP collection adapter runtime dependencies (desktop has its own package manifest)",
   "scripts": {
-    "start": "node job_collector_ui/server.mjs",
-    "test": "node scripts/run-unit-tests.mjs",
-    "docs:demo": "node scripts/docs-demo.mjs",
-    "test:docs": "node scripts/test-docs-demo.mjs",
-    "test:desktop": "node --test desktop/policy.test.mjs",
-    "test:supervised": "node work/test_supervised_release.mjs",
-    "check:release": "node scripts/check-release.mjs"
+    "install:collector": "node work/install_collector_dependencies.mjs",
+    "check:git": "node scripts/check-git-safety.mjs"
   },
-  "dependencies": { "playwright": "1.62.1" },
-  "peerDependencies": { "@oai/artifact-tool": "2.8.59" },
-  "peerDependenciesMeta": { "@oai/artifact-tool": { "optional": true } }
+  "dependencies": {
+    "playwright-core": "1.62.1",
+    "sm-crypto": "0.3.13"
+  }
 }

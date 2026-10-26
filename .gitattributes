@@ -10,5 +10,7 @@
 *.css text eol=lf
 *.cmd text eol=crlf
 *.bat text eol=crlf
+.gitignore text eol=lf
+scripts/git-hooks/* text eol=lf
 # Fixed artifact hashes are over exact bytes, not normalized Git text.
 work/models/role-screening/*.json -text -diff

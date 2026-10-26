@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {knowledgeStore} from './job_knowledge_store.mjs';
+import { Workbook, SpreadsheetFile, FileBlob } from '@oai/artifact-tool';
 
 export const jobColumnAliases = {
   record_no: '序号', relevance_level: '相关度分级', relevance_evidence: '相关度依据', platform: '平台',
@@ -23,7 +24,6 @@ export async function readJobDataset(inputFile, requestedSheet = '岗位数据')
   }
   const ext = path.extname(inputFile).toLowerCase();
   if (!['.xlsx', '.csv'].includes(ext)) throw new Error('仅支持 XLSX 或 UTF-8 标准化 CSV 数据');
-  const { Workbook, SpreadsheetFile, FileBlob } = await import('@oai/artifact-tool');
   const before = await fs.stat(inputFile);
   const workbook = ext === '.csv'
     ? await Workbook.fromCSV((await fs.readFile(inputFile, 'utf8')).replace(/^\uFEFF/, ''), { sheetName: '岗位数据' })

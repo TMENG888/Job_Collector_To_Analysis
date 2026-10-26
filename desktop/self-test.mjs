@@ -12,7 +12,8 @@ export async function runSelfTest({app,createDesktop,runtime}) {
   const description='岗位职责：使用Python开发数据分析自动化脚本，使用SQL分析业务数据，设计指标体系并编写数据分析报告，建设数据可视化看板，与业务部门协作分析经营问题。';
   const html=url=>`<!doctype html><meta charset="utf-8"><title>原生浏览器测试岗位</title><style>body{font:18px sans-serif;margin:30px}input,button{padding:12px;font-size:18px}.spacer{height:1600px}#jd,#blank,#external{position:fixed;left:30px;background:white;padding:4px}#jd{top:350px}#blank{top:390px}#external{top:430px}</style><h1>数据分析师</h1><div class="company-name">隔离测试公司</div><div class="job-sec-text">${description}</div><input id="keyword" placeholder="输入中文岗位"><button id="counter" onclick="this.textContent='点击成功';window.clicked=(window.clicked||0)+1">原生点击</button><p><a id="jd" target="_blank" href="https://www.zhipin.com/job_detail/native.html">打开岗位详情</a></p><p><a id="blank" href="about:blank">测试空白回退拦截</a></p><p><a id="external" href="https://evil.example/">外域链接</a></p><p><a href="https://www.zhipin.com/second">下一页</a></p><div class="spacer"></div><p>滚动已到达页尾</p>`;
   const workspaceHTML='<!doctype html><meta charset="utf-8"><style>.shell{display:grid;grid-template-columns:76px minmax(0,1fr)}.sidebar{width:76px;background:#ddd}body{margin:0}main{min-width:0}.hidden{display:none}</style><div class="shell"><aside class="sidebar"><nav>原Web侧栏</nav></aside><main><h1>隔离本地工作台</h1></main></div>';
-  const server=http.createServer((_req,res)=>{res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(workspaceHTML);});
+  let workspaceDown=false;
+  const server=http.createServer((req,res)=>{if(workspaceDown){res.destroy();return;}const route=req.url.includes('view=assistant')?'assistant':req.url.startsWith('/tasks')?'tasks':'insights';res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(workspaceHTML.replace('<div class="shell">','<body data-view="'+route+'"><div class="shell">'));});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   let desktop,exitCode=1;
   const output=process.env.JOB_DESKTOP_TEST_OUTPUT||path.join(runtime,'self-test.json');
@@ -77,11 +78,20 @@ export async function runSelfTest({app,createDesktop,runtime}) {
     await desktop.command('browser');check('browser toggle',desktop.state().mode,'browser');
     const closedContents=liepin.view.webContents;await desktop.command('close',{id:liepin.id});await wait(()=>closedContents.isDestroyed(),'tab disposal');check('closing tab releases WebContents',closedContents.isDestroyed(),true);
     const models=(await desktop.command('models')).models;check('model catalog',models[0].id,'fixture:lr');
+    workspaceDown=true;await desktop.command('workspace',{route:'tasks',retry:true});
+    await wait(()=>desktop.state().workspaceStatus==='error','failed workspace is explicit');
+    check('failed workspace hidden for recovery',desktop.workspace.getVisible(),false);
+    await wait(()=>desktop.window.webContents.executeJavaScript('!document.querySelector("#workspaceRecovery").hidden'),'workspace recovery panel');
+    workspaceDown=false;await desktop.command('workspace',{route:'tasks',retry:true});
+    await wait(()=>desktop.state().workspaceStatus==='ready','same-URL manual retry recovers');
+    check('same-URL retry restores workspace',desktop.workspace.getVisible(),true);
     await desktop.command('workspace',{route:'tasks'});await wait(()=>desktop.workspace.webContents.getURL().endsWith('/tasks'),'fixture workspace route');
     await desktop.workspace.webContents.executeJavaScript('history.pushState({},"","/insights")');await wait(()=>desktop.state().workspaceRoute==='insights','sync workspace active route');
+    check('SPA URL change does not restart full-page readiness timeout',desktop.state().workspaceStatus,'ready');
     check('SPA insights updates desktop active navigation',await desktop.window.webContents.executeJavaScript('document.querySelector("[data-route=insights]").classList.contains("active")'),true);
     await desktop.workspace.webContents.executeJavaScript('history.pushState({},"","/?view=assistant")');await wait(()=>desktop.state().workspaceRoute==='assistant','sync assistant route');
     check('assistant URL syncs desktop navigation',await desktop.window.webContents.executeJavaScript('document.querySelector("[data-route=assistant]").classList.contains("active")'),true);
+    await desktop.workspace.webContents.executeJavaScript('document.body.dataset.view="assistant"');
     await desktop.workspace.webContents.executeJavaScript('document.body.dataset.view="tasks"');await wait(()=>desktop.state().workspaceRoute==='tasks','sync rendered view');
     check('actual rendered view syncs desktop navigation',await desktop.window.webContents.executeJavaScript('document.querySelector("[data-route=tasks]").classList.contains("active")'),true);
     await desktop.workspace.webContents.executeJavaScript('document.body.dataset.view="browser"');await wait(()=>desktop.state().mode==='browser','rendered browser view routes native');
@@ -127,12 +137,14 @@ export async function runLayoutTest({app,createDesktop,runtime}) {
     desktop=await createDesktop({runtime,baseURL:base,visible:true,screening:{catalog:async()=>[]}});
     const local=desktop.workspace.webContents;
     desktop.window.show();desktop.window.focus();local.focus();
-    for(const route of ['insights','tasks']) {
+    for(const route of ['insights','tasks','assistant','profile']) {
       await desktop.command('workspace',{route});
       await wait(()=>local.executeJavaScript('document.body.dataset.view==='+JSON.stringify(route)));
       check('real '+route+' Web sidebar hidden',await local.executeJavaScript('getComputedStyle(document.querySelector(".sidebar")).display'),'none');
       check('real '+route+' single-column grid',await local.executeJavaScript('getComputedStyle(document.querySelector(".shell")).gridTemplateColumns.trim().split(/\\s+/).length'),1);
-      check('real '+route+' title',await local.executeJavaScript('document.querySelector("#pageTitle").textContent'),route==='tasks'?'采集任务':'岗位洞察');
+      check('real '+route+' title',await local.executeJavaScript('document.querySelector("#pageTitle").textContent'),{tasks:'采集任务',insights:'岗位洞察',assistant:'求职助手',profile:'个人 Wiki 与简历库'}[route]);
+      check('real '+route+' visible content',await local.executeJavaScript('document.querySelector("#'+route+'View").getBoundingClientRect().height>0'),true);
+      await wait(()=>desktop.state().workspaceStatus==='ready');
       await wait(()=>desktop.window.webContents.executeJavaScript('document.querySelector("[data-route='+route+']").classList.contains("active")'));
       check('real '+route+' active desktop tab',desktop.state().workspaceRoute,route);
       await new Promise(resolve=>setTimeout(resolve,300));

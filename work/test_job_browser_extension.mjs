@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
 import http from 'node:http';
 import {EventEmitter} from 'node:events';
 import {createExtensionBridge} from './job-browser-extension.mjs';
@@ -9,7 +8,7 @@ import {createJobBrowserManager} from './job-browser-manager.mjs';
 import {workspaceChromium} from './job-browser-runtime.mjs';
 import {pageOperation} from '../job_collector_ui/browser-extension/dom.mjs';
 
-const root=await fs.mkdtemp(path.join(os.tmpdir(),'job-browser-extension-test-'));
+const root=await fs.mkdtemp('E:/Codex/work/20261019-browser-extension/test-');
 let checks=0;const check=(a,b)=>{assert.deepEqual(a,b);checks++;};const rejects=async(fn,re)=>{await assert.rejects(fn,re);checks++;};
 const manager=createJobBrowserManager(root,{env:{}});await manager.save({mode:'extension',browserId:'chrome'});
 let launchRecord,launches=0,lastChild;const bridge=createExtensionBridge({browserManager:manager,pollMs:60,commandMs:500,outputDir:path.join(root,'package'),launch:(exe,args,options)=>{launches++;launchRecord={exe,args,options};const child=lastChild=new EventEmitter();child.unref=()=>{};queueMicrotask(()=>child.emit('spawn'));return child;}});
@@ -63,5 +62,5 @@ try{
  prepared=await op({op:'prepare',kind:'apply'});await page.reload();await rejects(op({op:'confirm',ticketId:prepared.id}),/失效/);
  await page.goto('https://www.zhipin.com/web/passport/zp/403.html');await rejects(op({op:'read-detail'}),/限制访问/);
  await page.goto('https://www.zhipin.com/web/user/');await rejects(op({op:'read-detail'}),/手动登录/);
- const result={passed:true,checks,transport:'real-local-http-with-simulated-extension-client',dom:'real-Chromium-synthetic-page',actualUnpackedExtensionInstalled:false,realWebsiteRequests:0,realMessages:0,realApplications:0,paidModelCalls:0,fixture:root};console.log(JSON.stringify(result));
+ const result={passed:true,checks,transport:'real-local-http-with-simulated-extension-client',dom:'real-Chromium-synthetic-page',actualUnpackedExtensionInstalled:false,realWebsiteRequests:0,realMessages:0,realApplications:0,paidModelCalls:0,fixture:root};await fs.writeFile('E:/Codex/outputs/20261019-browser-extension/test-results.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await context?.close();await bridge.dispose();await new Promise(r=>server.close(r));}

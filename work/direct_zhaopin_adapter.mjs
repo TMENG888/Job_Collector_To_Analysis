@@ -1,4 +1,5 @@
 import {parseZhaopinApi,zhaopinJobId} from './zhaopin_api.mjs';
+import {jsonRequestBody} from './json_request_body.mjs';
 
 export const ZHAOPIN_DIRECT_ENDPOINT='https://fe-api.zhaopin.com/c/i/search/positions';
 const fail=(message,code='invalid_response')=>Object.assign(Error(`智联直连接口：${message}`),{code,stopChannel:true});
@@ -12,7 +13,9 @@ const safeURL=value=>{try{const url=new URL(value);return ['http:','https:'].inc
 export function directZhaopinRequest(keyword,city,pageIndex,pageSize=20){
   if(typeof keyword!=='string'||!keyword.trim()||!city?.name||!/^\d{1,8}$/.test(String(city.code)))throw fail('搜索关键词或城市代码无效','invalid_config');
   if(!Number.isSafeInteger(pageIndex)||pageIndex<1||!Number.isSafeInteger(pageSize)||pageSize<1||pageSize>20)throw fail('分页参数无效','invalid_config');
-  return {url:ZHAOPIN_DIRECT_ENDPOINT,options:{method:'POST',headers:{'content-type':'application/json','user-agent':'JobMarketResearch/1.0'},body:JSON.stringify({S_SOU_FULL_INDEX:keyword.trim(),S_SOU_WORK_CITY:String(city.code),pageIndex,pageSize,order:0,platform:13,version:'0.0.0'})}};
+  const payload={S_SOU_FULL_INDEX:keyword.trim(),S_SOU_WORK_CITY:String(city.code),pageIndex,pageSize,order:0,platform:13,version:'0.0.0'};
+  const encoded=jsonRequestBody(payload,{'user-agent':'JobMarketResearch/1.0'});
+  return {url:ZHAOPIN_DIRECT_ENDPOINT,options:{method:'POST',headers:encoded.headers,body:encoded.body}};
 }
 
 export async function fetchDirectZhaopinPage(request,keyword,city,pageIndex,pageSize=20){

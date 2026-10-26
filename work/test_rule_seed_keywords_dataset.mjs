@@ -12,7 +12,7 @@ if(process.argv.includes('--audit-refinement')) {
     try {await fs.copyFile(file,snapshot,fs.constants.COPYFILE_EXCL);} catch(e){if(!['ENOENT','EEXIST'].includes(e.code))throw e;}
   }
 }
-const source=process.env.JOB_TEST_DATASET||path.join(root,'outputs','ai漫剧师岗位_3150条.xlsx');
+const source='C:/Users/YS-Insight/Desktop/陈晓锋/测试采集数据集/ai漫剧师岗位_3150条.xlsx';
 const before=crypto.createHash('sha256').update(await fs.readFile(source)).digest('hex');
 const {rows}=await readJobDataset(source,'岗位数据');
 assert.equal(rows.length,3150);

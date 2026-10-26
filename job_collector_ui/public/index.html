@@ -5,11 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>岗位采集控制台</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%2383ded0%22/><text x=%2214%22 y=%2241%22 font-size=%2226%22 font-family=%22Arial%22 font-weight=%22700%22 fill=%22%230d3735%22>JC</text></svg>" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=20261026-verification-state" />
   <link rel="stylesheet" href="/design-system.css" />
+  <link rel="stylesheet" href="/interview-tools.css?v=20261022-qwen-1" />
   <link rel="stylesheet" href="/insight-layout.css?v=20261017-layout" />
-  <link rel="stylesheet" href="/insight-classifier.css?v=20261018-qwen" />
+  <link rel="stylesheet" href="/insight-classifier.css?v=20261024-concrete-skills" />
   <link rel="stylesheet" href="/browser-workspace.css?v=20261019-interactive-8" />
+  <link rel="stylesheet" href="/personal-wiki.css?v=20261022-single-organizer" />
 </head>
 <body>
   <div class="shell">
@@ -19,6 +21,7 @@
         <div><strong>Job Collector</strong><span>岗位采集控制台</span></div>
       </div>
       <nav aria-label="主导航">
+        <a class="nav-item" href="/profile" data-view="profile" aria-label="个人资料" title="个人 Wiki 与简历库"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5zM8 8h8M8 12h8M8 16h5"/></svg></span> 个人资料</a>
         <a class="nav-item active" href="/tasks" data-view="tasks" aria-label="任务中心" title="任务中心"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg></span> 任务中心</a>
         <a class="nav-item" href="/insights" data-view="insights" aria-label="岗位洞察" title="岗位洞察"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4v16h16M8 15l4-5 4 2 4-7"/></svg></span> 岗位洞察</a>
         <a class="nav-item" href="/browser" data-view="browser" aria-label="求职浏览器" title="求职浏览器"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg></span> 求职浏览器</a>
@@ -89,6 +92,7 @@
           <form id="assistantSessionForm"><div class="assistant-session-dialog-head"><h3 id="assistantSessionDialogTitle">管理会话</h3><button type="button" class="ghost" id="assistantSessionDialogClose" aria-label="关闭会话管理">×</button></div><label>会话名称<input name="title" maxlength="80" required autocomplete="off" /></label><p>删除后会从列表移除，可在提示栏撤销。不会影响岗位知识库。</p><p id="assistantSessionDialogNotice" role="status"></p><div class="assistant-session-dialog-actions"><button type="button" class="assistant-delete-session" id="assistantSessionDelete">删除会话</button><button type="submit" class="primary" id="assistantSessionRename">保存名称</button></div></form>
         </dialog>
       </div>
+      <div id="profileView" class="app-view hidden"></div>
       <div id="browserView" class="app-view hidden"><section id="jobBrowserWorkspace" aria-label="求职浏览器工作区"></section></div>
       <div id="insightsView" class="app-view hidden">
         <section class="insight-toolbar card">
@@ -102,11 +106,11 @@
             <input type="hidden" name="inputFile" value="kb://all" />
             <small class="wide insight-report-source" id="insightTransferSource"></small>
             <p class="wide insight-report-source" id="insightRoleSource" role="status" hidden></p>
-            <button class="primary" id="runInsight" type="submit">生成全量分析</button>
           </form>
         </section>
+        <section id="insightClassifier" class="card insight-classifier" aria-label="AI联合标注与训练"></section>
+        <section class="insight-analysis-action card"><h3><span class="classifier-step-number">3</span> 全量分析</h3><button class="primary" id="runInsight" type="submit" form="insightForm" aria-describedby="insightAnalysisNotice" disabled>生成全量分析</button><p id="insightAnalysisNotice" class="insight-analysis-notice" role="status" aria-live="polite" hidden></p></section>
         <section id="insightStatus" class="insight-status"></section>
-        <section id="insightClassifier" class="card insight-classifier" aria-label="大模型辅助分类"></section>
         <section id="insightDashboard" class="insight-dashboard"></section>
         <details id="skillTermReview" class="card skill-term-review">
           <summary>新技术词候选 · 本机模型辅助审核</summary>
@@ -162,6 +166,8 @@
         <label class="check-card"><input type="checkbox" name="platforms" value="liepin" /><span><b>猎聘</b></span></label>
       </div>
 
+      <div class="section-title"><span>牛客面经 · 默认采集</span></div>
+      <p class="interview-note">自动沿用岗位关键词，与岗位渠道并发采集；面经独立保存。遇登录、验证或限流即停。</p>
       <div class="section-title"><span>采集城市</span></div>
       <div class="city-grid" id="cityChecks"></div>
 
@@ -179,6 +185,38 @@
     </form>
   </dialog>
 
+  <dialog id="interviewConfig" class="interview-dialog" aria-labelledby="interviewConfigTitle" aria-describedby="interviewConfigHint">
+    <form id="interviewConfigForm">
+      <div class="dialog-head"><div><h2 id="interviewConfigTitle">牛客面经 · 高级设置</h2><p id="interviewConfigHint">已默认采集，无需配置；仅在需要时调整范围与上限。</p></div><button type="button" class="close" data-interview="close-config" aria-label="关闭面经配置">×</button></div>
+      <div id="interviewConfigError" class="interview-error" role="alert" tabindex="-1" hidden></div>
+      <fieldset class="interview-fields">
+        <legend class="interview-sr-only">采集范围与排行设置</legend>
+        <p class="interview-note">默认沿用岗位关键词，下次启动任务时与岗位渠道并发运行。</p>
+        <label>岗位检索词<textarea name="keywords" rows="3" aria-describedby="interviewKeywordHint" placeholder="例如：智能体开发、Agent 研发"></textarea><small id="interviewKeywordHint">换行或逗号分隔</small></label>
+        <label>采集目标篇数（可选）<input type="number" name="maxPosts" min="1" step="1" placeholder="不限，采集至可访问结果耗尽" aria-describedby="interviewCountHint" /><small id="interviewCountHint">留空不设篇数上限；填写正整数可指定目标。按帖子 ID 去重，验证或限流即停。</small></label>
+        <details class="interview-advanced"><summary>时效与排行设置</summary><label>时效半衰期（天）<input type="number" name="halfLifeDays" min="30" max="1095" required aria-describedby="interviewDecayHint" /><small id="interviewDecayHint">180 天：同等互动下，半年前的面经保留 50% 权重。</small></label></details>
+        <label id="interviewRetry" class="interview-toggle interview-retry" hidden><span><input type="checkbox" name="retryBlocked" /> 允许下次重试受阻通道</span><small>仅在你已检查并处理访问限制后勾选</small></label>
+      </fieldset>
+      <p class="interview-note">仅访问公开内容；遇登录、验证或限流即停。</p>
+      <div class="dialog-actions"><button type="button" class="ghost" data-interview="close-config">取消</button><button class="primary" type="submit">保存配置</button></div>
+    </form>
+  </dialog>
+  <dialog id="interviewRanking" class="interview-dialog" aria-labelledby="interviewRankingTitle"><div class="dialog-head"><div><h2 id="interviewRankingTitle" tabindex="-1">面经影响力排行</h2><p>综合互动与时效，优先阅读更值得参考的面经。</p></div><button type="button" class="close" data-interview="close-ranking" aria-label="关闭面经排行">×</button></div><div id="interviewRankingStatus" class="interview-sr-only" role="status" aria-live="polite" aria-atomic="true"></div><div id="interviewRankingBody" aria-busy="false"></div></dialog>
+  <dialog id="interviewClassifier" class="interview-dialog" aria-labelledby="interviewClassifierTitle">
+    <div class="dialog-head"><div><h2 id="interviewClassifierTitle">牛客 · Qwen 标注与训练</h2><p id="interviewClassifierScope"></p></div><button type="button" class="close" data-classifier-close aria-label="关闭面经标注">×</button></div>
+    <div class="interview-classifier-body">
+      <div id="interviewClassifierError" class="interview-error" role="alert" hidden></div>
+      <form id="interviewClassifierForm">
+        <div class="interview-budget-grid"><label>抽样篇数<input name="sampleCount" type="number" min="60" max="1000" step="1" value="200" required /></label><label>本轮预算（元）<input name="budget" type="number" min="0.01" max="20" step="0.01" value="0.5" required /></label></div>
+        <p id="interviewClassifierCredential" class="interview-note"></p>
+        <details class="interview-model"><summary>费用与评测设置</summary><div class="interview-budget-grid"><label>输入单价（元 / 百万 Token）<input name="inputPrice" type="number" min="0.001" max="100" step="0.001" value="0.2" required /></label><label>输出单价（元 / 百万 Token）<input name="outputPrice" type="number" min="0.001" max="100" step="0.001" value="0.8" required /></label></div><p>按设定单价控制估算，非实际账单；未知用量按请求预留额计入预算。Qwen 标签用于训练及验证，Codex 标签仅用于离线回归；不加入日常复核。</p><p id="interviewClassifierBenchmark"></p></details>
+        <label class="interview-classifier-consent"><input type="checkbox" name="confirmed" /> 同意向 Qwen 发送本任务的脱敏公开面经，按本轮预算标注</label>
+        <div class="interview-actions"><button class="primary" type="submit" disabled>Qwen 标注并训练</button><button id="interviewClassifierRefresh" class="ghost" type="button">刷新</button><button id="interviewClassifierCancel" class="ghost" type="button" disabled>停止本轮</button></div>
+      </form>
+      <div id="interviewClassifierResult" aria-live="polite"></div>
+      <div class="interview-actions"><button id="interviewClassifierPublish" class="secondary" type="button" disabled>应用已保存标签</button><button id="interviewClassifierActivate" class="ghost" type="button" disabled>启用合格分类器硬筛</button></div>
+    </div>
+  </dialog>
   <dialog id="guideDialog" class="guide-dialog">
     <div class="dialog-head"><div><p class="eyebrow">QUICK GUIDE</p><h2>使用与安全</h2></div><button class="close" data-close-guide>×</button></div>
     <div class="guide-content">
@@ -195,6 +233,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/vendor/d3.min.js"></script>
-  <script type="module" src="/app.js?v=20261019-interaction-fix-9"></script>
+  <script type="module" src="/app.js?v=20261026-verification-state"></script>
 </body>
 </html>

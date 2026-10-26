@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {jobonlineRoundBudget} from './jobonline_round_budget.mjs';
+import {jobonlineContinuation} from './jobonline_continuation.mjs';
+import {runStructuredTargetRounds} from './structured_target_rounds.mjs';
+import {PipelineRuns} from './pipeline_runs.mjs';
+const dir=await fs.mkdtemp(path.join(os.tmpdir(),'target-rounds-'));
+const task={id:'owned',targetRows:8000,platforms:['jobonline'],outputDir:dir,publicConfigPath:path.join(dir,'config.json')};
+const settings={enabled:true,maxRows:1000,totalMaxRows:12400,maxPages:500};
+const manifestFile=path.join(dir,'采集清单.json');
+const manifest=async(continuation,errors=[],id=task.id)=>fs.writeFile(manifestFile,JSON.stringify({task_id:id,platforms:{jobonline:{continuation,errors}}}));
+const healthy={safe:true,reason:'round_limit'};
+try{
+ await fs.writeFile(task.publicConfigPath,JSON.stringify({task_id:task.id,platforms:{jobonline:settings}}));
+ const first=jobonlineRoundBudget(settings,999);assert.equal(first.limit,1999);assert.equal(jobonlineRoundBudget(settings,1999).limit,2999);
+ assert.equal(jobonlineRoundBudget(settings,3000,{targetRemaining:5}).maxNewRows,5);
+ assert.equal(jobonlineRoundBudget({maxRows:1000},1001).maxNewRows,0,'legacy explicit quota retained');
+ const c={budget:first,size:1999,checkpoints:[{completed:false,nextPageNo:101}],maxPages:500};
+ assert.deepEqual(jobonlineContinuation(c),healthy);
+ assert.equal(jobonlineContinuation({...c,maxPages:100}).reason,'page_limit');
+ assert.equal(jobonlineContinuation({...c,errors:[{code:'403'}]}).safe,false);
+ assert.equal(jobonlineContinuation({...c,checkpoints:[{completed:true}]}).reason,'source_finished');
+ assert.equal(jobonlineContinuation({...c,deferred:true}).safe,false);
+ let valid=6000,calls=0;await manifest(healthy);
+ let result=await runStructuredTargetRounds({task,count:async()=>valid,run:async()=>{calls++;valid+=1000;await manifest(healthy);return {code:0};}});
+ assert.equal(calls,2);assert.equal(result.valid,8000);assert.equal(result.targetReached,true);
+ valid=6000;calls=0;await manifest(healthy,[{code:'403'}]);
+ result=await runStructuredTargetRounds({task,count:async()=>valid,run:async()=>{calls++;}});assert.equal(calls,0);assert.equal(result.reason,'channel_blocked');
+ await manifest(healthy);result=await runStructuredTargetRounds({task,count:async()=>valid,run:async()=>{calls++;return {paused:true};}});assert.equal(calls,1);assert.equal(result.paused,true);
+ calls=0;await manifest(healthy);result=await runStructuredTargetRounds({task,count:async()=>valid,run:async()=>{calls++;}});assert.equal(calls,1);assert.equal(result.reason,'no_valid_growth');
+ let cancelled=false;calls=0;await manifest(healthy);
+ result=await runStructuredTargetRounds({task,count:async()=>valid,isCancelled:()=>cancelled,onRound:async()=>{cancelled=true;},run:async()=>{calls++;}});assert.equal(calls,0);assert.equal(result.paused,true);
+ await manifest(healthy,[],'foreign');await assert.rejects(runStructuredTargetRounds({task,count:async()=>valid,run:async()=>{throw Error('must not run');}}),/任务 ID/);
+ const runs=new PipelineRuns(),old=runs.begin('a');runs.cancel('a');assert.equal(runs.current('a',old),false);assert.throws(()=>runs.begin('a'),/仍在运行/);runs.finish('a',old);const current=runs.begin('a');runs.finish('a',old);assert.equal(runs.current('a',current),true);runs.finish('a',current);
+ console.log('PASS bounded automatic rounds, valid target, task ownership, source/page/total limits, blocked stop, cancellation and token isolation');
+}finally{await fs.rm(dir,{recursive:true,force:true});}

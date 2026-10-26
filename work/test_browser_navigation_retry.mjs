@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {gotoWithRetries} from './browser_navigation_retry.mjs';
+let calls=0;
+let current='about:blank';
+const page={url:()=>current,goto:async url=>{calls++;if(calls<3){current='about:blank';return;}current=url;}};
+await gotoWithRetries(page,'https://fixture.invalid/search',{wait:async()=>{},attempts:3});
+assert.equal(calls,3);
+assert.equal(current,'https://fixture.invalid/search');
+calls=0;current='about:blank';
+const failing={url:()=>current,goto:async()=>{calls++;throw new Error('net::ERR_ABORTED');}};
+await assert.rejects(gotoWithRetries(failing,'https://fixture.invalid/search',{wait:async()=>{},attempts:2}),/已重试 2 次/);
+assert.equal(calls,2);
+console.log(JSON.stringify({ok:true,checks:4}));
