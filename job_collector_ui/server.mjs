@@ -27,6 +27,7 @@ import {createKnowledgeAssistantStore} from '../work/job_decision_assistant.mjs'
 import {knowledgeStore} from '../work/job_knowledge_store.mjs';
 import {createKnowledgeHandler} from '../work/job_knowledge_http.mjs';
 import {nativeTaskCounts} from '../work/collector_native_sink.mjs';
+import {taskJobStatistics} from '../work/task_job_statistics.mjs';
 import {deriveChannelHeartbeats} from '../work/collector_channel_heartbeat.mjs';
 import {createAssistantHandler} from '../work/job_assistant_http.mjs';
 import {createAssistantCredentialStore} from '../work/job_assistant_credentials.mjs';
@@ -37,6 +38,8 @@ import {zhaopinCities,jobonlineCities} from '../work/collection_cities.mjs';
 import {liepinCities} from '../work/liepin_cities.mjs';
 import {channelAcquisition,collectionPolicyFor,collectionMode,HYBRID_MODE} from '../work/channel_acquisition.mjs';
 import {createChannelVerification} from '../work/channel_manual_verification.mjs';
+import {verificationTarget} from '../work/channel_manual_verification.mjs';
+import {openZhaopinSession,saveZhaopinCookies,closeZhaopinSession,markChannelReady,openPureManualBrowser} from '../work/manual_channel_session.mjs';
 import {verificationDiagnostic} from '../work/channel_verification_state.mjs';
 import {prepareStructuredCollection} from '../work/structured_collection_plan.mjs';
 import {runAdaptiveCollection} from '../work/collection_search_queue.mjs';
@@ -47,6 +50,9 @@ import {collectionGoal,untilExhausted,goalText,collectionOutcome,collectionTarge
 import {updateTaskCollectionGoal,synchronizeCollectionGoal} from '../work/task_collection_goal.mjs';
 import {migrateLegacyCollectionGoals} from '../work/legacy_collection_goal.mjs';
 import {createInsightSupervised,createInsightSupervisedHandler} from '../work/insight-supervised.mjs';
+import {createInsightTrainingQueue,createInsightTrainingHandler} from '../work/insight-training-queue.mjs';
+import {trainingKeywords} from '../work/insight-sampling.mjs';
+import {createRoleDiscovery,createRoleDiscoveryHandler} from '../work/insight-role-discovery.mjs';
 import {selectManualRole} from '../work/insight-role-selection.mjs';
 import {roleFamilies} from '../work/job_knowledge_schema.mjs';
 import {roleClassifier} from '../work/role-classifier-registry.mjs';
@@ -83,11 +89,23 @@ const insightSupervised=createInsightSupervised(dataDir,{
   beforeStart:async()=>{if((await semanticCloud?.status(''))?.busy)throw Error('已有词云标注任务运行中，请先等待或停止');},
   publishJoint:data=>semanticCloud.importJoint(data),
 });
-const classifierScope=inputFile=>{
+const classifierScope=async(inputFile,requestedRole='')=>{
   const source=resolveInsightSourceRole({inputFile},tasks);
-  return {inputFile,role:selectManualRole(roleFamilies,source.role)?.name||source.role};
+  const defaultRole=selectManualRole(roleFamilies,source.role)?.name||source.role;
+  if(requestedRole&&requestedRole!==defaultRole&&!(await insightSupervised.catalog()).roles.some(r=>r.role===requestedRole)&&!(await insightTrainingQueue.list()).jobs.some(j=>j.inputFile===inputFile&&j.role===requestedRole))throw Error('请选择分类器目录中已有的岗位类别');
+  return {inputFile,role:requestedRole||defaultRole};
 };
 const handleInsightClassifier=createInsightSupervisedHandler(insightSupervised,classifierScope);
+const insightTrainingQueue=createInsightTrainingQueue({directory:path.join(dataDir,'insight_training_queue'),service:insightSupervised});
+const handleRoleDiscovery=createRoleDiscoveryHandler(createRoleDiscovery(dataDir));
+const handleInsightTraining=createInsightTrainingHandler({queue:insightTrainingQueue,catalog:()=>insightSupervised.catalog(),enqueueTask:async(id,options={})=>{
+  if(id==='all'){
+    const seeds=trainingKeywords(options.keywords||'');if(!seeds.length)throw Error('全库训练须输入岗位检索关键词');
+    const rows=(await knowledge.status({synchronize:false})).rows,role=selectManualRole(roleFamilies,seeds[0])?.name||seeds[0];
+    return insightTrainingQueue.enqueue({taskId:'all',inputFile:'kb://all',role,keywords:seeds.join('，'),rows,label:'全岗位知识库'});
+  }
+  const task=tasks.find(t=>t.id===id&&!t.archived);if(!task||!['completed','partial','ready'].includes(task.status)||active.has(id)||pipelineRuns.has(id)||startingStages.has(id))throw Error('请选择已结束且有岗位数据的采集任务');const job=await queueInsightTraining(task,options);if(!job)throw Error('此任务尚无可训练的岗位数据');return job;
+}});
 semanticCloud=createSemanticCloud(dataDir,{supervised:insightSupervised,scope:classifierScope});
 const handleSemanticCloud=createSemanticCloudHandler(semanticCloud);
 const handleKnowledge=createKnowledgeHandler(dataDir);
@@ -234,7 +252,7 @@ async function startInsight(body) {
   const inputFile = nativeInput?requestedInput:path.resolve(requestedInput);
   if (!nativeInput&&(!requestedInput || !fsSync.existsSync(inputFile))) throw new Error('找不到输入数据');
   if (!nativeInput&&!['.xlsx', '.csv'].includes(path.extname(inputFile).toLowerCase())) throw new Error('请选择知识库岗位范围，或手工导入 XLSX/CSV');
-  const classifierRole=selectManualRole(roleFamilies,sourceRole.role)?.name||sourceRole.role;
+  const classifierRole=(await classifierScope(requestedInput,body.role)).role;
   const insightClassifier=await insightSupervised.resolveAnalysis(inputFile,classifierRole,{mode:body.classifierMode||'qualified',runId:body.classifierRunId});
   if(!insightClassifier&&!roleClassifier(classifierRole))throw new Error('该岗位尚无通过验收的专用监督分类器，请先联合标注并训练；不回退规则或语义参照');
   let transferSource = null;
@@ -262,8 +280,8 @@ async function startInsight(body) {
     displayInputFile:inputFile,
     ...(transferSource ? { sourceTaskId: transferSource.taskId, sourceResolution: transferSource.dataset.resolution, expectedRows: transferSource.dataset.expectedRows } : {}),
     sheetName: String(body.sheetName || '岗位数据').trim() || '岗位数据',
-    role: sourceRole.role,
-    roleSource: sourceRole.mode,
+    role: classifierRole,
+    roleSource: body.role?'classifier_registry':sourceRole.mode,
     analysisMode: String(body.analysisMode || 'preview') === 'full' ? 'full' : 'preview',
     sampleSize: Math.max(50, Math.min(2000, Number(body.sampleSize || 300))),
     // Clear obsolete state references; historical result files are untouched.
@@ -321,6 +339,14 @@ async function setTask(id, patch) {
   Object.assign(task, patch, { updatedAt: now() });
   await saveTasks(tasks);
   return task;
+}
+
+async function queueInsightTraining(task,{keywords=''}={}){
+  const dataset=(await knowledge.catalog({synchronize:false})).find(d=>d.taskId===task.id);
+  const rows=Number(dataset?.expectedRows||0);if(!dataset||!rows)return null;
+  const seeds=trainingKeywords(keywords),defaultScope=await classifierScope(dataset.path);
+  const role=seeds.length?(selectManualRole(roleFamilies,seeds[0])?.name||seeds[0]):defaultScope.role;
+  return insightTrainingQueue.enqueue({taskId:task.id,label:task.label,inputFile:dataset.path,role,rows,keywords:seeds.join('，')});
 }
 
 function runtimePython() {
@@ -419,7 +445,7 @@ async function runChild(task, stage, pipeline = false) {
       env: { ...process.env, JOB_COLLECTION_MODE:collectionMode(task),JOB_HTTP_RATE_DIR:process.env.JOB_HTTP_RATE_DIR||path.join(dataDir,'http_rate_limits'),JOB_COLLECTION_ROUND:task.collectionRoundCombinations?JSON.stringify({task_id:task.id,combinations:task.collectionRoundCombinations}):'',JOB_STRUCTURED_ROUND_ONLY:task.structuredRoundOnly||'',JOB_COLLECTOR_NATIVE_STORE:'1',JOB_COLLECTOR_TASK_ID:task.id,JOB_TASK_OUTPUT_DIR:task.outputDir,JOB_TASK_BACKUP_ROOT:taskBackupRoot, JOB_COLLECTOR_BLOCKED_POLICY:pipeline?'skip':'wait', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
       windowsHide: true,
     });
-    active.set(task.id, { child, stage, startedAt: Date.now() });
+    active.set(task.id, { child, stage, startedAt: Date.now(), platforms: task.collectionRoundPlatforms || task.platforms });
     startingStages.delete(task.id);
     if (isBoss) startingBoss = false;
     const pipe = (stream, prefix = '') => stream.on('data', (chunk) => appendLog(task.id, `${prefix}${chunk.toString('utf8')}`));
@@ -463,6 +489,55 @@ async function runChild(task, stage, pipeline = false) {
       }
     });
   });
+}
+
+// Resume exactly one channel from the current checkpoint set. The public
+// collector receives a selective round, so other blocked channels are not
+// touched and cannot overwrite this channel's manual-verification result.
+async function resumePlatform(task, platform) {
+  if (!['job51', 'liepin', 'zhaopin'].includes(platform)) throw Object.assign(Error('该渠道不支持人工恢复'), {status: 400});
+  if (active.has(task.id) || pipelineRuns.has(task.id) || startingStages.has(task.id)) throw Object.assign(Error('该任务已有程序正在运行，请先暂停'), {status: 409});
+  const fresh = taskById(tasks, task.id) || task;
+  const config = JSON.parse(await fs.readFile(fresh.publicConfigPath, 'utf8'));
+  const settings = config.platforms?.[platform];
+  if (!settings?.enabled) throw Object.assign(Error('该渠道未启用'), {status: 400});
+  const combinations = (config.keywords || []).flatMap(keyword => (settings.cities || []).map(city => ({platform, keyword, city: {name: city.name, code: String(city.code)}})));
+  if (!combinations.length) throw Object.assign(Error('该渠道没有可续采的条件'), {status: 400});
+  const resumed = {...fresh, collectionRoundPlatforms: [platform], collectionRoundCombinations: combinations};
+  void runChild(resumed, 'collection', false).catch(async error => {
+    await appendLog(fresh.id, `\n[单渠道恢复失败] ${platform}：${error.message}\n`).catch(() => {});
+  });
+  return {message: `已启动${platform}单渠道续采`, combinations: combinations.length};
+}
+
+// A single-channel round must not block manual login/verification for another
+// channel. Only the channel currently using the collector is locked; the
+// manifest-writing actions still wait for the round to end.
+function anyCollectionActive(task) {
+  return active.has(task.id) || startingStages.has(task.id) || pipelineRuns.has(task.id) || ['running', 'stopping'].includes(task.status);
+}
+function platformCollectionActive(task, platform) {
+  const running = active.get(task.id);
+  if (running) {
+    const platforms = Array.isArray(running.platforms) ? running.platforms : [];
+    return platforms.length === 0 || platforms.includes(platform);
+  }
+  return startingStages.has(task.id) || pipelineRuns.has(task.id) || ['running', 'stopping'].includes(task.status);
+}
+
+// A paused task can have DB rows but no manifest yet (the collector writes the
+// manifest at the end of a round). Manual verification must still be able to
+// open/attach; create a minimal owned manifest instead of failing with ENOENT.
+async function readOrInitManifest(task) {
+  const file = path.join(task.outputDir, '采集清单.json');
+  try {
+    return JSON.parse(await fs.readFile(file, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const empty = {task_id: task.id, created_at: new Date().toISOString(), platforms: {}};
+    await writeJsonAtomic(file, empty);
+    return empty;
+  }
 }
 
 async function runPipeline(task, resumeFrom = '') {
@@ -523,6 +598,7 @@ async function runPipeline(task, resumeFrom = '') {
     if(cancelled())return;
     const outcome=collectionOutcome(fresh,{valid,reason:continued.reason,issues:fresh.collectionIssues||[]});
     await setTask(task.id,{status:outcome.status,validRows:valid,collectionStopReason:continued.reason,currentStage:'',pipeline:false,lastStage:'collection',message:`已归集候选 ${ingested.rows} 条，有效去重 ${valid} 条；${goalText(fresh)}${collectionStopMessage(continued.reason)?'；'+collectionStopMessage(continued.reason):''}；当前阶段结束不代表整个平台已采完，可直接用于洞察与助手${fresh.collectionIssues?.length?'；受阻渠道和断点保留':''}`});
+    await queueInsightTraining(taskById(tasks,task.id)).catch(error=>appendLog(task.id,`[洞察训练任务] 创建失败：${error.message}；采集数据已保留，可在岗位洞察手动创建。\n`));
   } catch (error) {
     if(cancelled())return;
     await appendLog(task.id, `\n流水线停止：${error.message}\n`);
@@ -536,7 +612,7 @@ async function finalizeAfterCollectionError(task,cause) {
   if(['collection','public','zhaopin','yupao','boss'].includes(cause.stage)&&Number.isInteger(cause.code)&&cause.code>0&&![42,43].includes(cause.code)&&!cause.signal){
     const fresh=taskById(tasks,task.id)||task;if(['paused','stopping'].includes(fresh.status))return {skipped:true};
     const saved=await updateUnifiedDataset(fresh);await knowledge.sync({refresh:false});
-    if(saved.rows){await setTask(task.id,{status:'partial',currentStage:'',pipeline:false,lastStage:cause.stage,message:`渠道异常退出（${cause.code}）；已安全归集 ${saved.rows} 条到知识库，断点保留，可直接分析`});return {delivered:true,available:saved.rows};}
+    if(saved.rows){await setTask(task.id,{status:'partial',currentStage:'',pipeline:false,lastStage:cause.stage,message:`渠道异常退出（${cause.code}）；已安全归集 ${saved.rows} 条到知识库，断点保留，可直接分析`});await queueInsightTraining(taskById(tasks,task.id)).catch(error=>appendLog(task.id,`[洞察训练任务] 创建失败：${error.message}；可手动补建。\n`));return {delivered:true,available:saved.rows};}
     return {skipped:true};
   }
   return deliverPartial({
@@ -556,6 +632,8 @@ async function finalizeAfterCollectionError(task,cause) {
         message:`${issue.message}；已导出 ${metrics.finalRows} 条${untilExhausted(fresh)?'；无目标条数，渠道异常仍需处理':`/${fresh.targetRows}${metrics.targetReached?'；渠道异常仍需处理':'，目标未达到'}`}`,
       });
       await appendLog(task.id, `\n[异常收尾完成] ${metrics.finalRows} 条；${goalText(fresh)}；渠道异常保留，数量不代表岗位相关性验收。\n`);
+      await knowledge.sync({refresh:false});
+      await queueInsightTraining(taskById(tasks,task.id)).catch(error=>appendLog(task.id,`[洞察训练任务] 创建失败：${error.message}；可手动补建。\n`));
     },
   });
 }
@@ -566,6 +644,10 @@ async function runSingle(task, stage) {
     const result=await runChild(task, stage, false);
     recoveryAttempted=true;
     await finalizeAfterCollectionError(task,{stage,...result});
+    if(!result.paused&&result.code===0&&['collection','public','zhaopin','boss','yupao'].includes(stage)){
+      await knowledge.sync({refresh:false});
+      await queueInsightTraining(taskById(tasks,task.id)).catch(error=>appendLog(task.id,`[洞察训练任务] 创建失败：${error.message}；可手动补建。\n`));
+    }
     if (stage === 'workbook') {
       const fresh = taskById(tasks, task.id) || task;
       const metrics = await metricsFor(fresh);
@@ -743,6 +825,8 @@ async function metricsFor(task) {
   manifest=ownedReport(manifest,task)?manifest:null;
   const liveCollection = await liveCollectionMetrics(task);
   const native=await nativeTaskCounts(task.outputDir,task.id);
+  let jobStats=null,jobStatsError=null;
+  try{jobStats=await taskJobStatistics(task.outputDir,task.id);}catch(error){jobStatsError=error.message;}
   for(const [key,count]of Object.entries(native.platformCounts))liveCollection.platformCounts[key]=Math.max(liveCollection.platformCounts[key]||0,count);
   const counts=collectionCounts({native,live:liveCollection,manifest,csv:{
     zhaopin:await countCsvRows(path.join(task.outputDir,'zhaopin_标准化数据.csv')),
@@ -752,16 +836,16 @@ async function metricsFor(task) {
   const {publicRows,zhaopinRows,yupaoRows,bossRows}=counts;
   Object.assign(liveCollection.platformCounts,counts.platformCounts);liveCollection.publicRows=publicRows;
   const unified=await fs.readFile(path.join(task.outputDir,'统一采集数据状态.json'),'utf8').then(JSON.parse).catch(()=>null);
-  const knowledgeRows=Math.max(native.rows,unified?.task_id===task.id?Number(unified.rows||0):0);
+  const knowledgeRows=jobStats?.rows??(native.rows|| (unified?.task_id===task.id?Number(unified.rows||0):0));
   const finalRows = Number(quality?.output_rows || 0);
   const verification=await channelVerification.taskStatus(task);
   const channelDiagnostics=deriveChannelDiagnostics(task,manifest,{liveCollection});
   for(const key of task.platforms||[])channelDiagnostics[key]=verificationDiagnostic(channelDiagnostics[key],verification[key]);
   const channelHeartbeats=deriveChannelHeartbeats(task,{records:native.channelHeartbeats,diagnostics:channelDiagnostics,verification,runStartedAt:active.get(task.id)?.startedAt});
   return {
-    publicRows, zhaopinRows, yupaoRows, bossRows, finalRows, knowledgeRows,liveCollection,
+    publicRows, zhaopinRows, yupaoRows, bossRows, finalRows, knowledgeRows,liveCollection,jobStats,jobStatsError,
     channelDiagnostics,channelHeartbeats,channelVerification:verification,
-    validRows:Number.isSafeInteger(task.validRows)&&!['running','stopping'].includes(task.status)?task.validRows:null,
+    validRows:jobStats?.completeRows??null,
     hasFinalResult:Boolean(quality),finalResultMessage:quality?'本任务最终结果':'本任务尚未生成最终结果',
     candidates: counts.candidates,
     targetReached: collectionTargetReached(task,{quality}),
@@ -845,7 +929,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && /^\/(?:platforms|labels)(?:\/|$)/.test(pathname)) {
       res.writeHead(302, { location: '/tasks', 'cache-control': 'no-store' });res.end();return;
     }
-    if (await handlePersonalWiki(req,res,pathname)||await browserWorkspace.handler(req,res,pathname)||await handleSemanticCloud(req,res,pathname)||await handleInsightClassifier(req,res,pathname)||await handleInterviewClassifier(req,res,pathname)||await handleKnowledge(req,res,pathname)||await handleJobAssistant(req, res, pathname)) return;
+    if (await handleRoleDiscovery(req,res,pathname)||await handleInsightTraining(req,res,pathname)||await handlePersonalWiki(req,res,pathname)||await browserWorkspace.handler(req,res,pathname)||await handleSemanticCloud(req,res,pathname)||await handleInsightClassifier(req,res,pathname)||await handleInterviewClassifier(req,res,pathname)||await handleKnowledge(req,res,pathname)||await handleJobAssistant(req, res, pathname)) return;
     if (req.method === 'GET' && pathname === '/api/insights/datasets') {
       return json(res, 200, { root: knowledge.filename, catalog: 'knowledge-v1', datasets: await discoverInsightDatasets() });
     }
@@ -977,25 +1061,101 @@ const server = http.createServer(async (req, res) => {
       const verificationOptions=await bodyJson(req);
       try{
         if(action==='open'){
-          if(verificationOptions.mode==='collector'&&tasks.some(item=>item.platforms?.includes(platform)&&(active.has(item.id)||pipelineRuns.has(item.id)||startingStages.has(item.id)||['running','stopping'].includes(item.status))))return json(res,409,{error:'请先暂停使用该渠道的任务再打开采集会话'});
+          const otherSamePlatform=tasks.some(item=>item.id!==task.id&&item.platforms?.includes(platform)&&(active.has(item.id)||pipelineRuns.has(item.id)||startingStages.has(item.id)||['running','stopping'].includes(item.status)));
+          if(verificationOptions.mode==='collector'&&(platformCollectionActive(task,platform)||otherSamePlatform))return json(res,409,{error:'该渠道正在采集，暂时不能打开处理窗口；请等本轮结束或先暂停'});
           await assertTaskOutputOwnership(task);
           const config=JSON.parse(await fs.readFile(task.publicConfigPath,'utf8'));
-          const manifest=JSON.parse(await fs.readFile(path.join(task.outputDir,'采集清单.json'),'utf8'));
+          const manifest=await readOrInitManifest(task);
           return json(res,200,await channelVerification.open(task,platform,config,manifest,verificationOptions));
         }
         if(action==='finish'||action==='recheck'){
-          if(tasks.some(item=>item.platforms?.includes(platform)&&(active.has(item.id)||pipelineRuns.has(item.id)||startingStages.has(item.id)||['running','stopping'].includes(item.status))))return json(res,409,{error:'请先暂停使用该渠道的任务，避免核验与采集冲突'});
+          const managed=Boolean(channelVerification.status(task.id)[platform]);
+          if(managed?anyCollectionActive(task):platformCollectionActive(task,platform))return json(res,409,{error:managed?'当前任务正在采集，请等本轮结束后再点“已处理”':'该渠道正在采集，请暂时不要做人工复核'});
           startingStages.add(id);
           try{
+            await readOrInitManifest(task);
             if(action==='finish')return json(res,200,await channelVerification.finish(task,platform));
             await assertTaskOutputOwnership(task);
             const config=JSON.parse(await fs.readFile(task.publicConfigPath,'utf8'));
-            const manifest=JSON.parse(await fs.readFile(path.join(task.outputDir,'采集清单.json'),'utf8'));
+            const manifest=await readOrInitManifest(task);
             return json(res,200,await channelVerification.recheck(task,platform,config,manifest));
           }finally{startingStages.delete(id);}
         }
         return json(res,200,await channelVerification.close(task,platform));
-      }catch(error){return json(res,error.status||409,{error:error.status?error.message:'官网会话操作未完成，请检查本机会话或验证状态'});}
+      }catch(error){return json(res,error.status||409,{error:error.status?error.message:`官网会话操作未完成：${error.message}`});}
+    }
+    const manualSessionMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/channels\/(job51|liepin|zhaopin)\/session\/(open|mark|close|resume)$/);
+    if(req.method==='POST'&&manualSessionMatch){
+      const origin=`http://${req.headers.host}`,local=new URL(origin);
+      if(!['127.0.0.1','localhost'].includes(local.hostname)||local.port!==String(port)||req.headers['sec-fetch-site']==='cross-site'||req.headers.origin&&req.headers.origin!==local.origin)return json(res,403,{error:'仅允许当前本机控制台打开人工会话'});
+      if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))return json(res,415,{error:'请使用本机 JSON 操作'});
+      const [,id,platform,action]=manualSessionMatch,task=taskById(tasks,id);
+      if(!task)return json(res,404,{error:'任务不存在'});
+      const body=await bodyJson(req);
+      try{
+        if(action==='open'){
+          const otherSamePlatform=tasks.some(item=>item.id!==task.id&&item.platforms?.includes(platform)&&(active.has(item.id)||pipelineRuns.has(item.id)||startingStages.has(item.id)||['running','stopping'].includes(item.status)));
+          if(platformCollectionActive(task,platform)||otherSamePlatform)return json(res,409,{error:'该渠道正在采集，暂时不能打开处理窗口；请等本轮结束或先暂停'});
+          await assertTaskOutputOwnership(task);
+          if(platform==='zhaopin')return json(res,200,await openZhaopinSession(task.id));
+          const config=JSON.parse(await fs.readFile(task.publicConfigPath,'utf8'));
+          const manifest=await readOrInitManifest(task);
+          return json(res,200,await channelVerification.open(task,platform,config,manifest,{mode:'collector'}));
+        }
+        if(action==='mark'){
+          if(anyCollectionActive(task))return json(res,409,{error:'当前任务正在采集，请等本轮结束后再点“已处理”'});
+          const state=body.state;
+          if(!['logged_in','verified'].includes(state))return json(res,400,{error:'人工状态必须是 logged_in 或 verified'});
+          if(platform==='zhaopin'){
+            const saved=await saveZhaopinCookies(task.id);
+            const marked=await markChannelReady(task,platform,{state,rateDir:path.join(dataDir,'http_rate_limits')});
+            if(state==='verified')await closeZhaopinSession(task.id);
+            return json(res,200,{...saved,...marked,message:state==='verified'?'智联登录态已保存、验证已确认；未自动启动采集，请完成其他平台后再点“继续采集”':'智联登录态已保存；如页面仍要求验证，请再点“已处理”'});
+          }
+          const finished=await channelVerification.finish(task,platform);
+          const marked=await markChannelReady(task,platform,{state:'verified',rateDir:path.join(dataDir,'http_rate_limits')});
+          return json(res,200,{...finished,...marked,message:'官网搜索已核验，渠道冷却已清理；未自动启动采集，请完成其他平台后再点“继续采集”'});
+        }
+        if(action==='close'){
+          if(platform==='zhaopin')return json(res,200,await closeZhaopinSession(task.id));
+          return json(res,200,await channelVerification.close(task,platform));
+        }
+        channelVerification.assertAvailable(task);
+        return json(res,202,await resumePlatform(task,platform));
+      }catch(error){return json(res,error.status||409,{error:error.status?error.message:`人工会话操作未完成：${error.message}`});}
+    }
+    // Backward/comfortable alias: the UI has historically used the short
+    // `/channels/:platform/resume` form. Keep it so an older cached console
+    // does not turn a successful verification into a 404.
+    const platformResumeMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/channels\/(job51|liepin|zhaopin)\/resume$/);
+    if(req.method==='POST'&&platformResumeMatch){
+      const origin=`http://${req.headers.host}`,local=new URL(origin);
+      if(!['127.0.0.1','localhost'].includes(local.hostname)||local.port!==String(port)||req.headers['sec-fetch-site']==='cross-site'||req.headers.origin&&req.headers.origin!==local.origin)return json(res,403,{error:'仅允许当前本机控制台恢复采集'});
+      if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))return json(res,415,{error:'请使用本机 JSON 操作'});
+      const [,id,platform]=platformResumeMatch,task=taskById(tasks,id);
+      if(!task)return json(res,404,{error:'任务不存在'});
+      await bodyJson(req);
+      try{channelVerification.assertAvailable(task);return json(res,202,await resumePlatform(task,platform));}
+      catch(error){return json(res,error.status||409,{error:error.status?error.message:`恢复采集未完成：${error.message}`});}
+    }
+    const pureManualMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/channels\/(job51|liepin|zhaopin)\/manual-browser\/open$/);
+    if(req.method==='POST'&&pureManualMatch){
+      const origin=`http://${req.headers.host}`,local=new URL(origin);
+      if(!['127.0.0.1','localhost'].includes(local.hostname)||local.port!==String(port)||req.headers['sec-fetch-site']==='cross-site'||req.headers.origin&&req.headers.origin!==local.origin)return json(res,403,{error:'仅允许当前本机控制台打开普通浏览器'});
+      if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))return json(res,415,{error:'请使用本机 JSON 操作'});
+      const [,id,platform]=pureManualMatch,task=taskById(tasks,id);
+      if(!task)return json(res,404,{error:'任务不存在'});
+      await bodyJson(req);
+      try{
+        let url='https://www.zhaopin.com/',profile;
+        if(platform!=='zhaopin'){
+          await assertTaskOutputOwnership(task);
+          const config=JSON.parse(await fs.readFile(task.publicConfigPath,'utf8'));
+          const manifest=await readOrInitManifest(task);
+          const target=verificationTarget(task,platform,config,manifest);url=target.url;profile=target.profileDir;
+        }
+        return json(res,200,await openPureManualBrowser(platform,url,profile?{profile}:{}));
+      }catch(error){return json(res,error.status||409,{error:error.status?error.message:`普通浏览器打开失败：${error.message}`});}
     }
     const actionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(run|pause|open|archive|confirm-verification|export-latest|refresh-latest)$/);
     if (req.method === 'POST' && actionMatch) {

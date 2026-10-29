@@ -32,11 +32,33 @@ function progressEvent(line) {
 
 export function formatCollectionFlowLog(content) {
   const events = [], phases = new Set(), repeatedErrors = new Map();
+  let jsonDepth=0,jsonString=false,jsonEscape=false,inJson=false,tailSummary=false;
+  const consumeJson=text=>{
+    for(const char of text){
+      if(jsonEscape){jsonEscape=false;continue;}
+      if(jsonString){if(char==='\\')jsonEscape=true;else if(char==='"')jsonString=false;continue;}
+      if(char==='"')jsonString=true;
+      else if(char==='{'||char==='[')jsonDepth++;
+      else if(char==='}'||char===']')jsonDepth--;
+    }
+  };
   for (const raw of String(content || '').replace(/\r\n?/g, '\n').split('\n')) {
     const line = raw.trim();
     if (!line) continue;
     const timestamp = line.match(/^(\[\d{4}\/\d{1,2}\/\d{1,2} [\d:]+\])\s*/)?.[0] || '';
     const body = line.slice(timestamp.length);
+    // Worker summaries are machine data, not execution events. Logs are read
+    // as a bounded tail, so the first line may start inside a JSON string.
+    const embeddedTail=/"(?:platforms|acquisition|continuation|scheduling|stopChannel|conditionScoped|resolved_at|raw_row_count)"\s*:/.test(body);
+    const startsSummary=!inJson&&(body.startsWith('{')||embeddedTail);
+    if(startsSummary){
+      events.push(timestamp+'渠道执行摘要已保存，结果与异常请查看渠道明细');tailSummary=!body.startsWith('{');inJson=true;
+    }
+    if(inJson){
+      if(!startsSummary&&(timestamp||/^\[(?:面经流程|来源冷却|错误|采集)/.test(body)||/^(?:\w+ failed |\w+ complete: |(?:Type|Syntax|Range)?Error:|▶|启动阶段|开始采集|断点续采)/.test(body)||progressEvent(body))){
+        inJson=false;jsonDepth=0;jsonString=false;jsonEscape=false;tailSummary=false;
+      }else{if(!tailSummary){consumeJson(body);if(jsonDepth<=0&&!jsonString)inJson=false;}continue;}
+    }
     // A manual resume is a new execution, so show its phases again.
     if (/^(?:▶|启动阶段|开始采集|断点续采)/.test(body)) { phases.clear(); repeatedErrors.clear(); }
     const phase = progressEvent(body);
@@ -46,6 +68,14 @@ export function formatCollectionFlowLog(content) {
     }
     // The output path is already displayed below the log.
     if (/^输出目录[：:]/.test(body)) continue;
+    // End-of-round totals are historical snapshots, not current database
+    // counts. Keep the execution outcome without presenting stale statistics.
+    const ended = body.match(/^\[目标执行结束\]\s*([^；;]+)[；;]\s*有效去重\d+条[，,]\s*候选入库\d+条[。.]?$/);
+    if (ended) { events.push(timestamp + `本轮执行结束：${ended[1]}；当前统计请查看岗位数据`); continue; }
+    if (/^\[目标续轮\]/.test(body)) {
+      events.push(timestamp + body.replace(/有效去重\d+条[；;]\s*/, ''));
+      continue;
+    }
     if (/^\[接口执行计划\]/.test(body)) { events.push(timestamp + '已加载各渠道取数方式与分页预算'); continue; }
     const complete = body.match(/^(shixiseng|iguopin|mohrss|jobonline|job51|zhaopin|liepin) complete: \d+$/);
     if (complete) { events.push(timestamp + names[complete[1]] + '：本轮渠道处理结束'); continue; }

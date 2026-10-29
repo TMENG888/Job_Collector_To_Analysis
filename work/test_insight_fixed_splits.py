@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from train_insight_classifier import train
+from train_insight_classifier import train, InsufficientClassSamples
 
 
 class FixedSplitTests(unittest.TestCase):
@@ -75,6 +75,26 @@ class FixedSplitTests(unittest.TestCase):
     def test_grouping_body_mismatch_fails(self):
         with self.assertRaisesRegex(ValueError, '固定去重语料'):
             self.execute('tamper', lambda d: d['grouping_samples'][0].update(body='tampered'))
+
+    def test_sampling_hints_are_not_features_or_threshold_inputs(self):
+        original = self.execute('without-hints')
+        def hint(data):
+            data['sampling'] = dict(version='schema-stratified-v1', metricsBasis='enriched, not population accuracy')
+            for row in data['samples']:
+                row['sampling'] = dict(stratum='target_candidate', title=['sampling-only-canary'])
+        hinted = self.execute('with-hints', hint)
+        for key in ['tfidf', 'head', 'threshold', 'input_preprocessing']:
+            self.assertEqual(original[key], hinted[key])
+        self.assertEqual(hinted['provenance']['sampling']['version'], 'schema-stratified-v1')
+
+    def test_split_shortage_keeps_group_counts(self):
+        def shortage(data):
+            for row in data['samples']:
+                row['label'] = 'exclude'
+        with self.assertRaises(InsufficientClassSamples) as failure:
+            self.execute('shortage', shortage)
+        self.assertEqual(failure.exception.counts['train']['positive'], 0)
+        self.assertIn('标签已保留', str(failure.exception))
 
 
 if __name__ == '__main__':

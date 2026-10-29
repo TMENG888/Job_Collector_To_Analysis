@@ -6,7 +6,9 @@ export {parseOriginalSalary} from './job_salary_parser.mjs';
 const quantile=(values,p)=>{if(!values.length)return null;const sorted=[...values].sort((a,b)=>a-b),pos=(sorted.length-1)*p,i=Math.floor(pos);return sorted[i]+(sorted[Math.min(i+1,sorted.length-1)]-sorted[i])*(pos-i);};
 function groupStatistics(rows){
   const values=rows.map(j=>j.original_salary.midpoint),count=values.length;
-  return {count,published:count>=5,median:count>=5?quantile(values,.5):null,p25:count>=5?quantile(values,.25):null,p75:count>=5?quantile(values,.75):null,
+  return {count,descriptive_available:count>0,small_sample:count>0&&count<5,published:count>=5,
+    median:quantile(values,.5),quote_min:count?rows.reduce((min,j)=>Math.min(min,j.original_salary.min),Infinity):null,quote_max:count?rows.reduce((max,j)=>Math.max(max,j.original_salary.max),-Infinity):null,
+    raw_quotes:count<5?rows.map(j=>j.original_salary.raw):[],p25:count>=5?quantile(values,.25):null,p75:count>=5?quantile(values,.75):null,
     period_inferred_rows:rows.filter(j=>j.original_salary.period_inferred).length,pay_months_distribution:rows.reduce((out,j)=>{const p=j.original_salary.pay_months,key=p?`${p.min}${p.max!==p.min?'-'+p.max:''}薪`:'未公开';out[key]=(out[key]||0)+1;return out;},{})};
 }
 const fmt=(value,period)=>period==='month'?`${(value/1000).toFixed(1)}K/月`:period==='year'?`${(value/10000).toFixed(1)}万元/年`:`${Math.round(value)}${goalLabels[period]}`;
@@ -47,11 +49,11 @@ export function buildSalaryBenchmark(jobs,{goal={},resumeSkills=[],hasResume=fal
   const suggestion=publish&&goal.analysis_mode!=='market'?{kind:'谈判参考，非个人薪资预测',unit,opening:primary.median,
     negotiable:{min:primary.p25,max:primary.p75},reasons:[`同条件${primary.count}条原始${goalLabels[unit]}报价的中点分布`,...(hasResume?[`简历与样本岗位有${skillEvidence.length}项技术交集：${skillEvidence.join('、')}；提及不代表已核验能力`]:['尚无本轮可用简历，仅给市场谈判锚点'])],
     warning:'不是保底价或录用保证；取决于技术面试、职责、公司预算及福利，区间下沿不代表个人最低接受价'}:null;
-  const lines=[`${goal.analysis_mode==='market'?'市场统计范围':'求职目标'}：${goalLabels[goal.stage]||'待明确'}${goal.graduation_year&&!['all','formal','social'].includes(goal.stage)?` · ${goal.graduation_year}届`:''}${goal.city?` · ${goal.city}`:' · 城市未限定'}${goal.education?` · ${goal.education}`:''}${goal.roles?.length?` · ${goal.roles.join('、')}`:''}。`];
+  const lines=[`${goal.analysis_mode==='market'?'市场统计范围':'求职目标'}：${goalLabels[goal.stage]||'待明确'}${goal.graduation_year&&!['all','formal','social'].includes(goal.stage)?` · ${goal.graduation_year}届`:''}${cities.length?` · ${cities.join('、')}`:' · 城市未限定'}${goal.education?` · ${goal.education}`:''}${goal.roles?.length?` · ${goal.roles.join('、')}`:''}。`];
   if(goal.unit_conflict)lines.push('你同时提到“一天报价”和秋招：正式校招按月薪／年包分析，日薪只用于提前实习，不混算。');
   lines.push(`当前资格筛选范围${jobs.length}条；薪资对标纳入${eligible.length}条${goal.stage==='campus'&&goal.graduation_year?'明确匹配毕业届次的岗位':''}，${unknownCohort.length}条届次未明确（不进入指定届次主统计）。`);
   if(excluded.education_unknown||excluded.salary_quality)lines.push(`准入排除：学历门槛未知或不满足 ${excluded.education_unknown} 条，薪资缺失／疑似异常待复核 ${excluded.salary_quality} 条；不删除原始数据，原因可能重叠。`);
-  for(const [period,s] of Object.entries(groups))if(s.count)lines.push(`${goalLabels[period]}：${s.count}条原始报价；${s.published?`报价中点中位数${fmt(s.median,period)}，25%–75%为${fmt(s.p25,period)}—${fmt(s.p75,period)}`:'不足5条，暂不发布市场分位数'}${s.period_inferred_rows?`；${s.period_inferred_rows}条月薪周期按招聘格式推定，需向招聘方确认`:''}。`);
+  for(const [period,s] of Object.entries(groups))if(s.count)lines.push(`${goalLabels[period]}：${s.count}条原始报价；报价中点中位数${fmt(s.median,period)}；原始报价范围${fmt(s.quote_min,period)}—${fmt(s.quote_max,period)}；${s.published?`25%–75%为${fmt(s.p25,period)}—${fmt(s.p75,period)}`:`小样本，仅供本次参考；原始报价：${s.raw_quotes.join('、')}`} ${s.period_inferred_rows?`；${s.period_inferred_rows}条月薪周期按招聘格式推定，需向招聘方确认`:''}。`);
   if(groups.month.count)lines.push('月薪薪数：'+Object.entries(groups.month.pay_months_distribution).map(([label,count])=>`${label} ${count}条`).join('、')+'。');
   if(!parsed.length)lines.push('当前同条件没有可用的原始薪资，不能据其他届次、实习日薪或社招工资推算你的报价。');
   if(suggestion)lines.push(`谈判建议：可从${fmt(suggestion.opening,unit)}沟通，可谈参考范围${fmt(suggestion.negotiable.min,unit)}—${fmt(suggestion.negotiable.max,unit)}。依据：${suggestion.reasons.join('；')}。${suggestion.warning}。`);

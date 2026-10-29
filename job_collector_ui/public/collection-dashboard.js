@@ -1,31 +1,56 @@
-import {collectionProgress} from './collection-progress.js';
+import {collectionProgress} from './collection-progress.js?v=20261026-statistics';
 import {renderChannelHeartbeat} from './collection-heartbeat.js';
 
 export function renderCollectionDashboard(task, {number, escapeHtml}) {
   const metrics = task.metrics;
+  const stats=metrics.jobStats?.scope==='jobs'?metrics.jobStats:null;
+  const modern=Number.isFinite(metrics.knowledgeRows);
   const info = collectionProgress(task);
   const details = metrics.liveCollection?.details || [];
-  const platformNames = {shixiseng:'实习僧',iguopin:'国聘',mohrss:'公共招聘网',jobonline:'就业在线',job51:'前程无忧',zhaopin:'智联招聘',liepin:'猎聘',yupao:'鱼泡直聘',boss:'BOSS直聘'};
-  const platformRows = task.platforms.map(key=>{
+  const platformNames = {shixiseng:'实习僧',iguopin:'国聘',mohrss:'公共招聘网',jobonline:'就业在线',job51:'前程无忧',zhaopin:'智联招聘',liepin:'猎聘',nowcoder:'牛客岗位',yupao:'鱼泡直聘',boss:'BOSS直聘'};
+  const platforms=[...new Set([...(task.platforms||[]),...(stats?.channels||[]).map(row=>row.key),...(!stats?Object.keys(metrics.liveCollection?.platformCounts||{}).filter(key=>metrics.liveCollection.platformCounts[key]>0):[])])];
+  const platformRows = platforms.map(key=>{
     const records = details.filter(row=>row.platform===key);
     const sum = field=>records.reduce((value,row)=>value+(Number(row[field])||0),0);
-    const count = metrics.liveCollection?.platformCounts?.[key] ?? ({zhaopin:metrics.zhaopinRows,yupao:metrics.yupaoRows,boss:metrics.bossRows})[key];
+    const bucket=stats?.channels.find(row=>row.key===key);
+    const count = stats?(bucket?.rows||0):metrics.liveCollection?.platformCounts?.[key] ?? ({zhaopin:metrics.zhaopinRows,yupao:metrics.yupaoRows,boss:metrics.bossRows})[key];
     const diagnostic=metrics.channelDiagnostics?.[key];
     const heartbeat=metrics.channelHeartbeats?.[key];
     const verification=metrics.channelVerification?.[key];
-    const canVerify=metrics.channelVerification!==undefined&&['job51','liepin'].includes(key)&&((heartbeat?heartbeat.requiresManual===true:diagnostic?.status==='manual')||verification&&verification.state!=='verified');
+    const manualPlatform=['job51','liepin','zhaopin'].includes(key);
+    const canVerify=manualPlatform&&(metrics.channelVerification!==undefined||heartbeat?.requiresManual===true||diagnostic?.status==='manual');
     const managedVerification=verification&&verification.mode!=='ordinary';
     const checking=verification?.state==='checking';
     const checked=['manual_checked','checking','recheck_failed'].includes(verification?.state);
-    const verifyLabel='官网核对 · 普通 Edge';
+    const verifyLabel='打开登录/验证窗口';
     const disabled=checking?' disabled aria-disabled="true"':'';
-    const sessionAction=verification?.state==='recheck_failed'&&['session_required','verification_required','auth_required','login_required'].includes(verification.failureCode)?`<button type="button" class="channel-verify-control" data-action="verify-session-${key}" title="打开采集器自己的会话，请在该窗口手动登录或验证；不会复制普通 Edge 的登录资料">打开采集会话</button>`:'';
-    const status=canVerify?`<span class="channel-verification-actions" aria-busy="${checking}"><button type="button" class="channel-verify-trigger${checked?'':' has-errors'}" data-action="verify-open-${key}" title="打开普通 Edge；登录不自动同步到采集会话" aria-label="打开${escapeHtml(platformNames[key])}普通 Edge 官网窗口"${disabled}>${escapeHtml(verifyLabel)} <span aria-hidden="true">↗</span></button>${managedVerification||!checked?`<button type="button" class="channel-verify-control" data-action="verify-finish-${key}" title="${managedVerification?'核验官网真实成功搜索；不自动续采':'保存人工核对状态，不代表采集接口已恢复'}"${disabled}>${managedVerification?'完成验证':'已核对'}</button>`:''}${!managedVerification?`<button type="button" class="channel-verify-control" data-action="verify-recheck-${key}" title="检查采集器使用的会话，可能打开该会话窗口；不启动整项采集，遇验证即停"${disabled}>${checking?'复检中…':'复检采集会话'}</button>`:''}${managedVerification||verification?.state==='manual_check'?`<button type="button" class="channel-verify-control" data-action="verify-close-${key}" title="${managedVerification?'断开采集会话验证连接':'收起状态，不关闭普通浏览器'}"${disabled}>${managedVerification?'断开':'收起'}</button>`:''}</span>${verification?.state==='recheck_failed'?`<small class="channel-verification-reason">${escapeHtml(verification.reason||'请核对采集会话')}</small>`:''}`:diagnostic&&diagnostic.status!=='unknown'?`<span class="${['failed','manual'].includes(diagnostic.status)?'has-errors':''}"${diagnostic.reason?` title="${escapeHtml(diagnostic.reason)}"`:''}>${escapeHtml(diagnostic.label)}${diagnostic.reason?` · ${escapeHtml(diagnostic.reason)}`:''}</span>`:'';
-    const detailSummary=records.length?`成功 <b>${number(sum('successful'))}</b> · <span class="${sum('failed')?'has-errors':''}">待续采 ${number(sum('failed'))}</span>`:'';
+    const sessionAction='';
+    const zhaopinStatus=`<span class="channel-verification-actions" aria-busy="${checking}"><button type="button" class="channel-verify-trigger${checked?'':' has-errors'}" data-action="session-open-zhaopin" title="用智联专用 Chrome 配置打开；人工完成登录/验证后点“已处理”"${disabled}>打开处理窗口 <span aria-hidden="true">↗</span></button><button type="button" class="channel-verify-control" data-action="session-process-zhaopin" title="保存当前智联会话、清理本地冷却并标记已验证；不自动启动采集"${disabled}>已处理</button>${verification?`<button type="button" class="channel-verify-control" data-action="session-close-zhaopin" title="断开登录连接；窗口和登录资料保留"${disabled}>收起</button>`:''}${verification?.state==='verified'?`<button type="button" class="channel-verify-control" data-action="session-resume-zhaopin" title="只续采智联，保留其他渠道断点"${disabled}>继续采集</button>`:''}</span>${verification?.reason?`<small class="channel-verification-reason">${escapeHtml(verification.reason)}</small>`:''}`;
+    const status=canVerify?(key==='zhaopin'?zhaopinStatus:`<span class="channel-verification-actions" aria-busy="${checking}"><button type="button" class="channel-verify-trigger${checked?'':' has-errors'}" data-action="verify-open-${key}" title="打开该渠道的采集会话浏览器；人工完成后点“已处理”" aria-label="打开${escapeHtml(platformNames[key])}处理窗口"${disabled}>打开处理窗口 <span aria-hidden="true">↗</span></button>${key==='job51'||key==='liepin'?`<button type="button" class="channel-verify-control" data-action="manual-open-${key}" title="用不带调试端口的普通 Chrome 打开；人工完成登录/验证后关闭窗口，再点复检采集会话"${disabled}>普通浏览器登录</button>`:''}<button type="button" class="channel-verify-control" data-action="session-process-${key}" title="核验官网真实搜索并标记已验证；不自动启动采集"${disabled}>已处理</button><button type="button" class="channel-verify-control" data-action="verify-recheck-${key}" title="重新检查该渠道的采集会话；不启动整项采集，遇验证即停"${disabled}>${checking?'复检中…':'复检采集会话'}</button>${verification?`<button type="button" class="channel-verify-control" data-action="verify-close-${key}" title="断开该渠道的采集会话验证连接"${disabled}>断开</button>`:''}${verification?.state==='verified'?`<button type="button" class="channel-verify-control" data-action="session-resume-${key}" title="只续采该渠道，保留其他渠道断点"${disabled}>继续采集</button>`:''}</span>${verification?.state==='recheck_failed'?`<small class="channel-verification-reason">${escapeHtml(verification.reason||'请核对采集会话')}</small>`:''}`):diagnostic&&diagnostic.status!=='unknown'?`<span class="${['failed','manual'].includes(diagnostic.status)?'has-errors':''}"${diagnostic.reason?` title="${escapeHtml(diagnostic.reason)}"`:''}>${escapeHtml(diagnostic.label)}${diagnostic.reason?` · ${escapeHtml(diagnostic.reason)}`:''}</span>`:'';
+    const detailSummary=!modern&&records.length?`成功 <b>${number(sum('successful'))}</b> · <span class="${sum('failed')?'has-errors':''}">待续采 ${number(sum('failed'))}</span>`:'';
     const channelStatus=heartbeat&&!canVerify?'':status+sessionAction;
     const processing=channelStatus&&detailSummary?`${channelStatus}<br><small>${detailSummary}</small>`:channelStatus||detailSummary||(heartbeat?'—':escapeHtml(diagnostic?.label||'状态暂未提供'));
-    return `<tr><td>${escapeHtml(platformNames[key]||key)}</td><td>${count==null?'—':`${number(count)} 条`}</td><td>${renderChannelHeartbeat(heartbeat,{escapeHtml})}</td><td>${processing}</td></tr>`;
+    return `<tr><td>${escapeHtml(platformNames[key]||key)}</td><td>${count==null?'—':`${number(count)} 条`}</td>${modern?`<td>${stats?number(bucket?.completeRows||0):'—'}</td>`:''}<td>${renderChannelHeartbeat(heartbeat,{escapeHtml})}</td><td>${processing}</td></tr>`;
   }).join('');
+  if(modern){
+    const total=stats?.rows??metrics.knowledgeRows;
+    const complete=stats?.completeRows,missing=stats?.incompleteRows;
+    const stamp=stats?.updatedAt&&Number.isFinite(Date.parse(stats.updatedAt))?new Date(stats.updatedAt).toLocaleTimeString('zh-CN'):null;
+    const goal=!task.collectUntilExhausted&&task.targetRows>0?`<p class="job-goal">资料完整目标 ${number(task.targetRows)} 条${info.percent==null?'':` · ${info.percent}%`}</p>`:'';
+    return `<section class="collection-dashboard job-statistics" aria-label="岗位数据统计" data-statistics-scope="jobs">
+      <header class="job-statistics-head"><h3>岗位数据</h3><span>${stamp?`统计更新 ${escapeHtml(stamp)}`:'等待岗位数据同步'}</span></header>
+      <dl class="job-statistics-strip">
+        <div class="job-statistic-primary"><dt>已入库</dt><dd>${number(total)}<small>条</small></dd></div>
+        <div><dt>资料完整</dt><dd>${complete==null?'—':number(complete)}<small>条</small></dd></div>
+        <div><dt>待补全</dt><dd class="${missing?'is-incomplete':''}">${missing==null?'—':number(missing)}<small>条</small></dd></div>
+      </dl>${goal}
+      <p class="job-statistics-note">按平台岗位 ID 去重，不含面经；资料完整不等于岗位匹配。</p>
+      ${metrics.jobStatsError?'<p class="job-statistics-error" role="alert">资料完整统计暂不可用，请刷新重试。</p>':''}
+      <details class="collection-channel-details" id="collection-channels-${escapeHtml(task.id||'current')}"><summary>岗位渠道明细<span>${platforms.length} 个渠道</span></summary>
+        <div class="table-scroll"><table class="insight-table job-channel-table"><thead><tr><th scope="col">平台</th><th scope="col">已入库</th><th scope="col">资料完整</th><th scope="col">采集状态</th><th scope="col">处理操作</th></tr></thead><tbody>${platformRows}</tbody>${stats?`<tfoot><tr><th scope="row">合计</th><td>${number(stats.rows)} 条</td><td>${number(stats.completeRows)}</td><td colspan="2"></td></tr></tfoot>`:''}</table></div>
+      </details>
+    </section>`;
+  }
   const native=Number.isFinite(metrics.knowledgeRows);
   const stages = native?[['collection','多平台采集']]:[['collection','多平台采集'], ['delivery','导出交付']];
   const collectionStages = ['collection','public','zhaopin','yupao','boss'];

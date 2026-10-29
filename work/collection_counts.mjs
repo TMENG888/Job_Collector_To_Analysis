@@ -1,5 +1,5 @@
 export const publicCountChannels=['shixiseng','iguopin','mohrss','jobonline','job51','liepin'];
-const extraChannels=['zhaopin','yupao','boss'];
+const extraChannels=['zhaopin','yupao','boss','nowcoder'];
 const count=value=>Number.isFinite(Number(value))?Math.max(0,Number(value)):0;
 // The integrated manifest total already contains session channels. Sum distinct
 // channel buckets, never add zhaopin to that integrated total a second time.

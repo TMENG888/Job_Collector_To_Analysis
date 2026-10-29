@@ -18,7 +18,9 @@ try{
  const config={task_id:task.id,platforms:{zhaopin:{enabled:true,cities:[city],maxPages:60,maxRows:50000}}};
  await write(task.publicConfigPath,config);await write(task.zhaopinConfigPath,{task_id:task.id,acquisitionMode:'session_json_api',cities:[city],maxPages:60});
  const file=zhaopinSessionCheckpointPath(dir,keyword,city);
- let saved={task_id:task.id,keyword,city,rows:[{job_id:'one'}],completed:true,nextPage:null,acquisition_mode:'session_json_api'};
+ // Only an explicit server end is terminal: count can be an estimate.
+ const terminal={version:1,platform:'zhaopin',keyword,cityCode:city.code,total:1,rows:1,page:1,received:1,consumedAll:true,serverEnd:true,reason:'server_end'};
+ let saved={task_id:task.id,keyword,city,total:1,rows:[{job_id:'one'}],completed:true,nextPage:null,pagination:terminal,acquisition_mode:'session_json_api'};
  await write(file,saved);
  // A stale legacy snapshot cannot overrule the active transport's cursor.
  await write(path.join(dir,'并发渠道状态.json'),{task_id:task.id,results:[{platform:'zhaopin',code:44}]});

@@ -1,10 +1,18 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {randomUUID} from 'node:crypto';
 import {createAssistantCredentialStore,assistantProviders} from './job_assistant_credentials.mjs';
 import {writeJsonAtomic} from './collector_storage.mjs';
 
 // These are budgeting assumptions, NOT a provider tariff or billing receipt.
 export const recruiterPrices=Object.freeze({input:4,output:8,basis:'预算假设：输入4、输出8元/百万Token；非官方报价、非账单，未计缓存折扣'});
+export function parseRecruiterJson(content){
+  if(typeof content!=='string')throw Error('DeepSeek返回内容不是文本；用量已记录');
+  const trimmed=content.trim(),fence=trimmed.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+  let parsed;try{parsed=JSON.parse(fence?fence[1]:trimmed);}catch{throw Error('DeepSeek返回非JSON；用量已记录，未重试');}
+  if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw Error('DeepSeek输出结构无效；用量已记录');
+  return parsed;
+}
 export function createRecruiterModel({dataDir,runtimeDir,credentials=createAssistantCredentialStore(path.join(dataDir,'assistant_private/model.json')),fetcher=fetch}={}){
   const file=path.join(runtimeDir,'deepseek-usage.json');let busy=false,controller=null;
   async function usage(){
@@ -34,9 +42,10 @@ export function createRecruiterModel({dataDir,runtimeDir,credentials=createAssis
       const estimate=(u.prompt_tokens*recruiterPrices.input+u.completion_tokens*recruiterPrices.output)/1e6;
       log.input+=u.prompt_tokens;log.output+=u.completion_tokens;log.estimate+=estimate;log.inFlight=false;await writeJsonAtomic(file,log);if(budget)budget.spent+=estimate-reserve;
       signal?.throwIfAborted();local.signal.throwIfAborted();
+      await fs.mkdir(path.join(runtimeDir,'responses'),{recursive:true});
+      await writeJsonAtomic(path.join(runtimeDir,'responses',randomUUID()+'.json'),{id:payload.id,model:payload.model,usage:u,finishReason:payload.choices?.[0]?.finish_reason,content:payload.choices?.[0]?.message?.content,recordedAt:new Date().toISOString()});
       if(payload.choices?.[0]?.finish_reason!=='stop')throw Error('DeepSeek输出截断或未正常完成；用量已记录，不采用部分结果');
-      let parsed;try{parsed=JSON.parse(payload.choices?.[0]?.message?.content);}catch{throw Error('DeepSeek返回非JSON；用量已记录，未重试');}
-      if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw Error('DeepSeek输出结构无效；用量已记录');
+      const parsed=parseRecruiterJson(payload.choices?.[0]?.message?.content);
       Object.defineProperties(parsed,{_usage:{value:{input:u.prompt_tokens,output:u.completion_tokens,estimate}},_model:{value:config.JOB_ASSISTANT_MODEL}});return parsed;
     }finally{busy=false;if(controller===local)controller=null;}
   }

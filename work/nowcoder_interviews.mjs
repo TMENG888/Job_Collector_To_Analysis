@@ -9,6 +9,8 @@ import {channelErrorDiagnostic} from './channel_collection_diagnostics.mjs';
 
 const base='https://gw-c.nowcoder.com';
 const failure=(message,code='nowcoder_contract')=>Object.assign(Error(message),{code,stopChannel:true});
+const searchContractVersion=2;
+const legacySearchFailure=block=>block?.code==='invalid_response'&&block?.message==='搜索结果均为未知内容类型，停止并保留原始断点';
 // 断网/解析失败/超时/取消只是本机连通性问题，不是渠道契约变化。
 // 旧告警 stato.blocked 永不失效时，网络恢复后通道仍会被永久封锁；
 // 这里为“可自愈”错误设定观察窗，窗口过后自动解除并记录重试次数。
@@ -77,7 +79,18 @@ export function parseInterviewSearch(body){
   assertBusiness(body);
   const data=body.data;
   if(!data||!Array.isArray(data.records)||!Number.isSafeInteger(data.totalPage)||data.totalPage<0||!Number.isSafeInteger(data.total)||data.total<0)throw failure('牛客搜索接口结构发生变化，停止并保留断点');
-  return data;
+  // The official `all` search mixes an auxiliary company recommendation into
+  // records even when total=0. It is not a post and is not included in total.
+  // Recognize only the observed company schema; unknown cards still stop us.
+  const records=data.records.filter(record=>{
+    const item=record?.data??record;
+    if([74,250].includes(Number(item?.contentType??record?.contentType)))return true;
+    const company=item?.searchCompany;
+    if(Number(record?.rc_type)===240&&item?.contentType==null&&record?.contentType==null&&!item?.momentData&&!item?.contentData&&company&&typeof company==='object'&&typeof company.companyName==='string'&&company.companyName.trim()&&typeof company.creditCode==='string'&&company.creditCode.trim()&&Array.isArray(item.relativeCompanyList))return false;
+    throw failure('牛客搜索包含未识别的结果结构，已保留当前页断点','api_schema_changed');
+  });
+  if(data.total===0&&(records.length||data.totalPage!==0)||data.total>0&&data.totalPage===0)throw failure('牛客搜索正文数量与分页信息不一致，已保留断点','api_schema_changed');
+  return {...data,records,auxiliaryRecords:data.records.length-records.length};
 }
 function assertBusiness(body){
   if(!body||Number(body.code)!==0){
@@ -95,6 +108,9 @@ export async function readInterviewSnapshot(task,{includePosts=false,now=Date.no
   }
   const settings=taskInterviewSettings(task);
   if(status&&['blocked','budget_paused'].includes(status.status)&&status.errorCode)status.diagnostic=channelErrorDiagnostic([{code:status.errorCode,message:status.reason}]);
+  if(status?.status==='blocked'&&status.searchContractVersion!==searchContractVersion&&legacySearchFailure({code:status.errorCode,message:status.reason})){
+    status.diagnostic={status:'paused',label:'适配器已更新，待续采复检',reason:'已修复公司推荐卡片误判；下次手动采集将从原断点复检，尚未自动恢复采集',code:'adapter_updated'};
+  }
   if(!includePosts)return status?{...status,enabled:settings.enabled===true,settings}:{enabled:settings.enabled===true,status:'ready',candidates:0,details:0,settings};
   const saved=await readJson(paths.checkpoint);
   if(saved&&saved.task_id!==task.id)throw Error('面经断点任务归属不一致');
@@ -130,17 +146,19 @@ export async function collectNowcoderInterviews({taskId,outputDir,settings,reque
     const persist=async(status,extra={})=>{
       state={...state,posts:[...posts.values()],updated_at:new Date().toISOString()};
       await writeJsonAtomic(paths.checkpoint,state);
-      const snapshot={task_id:taskId,pid:process.pid,enabled:true,status,phase,currentKeyword,candidates:posts.size,details:[...posts.values()].filter(x=>x.content_status==='detail').length,pages:Object.values(state.queries).reduce((s,q)=>s+(q.pages||0),0),requests:state.requests,roundRequests:requests,reason,updated_at:state.updated_at,settings:cfg,recoveryRetries:Number(state.recoveryRetries||0),recoverable:state.blocked?isTransientFailureCode(state.blocked.code):false,...extra};
+      const snapshot={task_id:taskId,pid:process.pid,enabled:true,status,phase,currentKeyword,candidates:posts.size,details:[...posts.values()].filter(x=>x.content_status==='detail').length,pages:Object.values(state.queries).reduce((s,q)=>s+(q.pages||0),0),requests:state.requests,roundRequests:requests,reason,updated_at:state.updated_at,settings:cfg,searchContractVersion,recoveryRetries:Number(state.recoveryRetries||0),recoverable:state.blocked?isTransientFailureCode(state.blocked.code):false,...extra};
       await writeJsonAtomic(paths.status,snapshot);
       return snapshot;
     };
-    const recovered=isStaleTransientBlock(state.blocked)?{...state.blocked}:null;
+    const adapterRecovery=legacySearchFailure(state.blocked)&&state.searchContractVersion!==searchContractVersion;
+    const recovered=isStaleTransientBlock(state.blocked)||adapterRecovery?{...state.blocked}:null;
     if(recovered){
       state={...state,blocked:null,recoveredAt:new Date().toISOString(),
         recoveries:[...(state.recoveries||[]),{code:recovered.code,message:recovered.message,blocked_at:recovered.at,at:new Date().toISOString()}].slice(-5),
         recoveryRetries:Number(state.recoveryRetries||0)+1};
       await persist('running');
-      onEvent(`[面经流程] 连通性告警已过观察窗（${recovered.code}），自动重试并沿用现有断点`);
+      if(adapterRecovery)state.searchContractVersion=searchContractVersion;
+      onEvent(adapterRecovery?'[面经流程] 搜索适配器已更新，本次手动采集从原断点复检，不清除已有正文':`[面经流程] 连通性告警已过观察窗（${recovered.code}），自动重试并沿用现有断点`);
     }
     if(state.blocked){reason=state.blocked.message;return persist('blocked',{errorCode:state.blocked.code,recoverable:isTransientFailureCode(state.blocked.code)});}
     const http=request||createPoliteHttpClient({stateDir:process.env.JOB_HTTP_RATE_DIR||path.join(paths.directory,'shared_rate'),minimumIntervalMs:4000,jitterMs:700,attempts:1});

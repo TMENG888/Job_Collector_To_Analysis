@@ -8,6 +8,7 @@ import {parseLiepinResponse} from './direct_liepin_adapter.mjs';
 import {writeJsonAtomic} from './collector_storage.mjs';
 import {liepinCities} from './liepin_cities.mjs';
 import {openOfficialInOrdinaryBrowser} from './official_manual_browser.mjs';
+import {browserProfileRoot} from './managed_browser.mjs';
 import {channelErrorDiagnostic} from './channel_collection_diagnostics.mjs';
 import {saveChannelVerification,readChannelVerification} from './channel_verification_state.mjs';
 import {guard} from './browser_channel_common.mjs';
@@ -22,9 +23,13 @@ export function verificationTarget(task,platform,config,manifest){
   if(config?.task_id!==task.id||manifest?.task_id!==task.id)throw fail('配置或采集清单归属不匹配',400);
   const settings=config.platforms?.[platform];
   if(!settings?.enabled||!Array.isArray(settings.cities)||!settings.cities.length)throw fail('缺少渠道采集配置',400);
+  const keywords=config.keywords||[];
   const errors=(manifest.platforms?.[platform]?.errors||[]).filter(e=>requiresManual(e)&&!e.resolved_at);
-  if(!errors.length)throw fail('当前渠道没有待处理的官网会话问题');
-  const last=errors.at(-1),keywords=config.keywords||[];
+  // A resolved manifest error does not mean the checkpoint is complete. The
+  // operator may still need to re-open the channel after a WAF failure, so a
+  // missing error falls back to the configured search target instead of
+  // refusing to open the same collector browser.
+  const last=errors.at(-1)||{keyword:keywords[0],city:settings.cities[0]};
   const keyword=keywords.includes(last.keyword)?last.keyword:keywords[0];
   const city=settings.cities.find(c=>c.name===last.city?.name)||settings.cities[0];
   if(typeof keyword!=='string'||!keyword.trim()||keyword.length>200||!city?.name)throw fail('搜索条件无效',400);
@@ -36,7 +41,7 @@ export function verificationTarget(task,platform,config,manifest){
     if(!/^\d{6}$/.test(String(city.code)))throw fail('前程无忧城市编码无效',400);
     const target=new URL('https://we.51job.com/pc/search');target.search=new URLSearchParams({jobArea:city.code,keyword,searchType:'2'});url=target.href;
   }
-  return {platform,keyword,city,url,profileDir:settings.browserProfileDir||process.env.LIEPIN_SESSION_PROFILE||DEFAULT_LIEPIN_PROFILE};
+  return {platform,keyword,city,url,profileDir:settings.browserProfileDir||(platform==='job51'?path.join(browserProfileRoot(),'job51'):process.env.LIEPIN_SESSION_PROFILE||DEFAULT_LIEPIN_PROFILE)};
 }
 async function leaseProfile(profile,taskId){
   if(!path.isAbsolute(profile))throw fail('会话目录无效',400);
@@ -132,13 +137,13 @@ export function createCollectorChannelVerification({openContext=openOwnedContext
         }
         // Keep a visible verification/login page open for the human. Never
         // refresh, solve a challenge or automatically restart collection.
-        return {...snapshot(entry),message:preserveNativePage?'已连接原普通 Chrome 窗口，未刷新；请手动完成验证或搜索':'官网窗口已打开；请手动验证，完成后点击“完成验证”'};
+        return {...snapshot(entry),message:preserveNativePage?'已连接采集器正在使用的 Chrome 窗口，未刷新；请手动完成验证或搜索':'采集会话窗口已打开（与后续复检/采集使用同一浏览器）；人工完成后点击“已处理”'};
       }catch(error){if(entry)await closeEntry(entry).catch(()=>{});throw Object.assign(fail(error.status||error.code==='session_required'?error.message:'打开官网会话失败，请检查浏览器占用或本机会话配置',error.status||409),{code:error.code||'session_required'});}
       finally{opening.delete(platform);}
     },
     async finish(task,platform){
       const entry=sessions.get(platform);if(!entry||entry.task.id!==task.id)throw fail('当前任务没有对应的验证窗口');
-      if(!entry.ready||!officialPage(platform,entry.page.url()))throw fail('尚未观察到官网搜索成功，请完成验证并在官网手动搜索一次');
+      if(!entry.ready||!officialPage(platform,entry.page.url()))throw fail('尚未观察到官网搜索成功；请在该窗口刷新并完成验证，确认岗位列表出现后再点“已处理”');
       if(platform==='liepin')await assertWebsitePage(entry.page);
       else{const {guard}=await import('./browser_channel_common.mjs');await guard(entry.page);}
       const file=path.join(task.outputDir,'采集清单.json');const manifest=JSON.parse(await fs.readFile(file,'utf8'));

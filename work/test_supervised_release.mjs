@@ -21,7 +21,7 @@ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'supervised-release-test-'));
 assert.equal(classifierRoot(dir),process.env.JOB_INSIGHT_CLASSIFIER_DIR||path.join(dir,'insight_classification'));
 const service=createInsightSupervised(dir,{fetcher:()=>{throw Error('network is forbidden in this test');}});
 const unknown=await service.status('kb://task/synthetic','没有训练的岗位');
-assert.equal(unknown.screening.mode,'supervised-only');assert.equal(unknown.screening.ready,false);assert.match(unknown.screening.error,/不会使用规则筛选/);
+assert.equal(unknown.screening.mode,'supervised-only');assert.equal(unknown.screening.ready,false);assert.match(unknown.screening.error,/尚无合格专用分类器/);
 const known=await service.status('kb://task/synthetic','数据分析');
 assert.equal(known.screening.source,'released-supervised');assert.equal(known.screening.ready,true);
 assert.equal(await service.resolve('kb://task/synthetic','没有训练的岗位'),null);

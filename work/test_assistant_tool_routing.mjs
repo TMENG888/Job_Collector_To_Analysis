@@ -10,7 +10,9 @@ import {publicToolFailure,toolError} from './job_agent_task.mjs';
 
 // Entirely simulated models, knowledge, collection controller and localhost HTTP.
 // No credentials, production data, collector endpoints or external APIs are used.
-const question='目前爬虫岗位大概率会做什么样的业务去赚钱呢';
+// Explicit KB query exercises the evidence-tool loop. General career questions
+// now use the subquestion planner (covered by test_assistant_consultation).
+const question='请检索爬虫工程师岗位并分析当前库的业务证据';
 const careerQuestions=[question,'爬虫工程师通常做哪些业务？','爬虫工程师是做什么的','爬虫岗位都有什么日常工作','数据采集工程师主要交付什么','网页采集岗位的业务方向是什么','网络爬虫工程师能去哪些公司','目前爬虫岗位薪资行情怎么样','请解释爬虫工程师的商业模式','爬虫岗位技能要求是什么？','帮我看看爬虫岗位如何盈利','爬虫工程师的职业前景如何','爬虫工程师怎么开始找工作','数据采集岗位的项目经历怎么写'];
 for(const message of careerQuestions){assert.equal(parseCollectionIntent(message).domain,false,message);assert.equal(routeCollectionRequest(message),false,message);assert.equal(authorizeCollectionAction(message,'create_start').ok,false,message);}
 const managementQuestions=['查看采集任务列表','查询爬虫采集任务最新进度','查询爬虫岗位任务进度','查询爬虫工程师任务最新状态','爬虫工程师采集任务的日志','爬虫工程师采集任务最新进度','帮我采集爬虫工程师岗位','创建爬虫工程师采集任务','启动爬虫任务','暂停这个采集任务','查看爬虫任务日志','导出最新采集数据','确认','重新准备采集方案'];

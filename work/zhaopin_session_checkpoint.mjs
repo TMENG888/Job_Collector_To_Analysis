@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {hasVerifiedSessionCompletion,sessionAuditStartPage} from './session_pagination_health.mjs';
 const safe=value=>String(value).replace(/[\\/:*?"<>|]/g,'_');
 // One contract shared by the worker and its scheduler. Never adopt a cursor
 // belonging to another task, query, or transport merely because its name fits.
@@ -11,7 +12,8 @@ export function validateZhaopinSessionCheckpoint(saved,{taskId,keyword,city}){
   if(saved.completed===true&&saved.nextPage!=null)throw Error('智联会话断点完成标记与页码矛盾');
 }
 export function zhaopinSessionCheckpointState(saved,settings={}){
-  if(saved.completed===true)return 'query_finished';
+  if(hasVerifiedSessionCompletion(saved,'zhaopin'))return 'query_finished';
+  if(saved.completed===true)return sessionAuditStartPage(saved,'zhaopin')>Number(settings.maxPages||Infinity)?'page_limit':'pending';
   if(Number(settings.maxRows)>0&&saved.rows.length>=Number(settings.maxRows))return 'row_limit';
   if(Number(saved.nextPage||1)>Number(settings.maxPages||Infinity))return 'page_limit';
   return 'pending';

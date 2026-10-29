@@ -25,8 +25,11 @@ import {collectMohrssCandidates} from './mohrss_related_search.mjs';
 import {withChannelHeartbeat} from './collector_channel_heartbeat.mjs';
 import {channelErrorDiagnostic} from './channel_collection_diagnostics.mjs';
 import {jsonRequestBody} from './json_request_body.mjs';
-import {nativeTaskCounts} from './collector_native_sink.mjs';
+import {nativeTaskCounts,writeNativeChannelRows} from './collector_native_sink.mjs';
+import {createCollectorProgressSink} from './collector_progress_sink.mjs';
+import {collectionRequestProfile} from './collection_channel_profiles.mjs';
 import {zhaopinSessionCheckpointPath,validateZhaopinSessionCheckpoint} from './zhaopin_session_checkpoint.mjs';
+import {hasVerifiedSessionCompletion,sessionCompletionNeedsAudit,sessionAuditStartPage} from './session_pagination_health.mjs';
 
 const configPath = path.resolve(process.argv[2] || 'work/job_collect_config.json');
 const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
@@ -51,10 +54,9 @@ await fs.mkdir(checkpointDir, { recursive: true });
 
 const collectedAt = new Date().toISOString();
 const directHttpRequest=createPoliteHttpClient({stateDir:process.env.JOB_HTTP_RATE_DIR||path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../ui_data/http_rate_limits'),minimumIntervalMs:config.request?.minimumIntervalMs,jitterMs:config.request?.jitterMs,attempts:config.request?.attempts});
-// 智联会话接口单独限速：风控按短窗口请求量判定（实测约 30 次触发 isVerification）。
-// 最小间隔默认 8 秒；突发阈值默认 15 次即真实休息 15 分钟，靠断点续采补齐剩余页，
-// 而不是重放已采页面把风控额度烧光。
-const zhaopinRequest=createPoliteHttpClient({stateDir:process.env.JOB_HTTP_RATE_DIR||path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../ui_data/http_rate_limits'),minimumIntervalMs:Number(process.env.JOB_ZHAOPIN_INTERVAL_MS)||8000,jitterMs:2000,attempts:1,burstSize:Number(process.env.JOB_HTTP_BURST_SIZE)||15,burstRecoveryMs:Number(process.env.JOB_HTTP_BURST_RECOVERY_MS)||900000});
+// Restore configured shared pacing from the successful HTTP collector. Long
+// voluntary burst rests are opt-in; actual website verification/cooldowns remain.
+const zhaopinRequest=createPoliteHttpClient({stateDir:process.env.JOB_HTTP_RATE_DIR||path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../ui_data/http_rate_limits'),...collectionRequestProfile('zhaopin',config.request)});
 const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const pendingOutputs = [];
@@ -385,32 +387,38 @@ async function collectZhaopin(keyword, city) {
   const savedRows=Array.isArray(saved.rows)?saved.rows:[];
   const known=new Set(savedRows.map(row=>String(row.job_id)));
   // 断点续采：已完成的条件直接复用断点，不再重放分页（重放会重复消耗风控额度且拿不到新增）。
-  const resumePage=Math.max(1,Number(saved.nextPage)||1);
-  if(saved.completed===true||known.size>=rowLimit||resumePage>pageLimit){
-    console.log(`zhaopin(session) ${keyword}/${city.name}: ${saved.completed?'断点已完成':'已达本轮分页或行数保护'}，复用 ${savedRows.length}/${saved.total||'-'} 条，不重放分页`);
+  const verified=hasVerifiedSessionCompletion(saved,'zhaopin'),audit=sessionCompletionNeedsAudit(saved,'zhaopin');
+  const resumePage=audit?sessionAuditStartPage(saved,'zhaopin'):Math.max(1,Number(saved.nextPage)||1);
+  const progress=createCollectorProgressSink({enabled:process.env.JOB_COLLECTOR_NATIVE_STORE==='1',write:rows=>writeNativeChannelRows(outputDir,currentTaskId,rows)});
+  await progress.append(savedRows);
+  if(verified||known.size>=rowLimit||resumePage>pageLimit){
+    console.log(`zhaopin(session) ${keyword}/${city.name}: ${verified?'断点已完成':'已达本轮分页或行数保护'}，复用 ${savedRows.length}/${saved.total||'-'} 条，不重放分页`);
     await writeJsonAtomic(comboFile('智联招聘',keyword,city.name),{task_id:config.task_id,keyword,city,total:saved.total||savedRows.length,records:savedRows});
+    await progress.flush();
     return savedRows.slice(0,rowLimit);
   }
+  if(audit)console.log(`[断点复核] 智联 ${keyword}/${city.name} 的旧完成标记缺少末页证据；仅复检该条件，保留${savedRows.length}条记录`);
   const session=await loadZhaopinSession({request:zhaopinRequest});
   if(!session)throw Object.assign(new Error('智联缺少本人登录会话；请先运行 zhaopin_login_helper.mjs 登录后保存 cookie'),{code:'session_required',stopChannel:true});
   const result=await collectZhaopinSession(keyword, city, {
     request: zhaopinRequest, session, maxPages:pageLimit, maxRows:rowLimit,
-    startPage:resumePage, seenIds:[...known],
+    startPage:resumePage, seenIds:[...known],previousPagination:audit&&resumePage===1?null:saved.pagination||null,
     onPage:p=>{if(p.page%10===0||p.page<=resumePage+1)console.log(`zhaopin(session) ${keyword}/${city.name}: p${p.page} +${p.added} 累计${p.unique}/${p.total}`);},
     onProgress:async p=>{
       for(const row of p.rows){const id=String(row.job_id);if(!known.has(id)){known.add(id);savedRows.push(row);}}
-      await writeJsonAtomic(checkpointPath,{task_id:config.task_id,keyword,city,total:p.total,rows:savedRows,completed:false,nextPage:p.nextPage,acquisition_mode:'session_json_api'});
+      await writeJsonAtomic(checkpointPath,{task_id:config.task_id,keyword,city,total:p.total,rows:savedRows,completed:p.completed===true,nextPage:p.nextPage,pagination:p.pagination,acquisition_mode:'session_json_api'});
       await writeJsonAtomic(comboFile('智联招聘',keyword,city.name),{task_id:config.task_id,keyword,city,total:p.total,records:savedRows});
+      await progress.append(p.rows);
     },
   }).catch(error=>{
     // 让位（风控校验 / 来源冷却）会中断本条件，但 onProgress 已把前几页逐页写进断点。
     // 这些行必须随错误一起带出去进本轮汇总，否则「断点有、库内无」，只能等下次运行才补上。
     Object.assign(error,{partialRows:savedRows.slice(0,rowLimit||savedRows.length)});
     throw error;
-  });
+  }).finally(()=>progress.flush());
   const merged=[...savedRows];
   for(const row of result.rows){const id=String(row.job_id);if(!known.has(id)){known.add(id);merged.push(row);}}
-  await writeJsonAtomic(checkpointPath,{task_id:config.task_id,keyword,city,total:result.total,rows:merged,completed:result.endReached,nextPage:result.nextPage,pageLimitReached:result.pageLimitReached,acquisition_mode:'session_json_api'});
+  await writeJsonAtomic(checkpointPath,{task_id:config.task_id,keyword,city,total:result.total,rows:merged,completed:result.endReached,nextPage:result.nextPage,pageLimitReached:result.pageLimitReached,pagination:result.pagination,acquisition_mode:'session_json_api'});
   await writeJsonAtomic(comboFile('智联招聘',keyword,city.name),{task_id:config.task_id,keyword,city,total:result.total,records:merged});
   return merged.slice(0,rowLimit);
 }

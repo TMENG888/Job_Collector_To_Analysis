@@ -12,6 +12,11 @@ from sklearn.metrics.pairwise import cosine_similarity
 def digest(value):
     return hashlib.sha256(value.encode('utf8')).hexdigest()
 
+class InsufficientClassSamples(ValueError):
+    def __init__(self, message, counts=None):
+        super().__init__(message)
+        self.counts = counts
+
 def metrics(y, p):
     tp = sum(a == 1 and b == 1 for a, b in zip(y, p))
     tn = sum(a == 0 and b == 0 for a, b in zip(y, p))
@@ -28,7 +33,7 @@ def train(input_path, output_dir):
     data = json.loads(Path(input_path).read_text(encoding='utf8'))
     rows = [r for r in data['samples'] if r['label'] in ['include', 'exclude']]
     if len(rows) < 60:
-        raise ValueError('有效正负标签不足60条，保留标注结果，不训练或替换现有筛选器')
+        raise InsufficientClassSamples('有效正负标签不足60条，保留标注结果，不训练或替换现有筛选器')
     size = len(rows)
     parent = list(range(size))
     def find(i):
@@ -87,7 +92,7 @@ def train(input_path, output_dir):
     y = lambda ids: [int(rows[i]['label'] == 'include') for i in ids]
     counts = {s: {'n':len(ids), 'positive':sum(y(ids)), 'negative':len(ids)-sum(y(ids))} for s,ids in sets.items()}
     if min(counts['train']['positive'], counts['train']['negative']) < 10 or min(counts['validation']['positive'], counts['validation']['negative']) < 3:
-        raise ValueError('按公司与近重复隔离后正负样本不足；请补充样本，不重新抽取测试集以美化指标。分层数量：'+json.dumps(counts))
+        raise InsufficientClassSamples('按公司与近重复隔离后正负样本不足；标签已保留，请补充不同公司、不同职责的样本，不重新抽取测试集以美化指标。', counts)
     # Predeclared, bounded search. Vocabulary sees TRAIN only; choices and the
     # threshold see VALIDATION only. Test labels never enter model selection.
     contracts = ['duties-v1']
@@ -129,11 +134,13 @@ def train(input_path, output_dir):
                  input_contract=selected['input_preprocessing']+'; original JD only; AI category labels as supervision; no training-only AI tags; body80–9000; no search-query/company-id/contact features',
                  provenance=dict(annotation='Qwen3.7-Flash pseudo-labels, not human gold', train_rows=len(sets['train']), validation=validation, test=test,
                                  counts=counts, annotation_schema=data.get('annotationSchema'), corpus_sha256=hashlib.sha256(Path(input_path).read_bytes()).hexdigest(),
+                                 sampling=data.get('sampling'),
                                  selection=selected, scope='dataset and role scoped experimental candidate', grouping='company + exact and cosine>=0.90 near-duplicate body isolation'))
     (out/'model.json').write_text(json.dumps(model,ensure_ascii=False), encoding='utf8')
     predictions = [dict(id=r['id'], split=splits[i], group=find(i), label=r['label'], score=float(scores[i]), prediction='include' if scores[i]>=threshold else 'exclude') for i,r in enumerate(rows)]
     report = dict(eligible=eligible, counts=counts, validation=validation, test=test, threshold=threshold, selection=selected, seconds=time.perf_counter()-started,
                   metrics_basis='held-out Qwen pseudo-label agreement; not independent real-world accuracy', human_metrics=None, annotationSchema=data.get('annotationSchema'),
+                  sampling=data.get('sampling'),
                   fixed_splits=fixed is not None, excluded_rows=sum(s == 'excluded' for s in splits),
                   predictions=predictions, version=version)
     (out/'evaluation.json').write_text(json.dumps(report,ensure_ascii=False), encoding='utf8')
@@ -142,6 +149,12 @@ def train(input_path, output_dir):
 if __name__ == '__main__':
     try:
         train(sys.argv[1], sys.argv[2])
+    except InsufficientClassSamples as error:
+        report = dict(ready=False, message=str(error), counts=error.counts,
+                      basis='fixed company and near-duplicate groups; no split retries')
+        (Path(sys.argv[2])/'training-readiness.json').write_text(json.dumps(report, ensure_ascii=False), encoding='utf8')
+        print(json.dumps(report, ensure_ascii=False), file=sys.stderr)
+        sys.exit(2)
     except Exception as error:
         print(json.dumps({'error':str(error)},ensure_ascii=False),file=sys.stderr)
         sys.exit(1)

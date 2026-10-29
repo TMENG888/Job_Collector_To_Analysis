@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>岗位采集控制台</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%2383ded0%22/><text x=%2214%22 y=%2241%22 font-size=%2226%22 font-family=%22Arial%22 font-weight=%22700%22 fill=%22%230d3735%22>JC</text></svg>" />
-  <link rel="stylesheet" href="/styles.css?v=20261026-verification-state" />
-  <link rel="stylesheet" href="/design-system.css" />
+  <link rel="stylesheet" href="/styles.css?v=20261026-statistics" />
+  <link rel="stylesheet" href="/design-system.css?v=20261029-inline-edit" />
   <link rel="stylesheet" href="/interview-tools.css?v=20261022-qwen-1" />
-  <link rel="stylesheet" href="/insight-layout.css?v=20261017-layout" />
-  <link rel="stylesheet" href="/insight-classifier.css?v=20261024-concrete-skills" />
+  <link rel="stylesheet" href="/insight-layout.css?v=20261028-training-queue" />
+  <link rel="stylesheet" href="/insight-classifier.css?v=20261029-semantic-preview" />
   <link rel="stylesheet" href="/browser-workspace.css?v=20261019-interactive-8" />
   <link rel="stylesheet" href="/personal-wiki.css?v=20261022-single-organizer" />
 </head>
@@ -82,7 +82,7 @@
           <div class="assistant-chat-stage"><section id="assistantMessages" class="assistant-messages" role="log" aria-label="求职助手对话" aria-live="polite"></section>
           <div class="assistant-chat-examples"><button type="button" data-assistant-example="requirements"><span>⌁ 岗位要求</span><small>这个岗位需要哪些技能？</small></button><button type="button" data-assistant-example="search"><span>⌕ 找到机会</span><small>北京 · 三年经验 · 本科</small></button><button type="button" data-assistant-example="compare"><span>⇄ 岗位对比</span><small>对比前两个岗位</small></button><button type="button" data-assistant-example="collection"><span>▦ 采集中心</span><small>查看任务与最新进度</small></button></div></div>
           <div class="assistant-scroll-tools"><button type="button" id="assistantScrollLatest" class="assistant-scroll-latest" hidden aria-label="回到最新消息">↓ 回到最新</button></div>
-          <form id="assistantForm" class="assistant-composer"><div id="assistantEditNotice" class="assistant-edit-notice" hidden><span>编辑为新消息 · 原消息与后续记录保留</span><button type="button" id="assistantEditCancel" class="ghost">取消编辑</button></div><label class="assistant-chat-label" for="assistantMessage">给求职助手发消息</label><textarea id="assistantMessage" name="message" rows="2" maxlength="40000" placeholder="说说你想找的工作，或粘贴、上传简历…"></textarea>
+          <form id="assistantForm" class="assistant-composer"><label class="assistant-chat-label" for="assistantMessage">给求职助手发消息</label><textarea id="assistantMessage" name="message" rows="2" maxlength="40000" placeholder="说说你想找的工作，或粘贴、上传简历…"></textarea>
             <div id="assistantAttachment" class="assistant-attachment hidden" aria-live="polite"></div><input id="assistantResumeFile" type="file" accept=".txt,.md,.pdf,.docx" hidden />
             <div class="assistant-composer-footer"><div class="assistant-composer-tools"><button type="button" id="assistantAttach" class="ghost" title="上传简历：TXT、Markdown、文字PDF、DOCX；最多3MB">＋ 附件</button><span id="assistantModelBadge" class="assistant-model-badge">本地模式</span></div><div class="assistant-send-tools"><span>Enter 发送 · Shift + Enter 换行</span><button class="primary" type="submit" id="assistantSubmit" aria-label="发送消息">↑</button></div></div><p id="assistantNotice" class="assistant-chat-label" role="status" aria-live="polite"></p>
           </form>
@@ -95,21 +95,20 @@
       <div id="profileView" class="app-view hidden"></div>
       <div id="browserView" class="app-view hidden"><section id="jobBrowserWorkspace" aria-label="求职浏览器工作区"></section></div>
       <div id="insightsView" class="app-view hidden">
-        <section class="insight-toolbar card">
-          <div class="insight-toolbar-copy">
-            <span class="insight-source-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg></span>
-            <h2>分析数据</h2>
-          </div>
+        <section class="card insight-workflow" id="insightWorkflow" aria-label="岗位分析工作区">
+          <header class="insight-workflow-header"><div><h2>岗位分析</h2><p>全量岗位知识库 · 按目标岗位分类后分析</p></div><button type="button" class="ghost" data-workflow-refresh>刷新状态</button></header>
+          <div class="insight-toolbar">
           <form id="insightForm" class="insight-form">
-            <label class="wide">岗位数据集<select id="insightDataset"><option value="">正在读取数据集…</option></select></label>
-            <div id="insightDatasetError" class="wide insight-dataset-error" role="status" hidden><span></span><button type="button" class="ghost" id="retryInsightDatasets">重试连接</button></div>
+            <label class="wide">目标岗位<select id="insightRole" name="role"><option value="">选择目标岗位</option></select><small id="insightRoleCatalogStatus" role="status">正在读取分类器目录…</small></label>
+            <div class="insight-primary-action"><button class="primary" id="runInsight" type="submit" aria-describedby="insightAnalysisNotice" disabled>生成分析</button><button type="button" class="ghost" data-open-training>新增岗位</button></div>
             <input type="hidden" name="inputFile" value="kb://all" />
             <small class="wide insight-report-source" id="insightTransferSource"></small>
             <p class="wide insight-report-source" id="insightRoleSource" role="status" hidden></p>
           </form>
+          </div>
+          <section id="insightClassifier" class="insight-classifier" aria-label="当前分类器状态"></section>
+          <section id="insightTrainingQueue" aria-label="分类器训练与岗位方向发现"></section>
         </section>
-        <section id="insightClassifier" class="card insight-classifier" aria-label="AI联合标注与训练"></section>
-        <section class="insight-analysis-action card"><h3><span class="classifier-step-number">3</span> 全量分析</h3><button class="primary" id="runInsight" type="submit" form="insightForm" aria-describedby="insightAnalysisNotice" disabled>生成全量分析</button><p id="insightAnalysisNotice" class="insight-analysis-notice" role="status" aria-live="polite" hidden></p></section>
         <section id="insightStatus" class="insight-status"></section>
         <section id="insightDashboard" class="insight-dashboard"></section>
         <details id="skillTermReview" class="card skill-term-review">
@@ -233,6 +232,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/vendor/d3.min.js"></script>
-  <script type="module" src="/app.js?v=20261026-verification-state"></script>
+  <script type="module" src="/app.js?v=20261029-job51-liepin-manual"></script>
 </body>
 </html>

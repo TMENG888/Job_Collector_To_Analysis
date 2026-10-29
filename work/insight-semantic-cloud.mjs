@@ -33,8 +33,8 @@ export function mergeSemanticRows(previous,incoming){
   for(const row of incoming){const current=rows.get(row.key);if(current?.contractVersion===concreteSemanticVersion&&row.contractVersion!==concreteSemanticVersion)continue;rows.set(row.key,row);}
   return [...rows.values()];
 }
-export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,credentials=classifierCredentials(dataDir),readRows=uri=>readClassifierRows(dataDir,uri,100000),matcherFor,directory=process.env.JOB_INSIGHT_SEMANTIC_DIR||(process.env.JOB_UI_DATA_DIR?path.join(dataDir,'semantic_cloud'):'E:/Codex/work/20261018-semantic-cloud/runtime')}={}){
-  let active=null;
+export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,credentials=classifierCredentials(dataDir),readRows=uri=>readClassifierRows(dataDir,uri,uri==='kb://all'?null:100000),matcherFor,directory=process.env.JOB_INSIGHT_SEMANTIC_DIR||(process.env.JOB_UI_DATA_DIR?path.join(dataDir,'semantic_cloud'):'E:/Codex/work/20261018-semantic-cloud/runtime')}={}){
+  let active=null;const summaryCache=new Map();
   const indexFile=path.join(directory,'index.json'),lockFile=path.join(directory,'run.lock');
   const runFile=id=>{if(!/^[a-f0-9-]{36}$/.test(String(id)))throw Error('无效语义任务ID');return path.join(directory,id,'state.json');};
   const save=async(file,data)=>{await fs.mkdir(path.dirname(file),{recursive:true});await writeJsonAtomic(file,data);};
@@ -75,11 +75,18 @@ export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,cred
     const bound={...spec,screeningVersion:classifierId,attributeBinding:'role-and-content-hash'};
     await loadSemanticCloud(bound,{role,inputFile,classifierId});return bound;
   }
-  async function status(inputFile){
+  async function status(inputFile,role=''){
     const last=await read(path.join(directory,'latest.json'),{}),run=last[inputFile]?await read(runFile(last[inputFile]),null):null;
     const lock=await read(lockFile,null),busy=!!(lock&&alive(lock.pid));
     if(run&&['preparing','extracting'].includes(run.status)&&!busy){run.status='interrupted';run.unknownUsageRequests=Math.max(run.unknownUsageRequests||0,run.inFlight?1:0);run.message='服务中断；已记录用量，不自动重试付费请求';}
-    return {run,busy,capabilities:{incrementalConcreteSkills:true,contractVersion:concreteSemanticVersion}};
+    if(run?.jointAnnotations&&!run.semanticSummary&&(!role||run.role===role)){
+      const spec=(await read(indexFile,{}))[inputFile];
+      if(spec?.id===run.id&&spec.role===run.role){
+        if(!summaryCache.has(spec.sha256))summaryCache.set(spec.sha256,summarizeJointSemantics((await loadSemanticCloud(spec,{inputFile,role:run.role,classifierId:spec.classifierId})).rows));
+        run.semanticSummary=summaryCache.get(spec.sha256);
+      }
+    }
+    return {run:!role||run?.role===role?run:null,busy,capabilities:{incrementalConcreteSkills:true,allLibraryScope:true,contractVersion:concreteSemanticVersion}};
   }
   async function execute(run,signal,matcher){
     let key='';
@@ -160,16 +167,16 @@ export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,cred
     await save(runFile(id),{id,parentRunId:id,inputFile:run.inputFile,role:run.role,classifierId,status:'completed',jointAnnotations:true,message:'已绑定当前合格分类器；共享用量见联合任务',sampleCount:run.requestedSamples,sampled:rows.length,processed:rows.length,accepted:rows.filter(r=>r.fit==='include').length,excluded:rows.filter(r=>r.fit==='exclude').length,uncertain:rows.filter(r=>r.fit==='uncertain').length,promptTokens:0,completionTokens:0,costEstimate:0,budget:run.budget,usageSource:'classifier:'+id,createdAt:run.createdAt,finishedAt:now()});
     const last=await read(path.join(directory,'latest.json'),{});last[run.inputFile]=id;await save(path.join(directory,'latest.json'),last);
     return spec;
-  },async cancel(){active?.controller.abort();return {message:'已请求停止；不会自动重发付费请求'};},async start({inputFile,sampleCount=200,budget=.5,shareConfirmed=false}){
+  },async cancel(){active?.controller.abort();return {message:'已请求停止；不会自动重发付费请求'};},async start({inputFile,role:requestedRole='',sampleCount=200,budget=.5,shareConfirmed=false}){
     if(shareConfirmed!==true)throw Error('请先确认向Qwen发送筛选后脱敏岗位及本轮预算');
-    if(!String(inputFile).startsWith('kb://task/')||!Number.isInteger(sampleCount)||sampleCount<1||sampleCount>1000||!Number.isFinite(budget)||budget<=0||budget>20)throw Error('请选择具体岗位数据集，单批上限1–1000，预算不超过20元');
-    const {role}=await scope(inputFile),model=await supervised.resolve(inputFile,role),matcher=await resolveMatcher(inputFile,role,model);
+    if(inputFile!=='kb://all'&&!String(inputFile).startsWith('kb://task/')||!Number.isInteger(sampleCount)||sampleCount<1||sampleCount>1000||!Number.isFinite(budget)||budget<=0||budget>20)throw Error('请选择全岗位知识库或有效岗位范围，单批上限1–1000，预算不超过20元');
+    const {role}=await scope(inputFile,requestedRole),model=await supervised.resolve(inputFile,role),matcher=await resolveMatcher(inputFile,role,model);
     if(!matcher)throw Error('请先训练并启用岗位专用监督分类器');
     return launch({id:randomUUID(),inputFile,role,classifierId:model?.id||matcher.metadata.version,scoped:!!model,contractVersion:concreteSemanticVersion,shareConfirmed:true,status:'preparing',sampleCount,budget,promptTokens:0,completionTokens:0,costEstimate:0,requestsStarted:0,requestsCompleted:0,processed:0,dropped:0,createdAt:now()},matcher);
   },async resume(id){
     const run=await read(runFile(id),null);if(!run||!['failed','cancelled','interrupted','preparing','extracting'].includes(run.status)||run.unknownUsageRequests||run.inFlight)throw Error('该任务不可续跑，或存在用量不明的请求；不会自动重复计费');
     if(run.contractVersion!==concreteSemanticVersion||run.shareConfirmed!==true)throw Error('旧任务不使用新版提取协议；请通过增量提取复用已保存标签');
-    const {role}=await scope(run.inputFile),model=await supervised.resolve(run.inputFile,role),matcher=await resolveMatcher(run.inputFile,role,model);
+    const {role}=await scope(run.inputFile,run.role),model=await supervised.resolve(run.inputFile,role),matcher=await resolveMatcher(run.inputFile,role,model);
     if(!matcher||role!==run.role||(model?.id||matcher.metadata.version)!==run.classifierId)throw Error('岗位或分类器已变化，请重新抽样');
     return launch({...run,status:'preparing',resume:true,resumes:(run.resumes||0)+1},matcher);
   }};
@@ -180,11 +187,11 @@ export function createSemanticCloudHandler(service){
     const json=(code,data)=>{res.writeHead(code,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data));};
     try{
       const host=new URL('http://'+req.headers.host);if(!['localhost','127.0.0.1'].includes(host.hostname)||req.headers['sec-fetch-site']==='cross-site'||req.headers.origin&&req.headers.origin!==host.origin){json(403,{error:'仅允许当前本机控制台'});return true;}
-      if(req.method==='GET'&&pathname==='/api/insights/semantic')json(200,await service.status(new URL(req.url,host).searchParams.get('inputFile')||''));
+      if(req.method==='GET'&&pathname==='/api/insights/semantic'){const query=new URL(req.url,host).searchParams;json(200,await service.status(query.get('inputFile')||'',query.get('role')||''));}
       else if(req.method==='POST'&&pathname!=='/api/insights/semantic'){
         if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))throw Error('请使用JSON请求');
         let bytes=0;const chunks=[];for await(const chunk of req){bytes+=chunk.length;if(bytes>4096)throw Error('请求体过大');chunks.push(chunk);}
-        const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(k=>!(pathname.endsWith('/start')?['inputFile','sampleCount','budget','shareConfirmed']:pathname.endsWith('/resume')?['id']:[]).includes(k)))throw Error('不支持的请求参数');
+        const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(k=>!(pathname.endsWith('/start')?['inputFile','role','sampleCount','budget','shareConfirmed']:pathname.endsWith('/resume')?['id']:[]).includes(k)))throw Error('不支持的请求参数');
         json(pathname.endsWith('/cancel')?200:202,pathname.endsWith('/start')?await service.start(body):pathname.endsWith('/resume')?await service.resume(body.id):await service.cancel());
       }else json(405,{error:'不支持的方法'});
     }catch(e){json(400,{error:String(e.message).replace(/sk-[\w.\-]+/g,'[密钥隐藏]').slice(0,500)});}return true;

@@ -124,6 +124,39 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--teal); }
 .collection-delivery { border-color: var(--line); }
 .collection-channel-details { border-color: var(--line); }
 .collection-channel-details summary, .collection-channel-details summary span { font-size: 12px; }
+/* One jobs snapshot, three complementary measures. Article statistics stay in
+   their own panel; do not visually merge them into the jobs denominator. */
+.job-statistics { margin-bottom:20px; }
+.job-statistics-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.job-statistics-head h3 { margin:0; font-size:15px; font-weight:650; }
+.job-statistics-head > span { color:var(--muted); font-size:12px; }
+.job-statistics-strip { display:grid; grid-template-columns:1.3fr 1fr 1fr; margin:0; padding:18px 0; border-block:1px solid var(--line); background:var(--soft); }
+.job-statistics-strip > div { min-width:0; padding:0 20px; }
+.job-statistics-strip > div + div { border-left:1px solid var(--line); }
+.job-statistics-strip dt { color:var(--muted); font-size:13px; margin-bottom:6px; }
+.job-statistics-strip dd { margin:0; font-size:26px; font-weight:650; line-height:1.2; letter-spacing:-.5px; }
+.job-statistics-strip .job-statistic-primary dd { color:var(--teal-dark); font-size:32px; }
+.job-statistics-strip dd small { margin-left:5px; font-size:12px; font-weight:400; color:var(--muted); letter-spacing:normal; }
+.job-statistics-strip .is-incomplete { color:var(--amber); }
+.job-statistics-note,.job-goal { margin:10px 0 0; color:var(--muted); font-size:12px; }
+.job-statistics-error { font-size:13px; color:var(--red); }
+.job-statistics .collection-channel-details { padding:0; margin-top:14px; border:0; border-radius:0; }
+.job-statistics .collection-channel-details summary { padding:8px 0; min-height:32px; }
+.job-channel-table { width:100%; }
+.job-channel-table td:nth-child(2),.job-channel-table td:nth-child(3) { white-space:nowrap; font-variant-numeric:tabular-nums; }
+.job-channel-table tfoot th,.job-channel-table tfoot td { padding:10px; border-top:1px solid var(--line); font-size:12px; background:var(--soft); }
+.job-statistics summary:focus-visible { outline:2px solid var(--teal-dark); outline-offset:3px; }
+.interview-panel[data-statistics-scope="interviews"] { border-color:var(--line); background:var(--paper); padding:16px 18px; }
+.interview-panel[data-statistics-scope="interviews"] .interview-stats { grid-template-columns:repeat(3,minmax(0,1fr)); }
+@media(max-width:600px){
+  .job-statistics-head { flex-wrap:wrap; gap:4px; }
+  .job-statistics-strip { grid-template-columns:repeat(3,minmax(0,1fr)); padding:14px 0; }
+  .job-statistics-strip > div { padding:0 10px; }
+  .job-statistics-strip dd,.job-statistics-strip .job-statistic-primary dd { font-size:22px; overflow-wrap:anywhere; }
+  .job-statistics-strip dt { font-size:12px; }
+  .job-statistics .channel-verification-actions { justify-content:flex-start; }
+  .job-channel-table td,.job-channel-table th { padding:8px 6px; }
+}
 .chip { background: var(--soft); color: var(--muted); font-size: 12px; border-radius: 7px; }
 .log, #detail .log, .assistant-collection-logs pre {
   background: var(--soft); color: #4c6155; border: 1px solid var(--line); border-radius: 10px;
@@ -258,14 +291,25 @@ dialog form { padding: 26px; }
 .assistant-code-block { min-width:0; margin:16px 0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--soft); }
 .assistant-code-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:5px 12px; border-bottom:1px solid var(--line); color:var(--muted); font-size:12px; }
 .assistant-markdown .assistant-code-block pre { border:0; border-radius:0; margin:0; background:transparent; }
-.assistant-edit-notice { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px; padding:0 5px 9px; margin-bottom:7px; border-bottom:1px solid var(--line); color:var(--teal-dark); font-size:12px; }
-.assistant-edit-notice[hidden],.assistant-scroll-latest[hidden] { display:none; }
-.assistant-edit-notice button { font-size:12px; padding:4px 8px; }
+.assistant-message-user.assistant-message-editing { width:100%; max-width:100%; min-width:0; border-radius:18px; }
+.assistant-message-editing > .assistant-message-text,.assistant-message-editing > .assistant-message-actions { display:none; }
+.assistant-message-editor { display:grid; gap:10px; min-width:0; margin:0; }
+.assistant-message-editor textarea { display:block; width:100%; min-height:64px; max-height:42vh; margin:0; padding:4px 0; border:0; border-radius:4px; background:transparent; color:var(--ink); font:inherit; font-size:15px; line-height:1.85; resize:none; box-shadow:none; }
+.assistant-message-editor textarea:focus { outline:0; border:0; box-shadow:none; }
+.assistant-message-user.assistant-message-editing:focus-within { outline:2px solid var(--teal); outline-offset:2px; }
+.assistant-message-edit-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; }
+.assistant-message-editor .assistant-message-edit-hint { flex:1 1 220px; margin:0; color:var(--muted); font-size:12px; line-height:1.6; }
+.assistant-message-editor .assistant-message-edit-error { margin:0; color:var(--ink); font-size:13px; }
+.assistant-message-edit-actions { display:flex; justify-content:flex-end; gap:8px; margin-left:auto; }
+.assistant-message-edit-actions button { min-width:60px; min-height:34px; padding:6px 14px; border-radius:9px; font-size:13px; line-height:1.5; }
+.assistant-message-edit-actions button:focus-visible { outline:2px solid var(--teal-dark); outline-offset:3px; }
+.assistant-scroll-latest[hidden] { display:none; }
 .assistant-scroll-tools { position:relative; flex-shrink:0; height:0; z-index:2; display:flex; justify-content:center; }
 .assistant-scroll-latest { position:absolute; bottom:10px; border:1px solid var(--line); background:var(--paper); color:var(--teal-dark); border-radius:20px; padding:7px 13px; box-shadow:0 3px 12px #182a2012; font-size:12px; cursor:pointer; }
 .assistant-clipboard-fallback,.assistant-plain-copy { position:fixed!important; left:-100000px!important; top:0!important; width:800px!important; pointer-events:none!important; }
 @media(max-width:600px) {
   .assistant-message-actions { gap:2px; }
   .assistant-message-action { min-height:36px; padding:6px; font-size:11px; }
-  .assistant-edit-notice { line-height:1.6; }
+  .assistant-message-editor textarea { font-size:16px; }
+  .assistant-message-edit-actions button { min-height:44px; }
 }

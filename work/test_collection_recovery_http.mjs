@@ -19,8 +19,13 @@ try{
  await fs.writeFile(path.join(task.outputDir,'采集清单.json'),JSON.stringify({task_id:task.id,total_rows:3,platforms:{iguopin:{rows:1},zhaopin:{rows:2}}}));
  let actual=(await api('/api/tasks/'+encodeURIComponent(task.id))).task;
  assert.equal(actual.metrics.candidates,3);assert.equal(actual.metrics.publicRows,1);assert.equal(actual.metrics.zhaopinRows,2);assert.equal(actual.metrics.knowledgeRows,3);assert.equal(actual.metrics.liveCollection.platformCounts.iguopin,1);assert.equal(actual.metrics.liveCollection.platformCounts.zhaopin,2);
+ assert.equal(actual.metrics.jobStats.scope,'jobs');assert.equal(actual.metrics.jobStats.rows,3);assert.equal(actual.metrics.validRows,3);
+ await writeNativeChannelRows(task.outputDir,task.id,[row('nowcoder','job-only')]);
+ actual=(await api('/api/tasks/'+encodeURIComponent(task.id))).task;
+ assert.equal(actual.metrics.jobStats.rows,4);assert.equal(actual.metrics.jobStats.channels.find(c=>c.key==='nowcoder').rows,1);assert.equal(actual.metrics.candidates,4);assert.equal(actual.metrics.validRows,4);
+ await fs.writeFile(path.join(task.outputDir,'统一采集数据状态.json'),JSON.stringify({task_id:task.id,rows:99999}));
  await fs.writeFile(path.join(task.outputDir,'采集清单.json'),JSON.stringify({task_id:'foreign',total_rows:999,platforms:{zhaopin:{rows:999}}}));
- actual=(await api('/api/tasks/'+encodeURIComponent(task.id))).task;assert.equal(actual.metrics.candidates,3,'foreign manifest cannot inflate count');
+ actual=(await api('/api/tasks/'+encodeURIComponent(task.id))).task;assert.equal(actual.metrics.candidates,4,'foreign manifest cannot inflate count');assert.equal(actual.metrics.knowledgeRows,4,'stale unified report cannot inflate database count');
  const state=await api('/api/tasks');assert.equal(state.activeCount,0);assert.equal(actual.status,'ready');assert.doesNotMatch(logs,/▶ 多平台/);
  console.log('PASS isolated HTTP recovery: real server, integrated manifest does not double-count session rows, owned counts, task never started; '+dir);
 }finally{child.kill();await new Promise(r=>{if(child.exitCode!==null)r();else child.once('exit',r);});}

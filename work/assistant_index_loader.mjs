@@ -7,6 +7,7 @@ import {knowledgeStore} from './job_knowledge_store.mjs';
 import {knowledgeDatabasePath} from './knowledge_storage.mjs';
 import {assistantClassificationVersion} from './assistant_classification_cache.mjs';
 import {abortReason,waitForRequest} from './assistant_request_budget.mjs';
+import {createCandidateSearch,consultationSnapshot} from './job_assistant_candidates.mjs';
 
 export function assistantIndexCacheDirectory(dataDir){
   const scope=createHash('sha256').update(path.resolve(dataDir)+'\n'+knowledgeDatabasePath(dataDir)).digest('hex').slice(0,20);
@@ -62,6 +63,8 @@ export function createBackgroundAssistantStore(dataDir,{cacheDir,workerTimeoutMs
         if(signal?.aborted)waiter.abort();
       });
     },
+    searchCandidates:createCandidateSearch(dataDir),
+    async consultationIndex(){const meta=await metadata();return cached?.report.revision===meta.revision?cached:consultationSnapshot(meta);},
     close(){closed=true;cached=null;cachedRevision=null;if(pending)finish(pending,new Error('岗位索引服务已关闭'));},
   };
 }

@@ -152,7 +152,10 @@
 @media(prefers-reduced-motion:reduce){.supervised-screening *{scroll-behavior:auto;transition:none}}
 @media(max-width:600px){.supervised-screening .classifier-label-fields{grid-template-columns:minmax(0,1fr)}}
 .supervised-screening .classifier-schema,.supervised-screening .classifier-labeling{grid-column:1/-1;display:grid;grid-template-columns:220px minmax(0,1fr);align-items:center;gap:4px 20px;min-width:0;border-top:1px solid var(--line);padding:10px 0 0;margin:0;background:transparent;border-radius:0}
-.supervised-screening .classifier-extract-controls{grid-column:1/-1;grid-row:6;display:flex;align-items:end;flex-wrap:wrap;gap:8px 12px;padding-top:12px;margin-top:4px;border-top:1px solid var(--line);min-width:0}
+.supervised-screening .classifier-supplement-details{grid-column:1/-1;grid-row:6;min-width:0;margin-top:4px;padding-top:8px;border-top:1px solid var(--line)}
+.classifier-supplement-details>summary{cursor:pointer;font-size:12px}
+.classifier-supplement-details>summary small{margin-left:12px;font-weight:400}
+.supervised-screening .classifier-extract-controls{display:flex;align-items:end;flex-wrap:wrap;gap:8px 12px;padding-top:12px;min-width:0}
 .classifier-extract-controls>div{flex:1;min-width:200px;align-self:center}
 .classifier-extract-controls strong{font-size:13px;color:var(--ink)}
 .classifier-extract-controls small{display:block;color:var(--muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
@@ -181,5 +184,105 @@
 .insight-analysis-action button{min-height:40px;font-size:13px}
 #insightsView .insight-analysis-action .insight-analysis-notice{width:100%;margin:0}
 .insight-trial-banner{grid-column:1/-1;padding:10px 14px;background:var(--soft);border-left:3px solid var(--amber);color:var(--ink);font-size:13px;line-height:1.6;margin:0 0 12px}
+.training-entry{display:flex;align-items:end;gap:12px;max-width:940px}
+.training-entry label{display:grid;gap:6px;flex:1;min-width:0;font-size:13px;color:var(--ink)}
+.training-entry input{width:100%;min-width:0;min-height:44px;box-sizing:border-box}
+.training-entry button{min-height:44px;white-space:nowrap;padding-inline:24px}
+#insightTrainingQueue{padding:20px 24px}
+#insightTrainingQueue .classifier-muted{font-size:13px;color:var(--muted);line-height:1.6;margin:8px 0}
+.training-settings>summary,.training-history>summary,.training-discovery>summary{cursor:pointer;font-size:13px;color:var(--ink);padding:8px 0;min-height:28px;line-height:1.6}
+.training-settings>summary span,.training-discovery>summary span{font-weight:400;color:var(--muted);margin-left:12px;font-size:12px}
+.training-settings .classifier-controls{padding:8px 0 12px;display:grid;grid-template-columns:repeat(3,minmax(0,140px));align-items:end}
+.training-settings .classifier-controls label{max-width:none;min-width:0}
+.training-settings input{min-height:40px;width:100%;box-sizing:border-box}
+.training-settings,.training-history,.training-discovery{border:0;border-top:1px solid var(--line);border-radius:0;background:transparent;margin:12px 0 0;padding:4px 0 0}
+.training-history>summary,.training-discovery>summary{font-weight:600}
+.training-jobs{list-style:none;padding:0;margin:0}
+.training-job{display:grid;grid-template-columns:minmax(140px,1fr) minmax(180px,2fr) auto;gap:16px;padding:14px 0;border-top:1px solid var(--line);font-size:13px;align-items:start}
+.training-job small{display:block;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.training-job p{margin:6px 0;max-width:70ch;overflow-wrap:anywhere}
+.training-job-progress>strong{color:var(--teal-dark)}
+.training-job[data-status="rejected"] .training-job-progress>strong,.training-job[data-status="needs_samples"] .training-job-progress>strong{color:var(--amber)}
+.training-job-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:end;align-items:start}.training-job-actions button{min-height:36px;align-self:start}
+.training-pagination{display:flex;align-items:center;gap:12px;justify-content:end}.training-pagination[hidden]{display:none}
+#insightTrainingQueue #insightClassifier{display:block;margin:16px 0 0;padding:16px 0 0;border:0;border-top:1px solid var(--line);border-radius:0;box-shadow:none;background:transparent}
+#insightTrainingQueue #insightClassifier .classifier-header{display:flex;margin-bottom:8px}
+#insightTrainingQueue #insightClassifier .classifier-header h2{font-size:14px}
+#insightTrainingQueue #insightClassifier .classifier-current{display:flex;margin:0;gap:4px 12px}
+#insightTrainingQueue .classifier-workspace:not(:has(.classifier-semantic-results:not([hidden]))){grid-template-columns:minmax(0,1fr)}
+.discovery-controls{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:8px 0}
+.discovery-controls label{display:grid;gap:5px;font-size:12px}.discovery-controls input{width:100px;min-height:40px}.discovery-controls button{min-height:40px}
+.discovered-roles{list-style:none;margin:12px 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}
+.discovered-roles>li{min-width:0;padding:14px 0;border-top:1px solid var(--line)}
+.discovery-role-heading,.discovery-role-footer{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:13px}
+.discovery-role-heading>span{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+.discovery-share{height:3px;margin:8px 0;background:var(--soft);border-radius:2px}.discovery-share span{display:block;height:100%;background:var(--teal)}
+.discovered-roles p{font-size:13px;line-height:1.6;overflow-wrap:anywhere;max-width:75ch;margin:8px 0}
+.discovered-roles summary,.discovery-state{font-size:12px;color:var(--muted)}
+.discovered-roles details{margin-top:8px}.discovered-roles details>p{max-height:190px;overflow:auto}
+.discovery-directions>strong{font-size:13px}.discovery-directions>div{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.discovery-directions button{text-align:left;display:grid;gap:4px;min-height:44px}.discovery-directions small{color:var(--muted);font-weight:400;font-size:12px}
+#insightTrainingQueue :is(button,input,summary):focus-visible{outline:2px solid var(--teal);outline-offset:3px}
+@media(max-width:800px){.training-job{grid-template-columns:minmax(0,1fr)}.training-job-actions{justify-content:start}.discovered-roles{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:600px){#insightTrainingQueue{padding:16px}.training-entry{flex-direction:column;align-items:stretch}.training-entry button{width:100%}.training-entry input{font-size:16px}.training-settings>summary span,.training-discovery>summary span{display:block;margin-left:16px}.discovery-controls label{flex:1}.discovery-controls input{width:100%;box-sizing:border-box}.discovery-controls button{min-height:44px}}
 @media(max-width:800px){.supervised-screening .classifier-schema,.supervised-screening .classifier-labeling{grid-template-columns:minmax(0,1fr);gap:6px}.supervised-screening .classifier-schema .classifier-controls,.supervised-screening .classifier-joint-controls{justify-content:start}.supervised-screening .classifier-schema-editor{grid-column:1}.supervised-screening .classifier-current{display:grid}}
 @media(max-width:600px){.supervised-screening .classifier-schema .classifier-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%;gap:8px}.supervised-screening .classifier-schema .classifier-controls label{max-width:none;grid-column:1/-1}.supervised-screening .classifier-schema-editor summary{min-height:36px;padding-block:4px}#insightsView .insight-analysis-action{padding:12px}.insight-analysis-action button{min-height:44px}}
+.insight-workflow.card{padding:20px 24px;margin:0 0 16px;min-width:0}
+.insight-workflow-header{display:flex;justify-content:space-between;align-items:start;gap:16px;margin-bottom:16px}
+.insight-workflow-header h2{font-size:17px;margin:0 0 5px;color:var(--ink)}
+.insight-workflow-header p{font-size:13px;line-height:1.6;color:var(--muted);margin:0}
+.insight-workflow-header button{min-height:36px;flex-shrink:0;font-size:13px}
+#insightsView .insight-workflow .insight-toolbar{display:block;border:0;padding:0;margin:0;box-shadow:none;background:transparent}
+#insightsView .insight-workflow .insight-form{grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;align-items:start}
+#insightsView .insight-workflow .insight-form>label.wide{font-size:13px;color:var(--ink)}
+.insight-primary-action{display:flex;align-items:center;gap:8px;padding-top:24px}
+#insightsView .insight-workflow #runInsight{grid-area:auto;justify-self:auto;min-height:40px;white-space:nowrap}
+.insight-primary-action>button{min-height:40px;white-space:nowrap;font-size:13px}
+#insightWorkflow #insightClassifier{display:block;grid-template-columns:none;border:0;margin:0;padding:10px 0 12px;background:transparent;box-shadow:none}
+#insightWorkflow .classifier-current{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;margin:0;padding:0}
+#insightWorkflow .classifier-current strong{font-size:13px}
+#insightWorkflow .classifier-current .classifier-muted{font-size:13px}
+#insightWorkflow .insight-analysis-notice{margin:6px 0 0;color:var(--red)}
+#insightWorkflow .classifier-result-details{margin:10px 0 0}
+#insightWorkflow .classifier-result-details>summary{font-size:13px;cursor:pointer;color:var(--muted);line-height:1.8}
+#insightWorkflow .classifier-result-details>summary>span{margin-left:12px;font-size:12px}
+#insightWorkflow .classifier-workspace{margin-top:8px;padding-top:8px}
+#insightWorkflow #insightTrainingQueue{padding:0;margin:0;border:0;background:transparent;box-shadow:none}
+.training-panel{border:0;border-top:1px solid var(--line);border-radius:0;padding:0;margin:0}
+.training-panel>summary{font-size:13px;font-weight:600;color:var(--ink);line-height:1.8;padding:12px 0;cursor:pointer}
+.training-panel>summary>span{font-size:12px;color:var(--muted);font-weight:400;margin-left:12px}
+.training-panel-body{padding:12px 16px;margin-bottom:8px;border-radius:9px;background:var(--soft)}
+.training-panel-body .training-entry{max-width:none}
+.training-panel-body .training-settings{margin-top:8px;padding-top:0}
+.training-panel-body .training-settings>summary{font-weight:400;color:var(--muted)}
+.workflow-secondary-tools{display:flex;align-items:start;gap:0 28px;flex-wrap:wrap;border-top:1px solid var(--line)}
+.workflow-secondary-tools>[data-discovery-slot]{flex:1 1 280px;min-width:0}
+.workflow-secondary-tools>.training-history{flex:0 1 auto}
+.workflow-secondary-tools>.training-history[open],.workflow-secondary-tools>[data-discovery-slot]:has(.training-discovery[open]){flex-basis:100%}
+#insightWorkflow .training-discovery,#insightWorkflow .training-history{border:0;padding:0;margin:0}
+#insightWorkflow .training-history>summary,#insightWorkflow .training-discovery>summary{font-weight:400;padding:10px 0}
+.workflow-service-warning{margin:0 0 12px;padding:8px 12px;border-left:3px solid var(--amber);background:var(--soft);color:var(--amber);font-size:13px;line-height:1.7}
+.training-job-menu{position:relative;min-width:44px;margin:0;padding:0;border:0;background:transparent}
+.training-job-menu>summary{cursor:pointer;font-size:12px;line-height:36px;color:var(--muted)}
+.training-job-menu>div{display:grid;gap:4px;min-width:120px}
+.training-job-menu button{text-align:left}
+.discovery-local-settings{margin:10px 0;font-size:12px;color:var(--muted)}
+.discovery-local-settings>summary,.discovery-evidence>summary{cursor:pointer;line-height:2}
+.discovery-evidence>summary{font-size:12px;color:var(--muted)}
+#insightWorkflow :is(button,input,select,summary):focus-visible{outline:2px solid var(--teal);outline-offset:3px}
+#insightWorkflow [hidden]{display:none}
+@media(max-width:600px){
+  .insight-workflow.card{padding:16px}
+  .insight-workflow-header{gap:12px;margin-bottom:12px}
+  #insightsView .insight-workflow .insight-form{grid-template-columns:minmax(0,1fr)}
+  .insight-primary-action{padding-top:0;width:100%}
+  #insightsView .insight-workflow #runInsight{flex:1;min-height:44px}
+  .insight-primary-action>button,.insight-workflow-header button{min-height:44px}
+  #insightsView .insight-workflow .insight-form select{font-size:16px;min-height:44px}
+  .training-panel>summary>span{display:block;margin-left:16px}
+  .training-panel-body{padding:12px}
+  .training-settings .classifier-controls{grid-template-columns:minmax(0,1fr)}
+  .training-panel-body .training-entry button{min-height:44px}
+  .workflow-secondary-tools{gap:0 12px}
+  .workflow-secondary-tools>[data-discovery-slot]{flex-basis:100%}
+  #insightWorkflow .classifier-current{display:grid;gap:4px}
+}

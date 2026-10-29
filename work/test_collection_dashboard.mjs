@@ -24,7 +24,7 @@ html=renderCollectionDashboard({...task,status:'completed',currentStage:'',metri
 assert.match(html,/交付完成度/);assert.match(html,/20,001 条/);assert.match(html,/100%/);
 assert.match(html,/已完成/);
 html=renderCollectionDashboard({...task,status:'partial',currentStage:'',targetRows:8000,metrics:{...task.metrics,knowledgeRows:5060,validRows:4944}},format);
-assert.match(html,/本轮已结束 · 目标未达到/);assert.doesNotMatch(html,/已完成/);assert.match(html,/有效去重进度/);assert.match(html,/<strong>4,944<\/strong>/);assert.match(html,/62%/);
+assert.doesNotMatch(html,/已完成|去重入库/);assert.match(html,/岗位数据/);assert.match(html,/<dd>5,060<small>/);assert.match(html,/资料完整目标 8,000 条 · 62%/);
 html=renderCollectionDashboard({...task,status:'partial',currentStage:'',targetRows:null,collectUntilExhausted:true,metrics:{...task.metrics,knowledgeRows:5060,validRows:4944}},format);
-assert.match(html,/已入库岗位/);assert.match(html,/<strong>4,944<\/strong>/);assert.match(html,/本轮结束 · 受阻或预算暂停/);assert.doesNotMatch(html,/aria-valuenow|目标未达到|null%/);
+assert.match(html,/岗位数据/);assert.match(html,/<dd>5,060<small>/);assert.match(html,/资料完整/);assert.doesNotMatch(html,/aria-valuenow|目标未达到|null%|公开渠道|去重入库/);
 console.log('PASS: dashboard counts, stages, unused channels, failures, capped progress, optional goals and candidate/delivery separation');

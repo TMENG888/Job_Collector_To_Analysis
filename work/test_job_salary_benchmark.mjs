@@ -48,6 +48,11 @@ assert.deepEqual(benchmark.salary_benchmark.groups.month.pay_months_distribution
 assert.match(benchmark.message,/谈判建议/);assert.ok(benchmark.sources.every(s=>!['intern','wrong','degree','city','unknown'].includes(s.job_id)));
 assert.equal(buildSalaryBenchmark(index.jobs.slice(0,2),{goal}).suggestion,null);
 assert.equal(buildSalaryBenchmark(index.jobs.slice(0,12),{goal:{}}).suggestion,null);
+// A single city passed through the multi-city contract must be named in the
+// answer scope, just like the legacy scalar city preference.
+const cityArraySummary=buildSalaryBenchmark(index.jobs.slice(0,12),{goal:{analysis_mode:'market',stage:'formal',cities:['北京'],roles:base.role_families,salary_period:'month'}});
+assert.match(cityArraySummary.message,/市场统计范围：正式岗位（校招＋社招） · 北京/);
+assert.ok(!cityArraySummary.message.includes('城市未限定'));
 
 const agent=createChatAgent();
 let turn=await agent.run(index,{message:'找智能体实习岗位',resume:'求职意向：智能体实习生\n2027届本科在校生\nPython RAG LLM',useModel:false});

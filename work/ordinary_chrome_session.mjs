@@ -13,7 +13,10 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export function ordinaryChromeArguments(profile){
   if(!path.isAbsolute(profile))throw failure('普通浏览器需要独立的绝对路径会话目录');
   // Skip Chrome's own onboarding, NOT website login/security verification.
-  return [`--user-data-dir=${profile}`,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run','--new-window','about:blank'];
+  // `--source-shortcut-location=start-menu` keeps the launch looking like a
+  // normal Start-menu Chrome start while the dedicated profile and localhost
+  // debugging port let the collector attach after the human finishes login.
+  return [`--user-data-dir=${profile}`,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run','--source-shortcut-location=start-menu','--new-window','about:blank'];
 }
 const invalidWindow=()=>failure('当前 Chrome 页面不属于普通浏览器窗口（可能是旧的首次引导窗口）；请关闭旧猎聘窗口后重新打开，登录资料会保留');
 const blankTab=value=>value==='about:blank'||value==='chrome://newtab/';

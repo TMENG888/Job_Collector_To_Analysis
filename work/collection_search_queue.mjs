@@ -9,6 +9,7 @@ import {unverifiedLegacyCompletion} from './jobonline_pagination_health.mjs';
 import {untilExhausted} from './collection_goal.mjs';
 import {mohrssCheckpointNeedsContinuation,mohrssConsumedPages} from './mohrss_related_search.mjs';
 import {zhaopinSessionCheckpointPath,validateZhaopinSessionCheckpoint,zhaopinSessionCheckpointState} from './zhaopin_session_checkpoint.mjs';
+import {hasVerifiedSessionCompletion,sessionCompletionNeedsAudit} from './session_pagination_health.mjs';
 
 const unique=values=>[...new Set(values.map(x=>String(x||'').trim()).filter(Boolean))];
 const safeName=value=>String(value).replace(/[\\/:*?"<>|]/g,'_');
@@ -29,6 +30,7 @@ export function checkpointSearchState(platform,saved,settings={}){
   if(isConditionScopedStop({code:saved.stop_reason}))return saved.stop_reason;
   if(platform==='jobonline'&&unverifiedLegacyCompletion(saved))return 'legacy_pagination_unverified';
   if(platform==='mohrss'&&mohrssCheckpointNeedsContinuation(saved,{keyword:saved.keyword,city:saved.city,settings,taskId:saved.task_id??null}))return 'pending';
+  if(platform==='job51'&&saved.completed)return hasVerifiedSessionCompletion(saved,'job51')?'query_finished':'pending';
   if(saved.low_yield)return 'low_yield_deferred';
   if(platform==='zhaopin'){
     if(saved.acquisition_mode==='session_json_api')return zhaopinSessionCheckpointState(saved,settings);
@@ -107,7 +109,7 @@ export async function readCollectionSearchQueue(task,{channelAvailable=key=>coll
       // exposed in the scheduling journal. Detect a stuck condition even when
       // a different channel in the same batch is still making progress.
       const progress=JSON.stringify(saved?[saved.records?.length??saved.list?.length??saved.rows?.length??0,saved.nextPageNo,saved.pageNo,saved.lastPage,saved.lastListPage,saved.last_page_index,saved.nextPage,Object.values(saved.details||{}).filter(value=>value.ok).length]:null);
-      combos.push({platform,keyword,city,state,progress,...(state==='origin_cooldown'?{retryAfter:new Date(rate.cooldownUntil).toISOString()}: {})});
+      combos.push({platform,keyword,city,state,progress,...(['job51','zhaopin'].includes(platform)&&sessionCompletionNeedsAudit(saved,platform)?{auditRequired:true}:{}),...(state==='origin_cooldown'?{retryAfter:new Date(rate.cooldownUntil).toISOString()}: {})});
     }
   }
   return combos;

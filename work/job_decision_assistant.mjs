@@ -10,6 +10,7 @@ import {matchesCareerGoal,effectiveResumeProfile,applyCareerGoal} from './job_as
 import {buildSalaryBenchmark,parseOriginalSalary} from './job_salary_benchmark.mjs';
 import {educationAdmits} from './job_data_admission.mjs';
 import {createBackgroundAssistantStore} from './assistant_index_loader.mjs';
+import {createCandidateSearch,consultationSnapshot} from './job_assistant_candidates.mjs';
 
 const norm=v=>String(v||'').normalize('NFKC').toLowerCase().replace(/\s+/g,'');
 const terms=v=>[...new Set(String(v||'').normalize('NFKC').toLowerCase().match(/[a-z][a-z0-9+#.-]*|[\u4e00-\u9fff]{2}/g)||[])];
@@ -88,6 +89,8 @@ export function createKnowledgeAssistantStore(dataDir,{readOnly=false,background
     cached={...data,jobs,skills:[...new Set(jobs.flatMap(j=>j.skills||[]))],frequencies,tokenSets:new Map(jobs.map((j,i)=>[j.key,new Set(documents[i])]))};return cached;
   }
   return {load:(options)=>pending||(pending=load(options).finally(()=>{pending=null;})),
+    searchCandidates:createCandidateSearch(dataDir),
+    async consultationIndex(){const meta=await knowledgeStore(dataDir).status({synchronize:false});return cached?.report.revision===meta.revision?cached:consultationSnapshot(meta);},
     metadata:async()=>knowledgeStore(dataDir).status({synchronize:false})};
 }
 const salarySummary=jobs=>{const stats=cohortSalaryStatistics(jobs);return {valid_salary_rows:stats.count,median_salary_k:stats.count>=5?stats.median:null,p25_salary_k:stats.count>=5?stats.p25:null,p75_salary_k:stats.count>=5?stats.p75:null};};

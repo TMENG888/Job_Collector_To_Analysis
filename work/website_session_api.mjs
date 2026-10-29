@@ -49,7 +49,15 @@ export async function jobonlineSessionRequest(page,url,data,{timeoutMs=30000}={}
     await guard(page);return assertBusinessResponse(result.data,'就业在线');
   }finally{clearTimeout(timer);clearInterval(watchdog);page.off('response',listener)}
 }
-export async function job51SessionPage(page,pageNo,{timeoutMs=30000}={}) {
+export async function job51NextPageState(page){
+  const next=page.locator('.btn-next');
+  if(typeof next.count!=='function'||typeof next.isEnabled!=='function'||!await next.count())return null;
+  // The button is also disabled transiently while getSearch is loading. Wait
+  // for the website client to settle before treating disabled as an end page.
+  await waitWebsiteClient(page,'job51');
+  return Boolean(await next.isEnabled());
+}
+export async function job51SessionPage(page,pageNo,{timeoutMs=30000,method='client'}={}) {
   await guard(page);let resolveResponse,rejectResponse,timer;
   const received=new Promise((resolve,reject)=>{resolveResponse=resolve;rejectResponse=reject});
   const listener=response=>{
@@ -60,7 +68,13 @@ export async function job51SessionPage(page,pageNo,{timeoutMs=30000}={}) {
   page.on('response',listener);const watchdog=watchVerification(page,rejectResponse);
   try{
     const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new ChannelError(`前程无忧第${pageNo}页接口超时，请人工检查本地会话；已保留断点`,'response_timeout')),timeoutMs)});
-    const invocation=page.evaluate(({operation,pageNo})=>{
+    // Restore the old website-next path for consecutive pages. A resumed cursor
+    // jumps once through the official client, avoiding replay of pages 1..N.
+    const useNext=method==='next'&&await job51NextPageState(page)!==null;
+    const invocation=useNext?(async()=>{
+      if(!await job51NextPageState(page))throw new ChannelError('前程无忧下一页当前不可用，保留断点待复核','pagination_stalled');
+      await page.locator('.btn-next').click({timeout:5000});
+    })():page.evaluate(({operation,pageNo})=>{
       const vm=[...document.querySelectorAll('*')].map(e=>e.__vue__).find(x=>x?.$options?.name==='PCSearch'&&typeof x.getSearch==='function');
       if(!vm)return {ok:false,message:'前程无忧页面 API 客户端未加载，不能安全生成新请求',code:'client_unavailable'};
       vm.searchParams.pageNum=pageNo;Promise.resolve(vm.getSearch(pageNo)).catch(()=>{});return {ok:true};

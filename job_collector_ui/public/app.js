@@ -2,29 +2,29 @@ import {cohortConditionValue} from './insight-cohorts.js';
 import { patchHtml, updateLog } from './dom-updates.js';
 import {renderInsightWorkspace} from './insight-dashboard.js?v=20261024-concrete-skills';
 import {installWordCloudInteractions} from './insight-wordcloud.js';
-import {loadJobAssistant} from './job-assistant.js?v=20261022-interview-retrieval';
+import {loadJobAssistant} from './job-assistant.js?v=20261029-inline-edit';
 import {installSkillTermReview} from './skill-term-review.js';
 installWordCloudInteractions();
-import {mergeLiveProgress, collectionProgress} from './collection-progress.js';
-import {renderCollectionDashboard} from './collection-dashboard.js?v=20261026-verification-state';
-import {formatCollectionFlowLog} from './collection-flow-log.js?v=20261022-flow-log';
-import {renderInterviewPanel,installInterviewTools} from './interview-tools.js?v=20261023-interview-unlimited';
+import {mergeLiveProgress, collectionProgress,collectionStatusLabel,collectionTaskSummary} from './collection-progress.js?v=20261026-statistics';
+import {renderCollectionDashboard} from './collection-dashboard.js?v=20261029-job51-liepin-manual';
+import {formatCollectionFlowLog} from './collection-flow-log.js?v=20261026-statistics';
+import {renderInterviewPanel,installInterviewTools} from './interview-tools.js?v=20261026-statistics';
 import { fetchJsonWithTimeout } from './http-client.js';
-import { localPathKey, finalDatasetCatalog, selectLegacyTaskDataset,resolveLatestInsightSource } from './insight-transfer.js';
-import {loadInsightCatalog,populateInsightPickers} from './insight-dataset-picker.js';
-import {installInsightClassifier} from './insight-classifier.js?v=20261023-trial-workflow';
-import {insightReportContext} from './insight-classifier-state.js?v=20261023-trial-workflow';
-import {installSemanticCloud} from './insight-semantic.js?v=20261024-concrete-skills';
+import {installInsightClassifier} from './insight-classifier.js?v=20261029-simple-workflow';
+import {installInsightTrainingQueue} from './insight-training-queue.js?v=20261029-simple-workflow';
+import {installInsightDiscovery} from './insight-discovery.js?v=20261029-simple-workflow';
+import {insightReportContext} from './insight-classifier-state.js?v=20261027-stratified';
+import {installSemanticCloud} from './insight-semantic.js?v=20261029-semantic-preview';
 import {installJobBrowserWorkspace} from './browser-workspace.js?v=20261019-interaction-fix-9';
 import {installPersonalWiki} from './personal-wiki.js?v=20261022-single-organizer';
-const state = { tasks: [], selectedId: null, insight: null, insightDatasets: [], insightRenderKey: null, insightFormInitialized: false, insightDatasetRequest: 0, view: 'tasks', timer: null, logTimer: null };
+const state = { tasks: [], selectedId: null, insight: null, insightRenderKey: null, insightFormInitialized: false, view: 'tasks', timer: null, logTimer: null };
 const normalizedLocalPath = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
 const $ = (selector) => document.querySelector(selector);
 const number = (value) => new Intl.NumberFormat('zh-CN').format(Number(value || 0));
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const stageLabel = { collection: '多平台采集', public: '多平台采集', zhaopin: '多平台采集', yupao: '多平台采集', boss: '多平台采集', login_boss: 'BOSS登录', login_zhaopin: '智联登录', login_yupao: '鱼泡验证', finalize: '导出交付', workbook: '导出交付' };
 const statusLabel = { ready: '待启动', running: '运行中', completed: '已完成', partial: '未达目标', failed: '需处理', paused: '已暂停', stopping: '停止中' };
-const platformLabel = { shixiseng: '实习僧', iguopin: '国聘', mohrss: '公共招聘网', job51: '前程无忧', jobonline: '就业在线', zhaopin: '智联招聘', liepin:'猎聘', yupao: '鱼泡直聘', boss: 'BOSS直聘' };
+const platformLabel = { shixiseng: '实习僧', iguopin: '国聘', mohrss: '公共招聘网', job51: '前程无忧', jobonline: '就业在线', zhaopin: '智联招聘', liepin:'猎聘',nowcoder:'牛客岗位', yupao: '鱼泡直聘', boss: 'BOSS直聘' };
 const authLabels={unknown:'未确认',saved_unverified:'会话已保存，未验证登录',human_confirmed:'人工已确认',login_required:'需要登录'};
 const verificationLabels={unchecked:'未检查',waiting_human:'等待人工验证',clear:'当前页面通过',session_closed:'会话已关闭'};
 const pendingGets = new Map();
@@ -56,14 +56,13 @@ function progress(task) {
 
 function renderStats() {
   const running = state.tasks.filter((task) => ['running', 'stopping'].includes(task.status)).length;
-  const completed = state.tasks.filter((task) => task.status === 'completed').length;
   const rows = state.tasks.reduce((sum, task) => sum + (task.metrics.knowledgeRows??task.metrics.finalRows), 0);
-  const candidates = state.tasks.reduce((sum, task) => sum + task.metrics.candidates, 0);
+  const articles = state.tasks.reduce((sum, task) => sum + (Number(task.interviews?.details)||0), 0);
   patchHtml($('#stats'), [
     ['任务总数', state.tasks.length, ''],
     ['正在运行', running, running ? '请勿同时启动多个登录渠道' : '当前无活动进程'],
-    ['已完成任务', completed, ''],
-    ['去重入库量', number(rows), `采集候选 ${number(candidates)} 条`],
+    ['岗位已入库', number(rows), '条 · 各任务累计，跨任务未去重'],
+    ['面经正文已保存', number(articles), '篇 · 不计入岗位数量'],
   ].map(([label, value, note]) => `<div class="stat"><span>${label}</span><strong>${value}</strong>${note?`<em>${note}</em>`:''}</div>`).join(''));
 }
 
@@ -76,8 +75,8 @@ function renderList() {
   patchHtml(list, state.tasks.map((task) => {
     const value = progress(task);
     return `<button class="task-item ${task.id === state.selectedId ? 'selected' : ''}" data-task="${escapeHtml(task.id)}">
-      <div class="task-row"><strong>${escapeHtml(task.label)}</strong><span class="badge ${task.status}">${task.collectUntilExhausted&&task.status==='partial'?'本轮受阻或预算暂停':task.collectUntilExhausted&&task.status==='completed'?'本轮条件已处理':statusLabel[task.status] || task.status}</span></div>
-      <div class="task-meta"><span>${task.collectUntilExhausted?`已入库 ${number(task.metrics.knowledgeRows??0)} 条`:task.metrics.hasFinalResult ? `${number(task.metrics.finalRows)} / ${number(task.targetRows)}` : '尚未生成最终结果'} · 候选 ${number(task.metrics.candidates)}</span><span>${escapeHtml(task.currentStage ? stageLabel[task.currentStage] : String(task.message||'').split('；已取消原目标条数')[0])}</span></div>
+      <div class="task-row"><strong>${escapeHtml(task.label)}</strong><span class="badge ${task.status}">${escapeHtml(collectionStatusLabel(task))}</span></div>
+      <div class="task-meta"><span>岗位 ${number(task.metrics.knowledgeRows??0)} 条${task.interviews?.enabled?` · 面经正文 ${number(task.interviews.details||0)} 篇`:''}</span><span>${escapeHtml(collectionTaskSummary(task))}</span></div>
       ${value==null?'':`<div class="mini-progress"><i style="width:${value}%"></i></div>`}
     </button>`;
   }).join(''));
@@ -101,11 +100,11 @@ function renderDetail() {
   }
   if ($('#detail').dataset.taskId !== task.id) { $('#detail').replaceChildren(); $('#detail').dataset.taskId = task.id; }
   const isRunning = ['running', 'stopping'].includes(task.status);
-  const taskMessage = String(task.message || '').split('；已取消原目标条数')[0];
+  const taskMessage = collectionTaskSummary(task);
   const chips = [...task.platforms.map((key) => platformLabel[key]), ...task.cities.slice(0, 5), task.pace === 'safe' ? '稳健节奏' : task.pace === 'fast' ? '较快节奏' : '均衡节奏'];
   patchHtml($('#detail'), `
     <div class="detail-head">
-      <div class="detail-title"><div><h2>${escapeHtml(task.label)}</h2><p>${escapeHtml(task.status==='running' && task.currentStage ? `${stageLabel[task.currentStage]}进行中` : taskMessage)}</p></div><span class="badge ${task.status}">${statusLabel[task.status] || task.status}</span></div>
+      <div class="detail-title"><div><h2>${escapeHtml(task.label)}</h2><p>${escapeHtml(taskMessage)}</p></div><span class="badge ${task.status}">${escapeHtml(collectionStatusLabel(task))}</span></div>
       <div class="detail-actions">
         ${task.browserSession?.verification_status==='waiting_human'?'<button class="primary" data-action="confirm-verification">已人工验证，继续当前会话</button>':''}
         <button class="primary" data-action="all" ${isRunning ? 'disabled' : ''}>${isRunning?'采集中':task.metrics.candidates?'▶ 断点续采全部平台':'▶ 开始采集全部平台'}</button>
@@ -173,7 +172,7 @@ function switchView(view, options = {}) {
   $('#newTaskBtn').innerHTML = '<span>＋</span> 新建采集任务';
   if (options.history !== false) syncRoute();
   if (view === 'tasks') refresh(false);
-  if (view === 'insights') { loadInsightDatasets(); loadInsight(false); }
+  if (view === 'insights') { $('#insightForm input[name="inputFile"]').value='kb://all'; loadInsight(false); }
   if (view === 'assistant') loadJobAssistant();
   document.dispatchEvent(new CustomEvent('job-workspace-view',{detail:{view}}));
 }
@@ -192,40 +191,17 @@ function selectOptions(values = [], selected = '') {
   return values.map((value) => `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(value)}</option>`).join('');
 }
 
-async function loadInsightDatasets() {
-  const select = $('#insightDataset');
-  if (!select) return;
-  const requestId = ++state.insightDatasetRequest;
-  const errorBox=$('#insightDatasetError'),retry=$('#retryInsightDatasets');
-  if(retry)retry.disabled=true;
-  try {
-    const datasets = await loadInsightCatalog(api);
-    if (requestId !== state.insightDatasetRequest) return;
-    state.insightDatasets = datasets;
-    populateInsightPickers(document,datasets);
-    if(errorBox){errorBox.hidden=true;errorBox.querySelector('span').textContent='';}
-  } catch (error) {
-    if(requestId!==state.insightDatasetRequest)return;
-    // Retain the last usable choices and the user's kb:// source on failure.
-    if(!state.insightDatasets.length)select.innerHTML='<option value="">数据源目录暂不可用</option>';
-    if(errorBox){errorBox.querySelector('span').textContent=`数据源加载失败：${error.message}`;errorBox.hidden=false;}
-  } finally {if(requestId===state.insightDatasetRequest&&retry)retry.disabled=false;}
-}
-
-$('#retryInsightDatasets')?.addEventListener('click',()=>loadInsightDatasets());
-
 function renderInsightStatus() {
-  const transfer = state.insightTransfer;
   $('#insightRoleSource').textContent = '';
-  $('#insightTransferSource').textContent = transfer ? `来源：${transfer.role} · ${transfer.expectedRows ? `${number(transfer.expectedRows)} 条` : '条数待读取'}${transfer.collecting?' · 采集中':''}` : '';
+  $('#insightTransferSource').textContent = '';
   const insight = state.insight || { status: 'empty', message: '尚未生成岗位市场洞察' };
   const status = $('#insightStatus');
   const report = insight.report;
-  const context=insightReportContext({report,inputFile:$('#insightForm input[name="inputFile"]').value,running:insight.status==='running',normalize:normalizedLocalPath});
+  const context=insightReportContext({report,inputFile:$('#insightForm input[name="inputFile"]').value,role:$('#insightRole')?.value||'',running:insight.status==='running',normalize:normalizedLocalPath});
   const completedMessage = report && insight.status === 'completed' ? `${report.experimental?'[试分析 · 候选未达标] ':''}${report.detected_role?.name || report.role || '岗位'}分析完成：${number(report.sample_rows)}/${number(report.total_rows)} 条` : insight.message;
   const updatedAt = report?.generated_at || insight.updatedAt;
   status.classList.toggle('insight-report-stale',context.hideReport);
-  status.innerHTML = `<div class="insight-run-state ${escapeHtml(insight.status)}"><span class="pulse"></span><div><b>${escapeHtml(context.title||completedMessage)}</b><small>${context.hideReport?'上次报告与当前数据集不同':insight.status === 'running' ? `已运行 ${number(insight.runningSeconds)} 秒` : updatedAt ? `最近更新 ${new Date(updatedAt).toLocaleString('zh-CN')}` : '选择数据后生成分析'}</small></div></div>`;
+  status.innerHTML = `<div class="insight-run-state ${escapeHtml(insight.status)}"><span class="pulse"></span><div><b>${escapeHtml(context.title||completedMessage)}</b><small>${context.hideReport?'上次报告与当前范围或岗位不同':insight.status === 'running' ? `已运行 ${number(insight.runningSeconds)} 秒` : updatedAt ? `最近更新 ${new Date(updatedAt).toLocaleString('zh-CN')}` : '选择目标岗位后生成分析'}</small></div></div>`;
   if (report) {
     const changed = normalizedLocalPath($('#insightForm input[name="inputFile"]').value) !== normalizedLocalPath(report.input_file);
     const historicalManual = report.detected_role?.mode === 'manual_override' && !report.selection_contract;
@@ -236,10 +212,10 @@ function renderInsightStatus() {
   status.querySelector('[data-insight-history]')?.addEventListener('click',()=>{state.insightHistoryVisible=!state.insightHistoryVisible;renderInsightStatus();});
   const button = $('#runInsight');
   if (button) {
-    const ready=button.dataset.analysisReady==='true'&&button.dataset.classifierSource===$('#insightForm input[name="inputFile"]').value;
+    const ready=button.dataset.analysisReady==='true'&&button.dataset.classifierSource===$('#insightForm input[name="inputFile"]').value&&button.dataset.classifierRole===($('#insightRole')?.value||'');
     const running=insight.status==='running'||button.dataset.submitting==='true';
     button.disabled = running||!ready;
-    button.textContent = running ? '分析运行中…' : button.dataset.classifierMode==='candidate-trial'?'生成全量试分析':'生成全量分析';
+    button.textContent = running ? '分析中…' : button.dataset.classifierMode==='candidate-trial'?'生成试分析':'生成分析';
   }
 }
 
@@ -392,7 +368,6 @@ async function loadInsight(silent = true) {
       // The previous report is a result, not the default source for a new analysis.
       $('#insightForm input[name="inputFile"]').value='kb://all';
       state.insightFormInitialized=true;
-      await loadInsightDatasets();
     }
     renderInsight();
   } catch (error) { if (!silent) toast(error.message, true); }
@@ -455,13 +430,48 @@ async function handleAction(task, action) {
       controls.forEach(button=>{button.disabled=true;button.setAttribute('aria-busy','true');if(button.dataset.action===action)button.textContent=operation==='recheck'?'复检中…':'处理中…';});
       try{
         const opening=operation==='open'||operation==='session';
-        const options={mode:operation==='session'?'collector':'ordinary',browserId:'edge'};
+        // Always use the collector's own session browser. The old ordinary
+        // Edge path created a second browser whose login did not carry over
+        // to the collector/recheck session.
+        const options={mode:'collector'};
         if(opening){
           const capabilities=await api('/api/channel-verification/capabilities').catch(()=>null);
-          if(!capabilities?.ordinaryBrowser)throw Error('普通浏览器入口需要重启后台生效；已阻止旧版打开受管理窗口');
+          if(!capabilities?.ordinaryBrowser)throw Error('人工会话入口需要重启后台生效；已阻止旧版打开受管理窗口');
         }
         const data=await api(`/api/tasks/${encodeURIComponent(task.id)}/channels/${platform}/verification/${opening?'open':operation}`,{method:'POST',body:JSON.stringify(opening?options:{}),timeoutMs:60000});
         toast(data.message);await refresh();
+      }finally{pendingVerifications.delete(key);controls.forEach((button,i)=>{if(button.isConnected){button.disabled=false;button.removeAttribute('aria-busy');button.textContent=labels[i];}});}
+      return;
+    }
+    const manualBrowserAction=action.match(/^manual-open-(job51|liepin|zhaopin)$/);
+    if(manualBrowserAction){
+      const platform=manualBrowserAction[1],key=task.id+':'+platform;
+      if(pendingVerifications.has(key))return;
+      pendingVerifications.add(key);
+      const controls=[...document.querySelectorAll('button.channel-verify-control,button.channel-verify-trigger')].filter(button=>button.dataset.action?.endsWith('-'+platform));
+      const labels=controls.map(button=>button.textContent);
+      controls.forEach(button=>{button.disabled=true;button.setAttribute('aria-busy','true');if(button.dataset.action===action)button.textContent='打开中…';});
+      try{
+        const data=await api(`/api/tasks/${encodeURIComponent(task.id)}/channels/${platform}/manual-browser/open`,{method:'POST',body:'{}',timeoutMs:60000});
+        toast(data.message||'普通浏览器已打开');
+      }finally{pendingVerifications.delete(key);controls.forEach((button,i)=>{if(button.isConnected){button.disabled=false;button.removeAttribute('aria-busy');button.textContent=labels[i];}});}
+      return;
+    }
+    const sessionAction=action.match(/^session-(open|login|verified|process|close|resume)-(job51|liepin|zhaopin)$/);
+    if(sessionAction){
+      const [,operation,platform]=sessionAction,key=task.id+':'+platform;
+      if(pendingVerifications.has(key))return;
+      pendingVerifications.add(key);
+      const controls=[...document.querySelectorAll('button.channel-verify-control,button.channel-verify-trigger')].filter(button=>button.dataset.action?.endsWith('-'+platform));
+      const labels=controls.map(button=>button.textContent);
+      controls.forEach(button=>{button.disabled=true;button.setAttribute('aria-busy','true');if(button.dataset.action===action)button.textContent=operation==='resume'?'启动中…':'处理中…';});
+      try{
+        let data;
+        if(operation==='resume')data=await api(`/api/tasks/${encodeURIComponent(task.id)}/channels/${platform}/resume`,{method:'POST',body:'{}',timeoutMs:60000});
+        else if(operation==='close')data=await api(`/api/tasks/${encodeURIComponent(task.id)}/channels/${platform}/session/close`,{method:'POST',body:'{}',timeoutMs:60000});
+        else if(operation==='open')data=await api(`/api/tasks/${encodeURIComponent(task.id)}/channels/${platform}/session/open`,{method:'POST',body:'{}',timeoutMs:90000});
+        else data=await api(`/api/tasks/${encodeURIComponent(task.id)}/channels/${platform}/session/mark`,{method:'POST',body:JSON.stringify({state:operation==='login'?'logged_in':'verified'}),timeoutMs:90000});
+        toast(data.message||'已处理');await refresh();
       }finally{pendingVerifications.delete(key);controls.forEach((button,i)=>{if(button.isConnected){button.disabled=false;button.removeAttribute('aria-busy');button.textContent=labels[i];}});}
       return;
     }
@@ -470,16 +480,11 @@ async function handleAction(task, action) {
       toast(data.message);return refresh();
     }
     if (action === 'insights') {
-      await loadInsightDatasets();
-      let dataset;
-      try { dataset = await resolveLatestInsightSource(task,api); }
-      catch (error) { if (error.status !== 404) throw error; dataset = selectLegacyTaskDataset(task, state.insightDatasets); }
       state.insightFormInitialized = true;
-      state.insightTransfer = { taskId: task.id, role: task.label, ...dataset };
-      $('#insightForm input[name="inputFile"]').value = dataset.path;
+      $('#insightForm input[name="inputFile"]').value = 'kb://all';
       switchView('insights');
       $('#insightForm').scrollIntoView({ behavior: 'smooth' });
-      toast(dataset.requiresManualSource?`已对接 ${task.label} 的最新导出CSV；点击“生成全量分析”时校验并读取文件`:`已选择 ${task.label} 的${dataset.resolution==='knowledge'?'已入库中间':dataset.resolution==='latest_snapshot'?'最新候选':'交付'}数据${dataset.expectedRows ? ` ${number(dataset.expectedRows)} 条` : ''}${dataset.updatedAt?'；更新于 '+new Date(dataset.updatedAt).toLocaleString('zh-CN'):''}${dataset.collecting ? '；采集更新后需重新生成' : ''}`);
+      toast('已打开全量岗位洞察；选择目标岗位后生成分析，新方向可输入岗位名称训练');
       return;
     }
     if (action === 'pause') {
@@ -520,20 +525,10 @@ installInterviewTools({api,toast,refresh,getTask:()=>state.tasks.find(task=>task
 // Mark edits immediately, before any delayed initial report can restore fields.
 for (const eventName of ['input', 'change']) $('#insightForm').addEventListener(eventName, () => {
   state.insightFormInitialized = true;
-  if (state.insightTransfer && localPathKey($('#insightForm input[name="inputFile"]').value) !== localPathKey(state.insightTransfer.path)) state.insightTransfer = null;
+  $('#insightForm input[name="inputFile"]').value='kb://all';
   renderInsightStatus();
 });
-$('#insightDataset').addEventListener('change', (event) => {
-  if (event.currentTarget.value) $('#insightForm input[name="inputFile"]').value = event.currentTarget.value;
-  const selected=state.insightDatasets.find(item=>item.path===event.currentTarget.value);
-  state.insightTransfer=null;
-  state.insightHistoryVisible=false;
-  if(['latest_snapshot','knowledge'].includes(selected?.resolution)){
-    state.insightTransfer={...selected,role:selected.role};
-    renderInsightStatus();
-  }
-  
-});
+$('#insightRole')?.addEventListener('change',()=>{state.insightHistoryVisible=false;renderInsightStatus();});
 
 function updateCollectionMode(){
   const hybrid=$('#taskForm select[name="transportMode"]').value==='http_preferred_browser_fallback';
@@ -569,11 +564,11 @@ $('#insightForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const button=$('#runInsight');if(button.dataset.submitting==='true'||state.insight?.status==='running')return;
   const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+  body.inputFile = 'kb://all';
   body.analysisMode = 'full';
   body.sheetName = '岗位数据';
-  if (state.insightTransfer && !state.insightTransfer.requiresManualSource && localPathKey(body.inputFile) === localPathKey(state.insightTransfer.path) && state.insightTransfer.taskId) body.sourceTaskId = state.insightTransfer.taskId;
   try {
-    if(button.dataset.analysisReady!=='true'||button.dataset.classifierSource!==body.inputFile)throw new Error('当前数据集尚无可用模型，请先完成标注与训练');
+    if(button.dataset.analysisReady!=='true'||button.dataset.classifierSource!==body.inputFile)throw new Error('目标岗位尚无可用模型，请先新增岗位并完成训练');
     body.classifierMode=button.dataset.classifierMode||'qualified';
     if(body.classifierMode==='candidate-trial')body.classifierRunId=button.dataset.classifierRunId;
     button.dataset.submitting='true';renderInsightStatus();
@@ -587,6 +582,8 @@ $('#insightForm').addEventListener('submit', async (event) => {
 
 installSkillTermReview({api,toast});
 installInsightClassifier({api,toast});
+installInsightTrainingQueue({api,toast});
+installInsightDiscovery({api,toast});
 installJobBrowserWorkspace({api,toast});
 installPersonalWiki({api,toast});
 installSemanticCloud({api,toast});

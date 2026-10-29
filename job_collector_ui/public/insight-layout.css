@@ -9,8 +9,11 @@ body[data-view="insights"] .topbar h1 { font-size:25px; }
 #insightsView .insight-toolbar-copy h2 { margin:0; font-size:15px; }
 .insight-source-icon { display:grid; place-items:center; width:36px; height:36px; color:var(--teal-dark); border-radius:10px; background:var(--teal-soft); }
 .insight-source-icon svg { width:21px; fill:none; stroke:currentColor; stroke-width:1.5; }
-#insightsView .insight-form { flex:1; min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:0 14px; }
-#insightsView .insight-form > label.wide { grid-column:1; grid-row:1; font-size:12px; color:var(--muted); }
+#insightsView .insight-form { flex:1; min-width:0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:8px 14px; }
+#insightsView .insight-form > label.wide { grid-column:auto; grid-row:auto; font-size:12px; color:var(--muted); }
+#insightsView #insightRoleCatalogStatus { display:block; margin-top:5px; line-height:1.5; }
+#insightTrainingQueue td:last-child { white-space:nowrap; }
+#insightTrainingQueue td button + button { margin-left:6px; }
 #insightsView #runInsight { grid-column:2; grid-row:1; justify-self:stretch; min-height:40px; padding-inline:20px; }
 #insightsView .insight-form select { margin-top:4px; height:40px; background:var(--soft); }
 #insightsView #insightTransferSource:empty,#insightsView #insightRoleSource:empty { display:none; }
@@ -137,7 +140,7 @@ button.insight-city-row:hover { background:var(--soft); }
   #insightsView .insight-toolbar-copy { margin-bottom:12px; }
   .insight-source-icon { width:28px; height:28px; border-radius:7px; }
   .insight-source-icon svg { width:17px; }
-  #insightsView .insight-form { gap:8px; }
+  #insightsView .insight-form { grid-template-columns:minmax(0,1fr); gap:8px; }
   #insightsView #runInsight { font-size:12px; padding-inline:12px; }
   .insight-control-deck { top:61px; margin-bottom:22px; border-radius:10px; }
   .insight-filter-panel { padding:12px 13px 0; }

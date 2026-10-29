@@ -5,13 +5,16 @@ import path from 'node:path';
 import vm from 'node:vm';
 import {fileURLToPath} from 'node:url';
 import {fetchMohrssList,parseMohrssDataPage} from './public_api_adapters.mjs';
+import {collectMohrssCandidates,mohrssCheckpointNeedsContinuation} from './mohrss_related_search.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url)),evidence=path.resolve(here,'../../public-evidence');
 const source=await fs.readFile(path.join(here,'collect_public_job_platforms.mjs'),'utf8');
 const start=source.indexOf('async function collectMohrss('),end=source.indexOf('\nasync function collect51job(',start);
 assert.ok(start>=0&&end>start,'Actual production function is located');
 const functionSource=source.slice(start,end);
-const first=parseMohrssDataPage(await fs.readFile(path.join(evidence,'mohr-list.html'),'utf8')).records;
-const second=parseMohrssDataPage(await fs.readFile(path.join(evidence,'mohr-page2.html'),'utf8')).records;
+// Self-contained upstream-shaped fixtures; no dependency on a developer's
+// untracked historical browser captures.
+const fixture=id=>({acb200:String(id),acb210:'数据分析',aab004:'测试公司',aab302:'北京',area_:'北京',acb202:'北京',acb213:'负责数据分析和数据平台开发'});
+const first=[fixture(1),fixture(2)],second=[fixture(3),fixture(4)];
 const pages={1:[first[0],first[1]],2:[first[1],second[0]],3:[second[1]]};
 const html=(page,rows=pages[page])=>`<input id="findjoblist" value="${JSON.stringify(rows).replaceAll('&','&amp;').replaceAll('"','&quot;')}"><input id="pageNo" value="${page}"><input id="totalpages" value="3"><input id="totalcount" value="4">`;
 const root=await fs.mkdtemp(path.join(os.tmpdir(),'mohrss-checkpoint-api-'));
@@ -22,7 +25,8 @@ async function harness(name,{maxPages=3,maxRows=100,taskId='fixture-task',failPa
   const safeName=value=>String(value).replace(/[\\/:*?"<>|]/g,'_');
   const comboFile=(platform,keyword,city)=>path.join(rawDir,`${platform}_${safeName(keyword)}_${safeName(city)}.json`);
   const request=async url=>{const page=Number(new URL(url).searchParams.get('pageNo'));calls.push(page);if(page===failPage)return new Response('verification',{status:403});return new Response(html(page,customPages[page]));};
-  const context=vm.createContext({fs,path,URL,config,checkpointDir,process:{env:{}},request,safeName,comboFile,fetchMohrssList,collectedAt:'fixture',htmlToText:value=>String(value||''),writeJsonAtomic:async(file,data)=>{const pending=file+'.tmp';await fs.writeFile(pending,JSON.stringify(data));await fs.rename(pending,file);},console:{log(){}}});
+  const readOwnedCheckpoint=async file=>{let value;try{value=JSON.parse(await fs.readFile(file,'utf8'));}catch(error){if(error.code==='ENOENT')return {};throw error;}if(value.task_id!==taskId)throw Object.assign(Error('foreign task'),{code:'TASK_OUTPUT_OWNERSHIP'});return value;};
+  const context=vm.createContext({fs,path,URL,config,currentTaskId:taskId,checkpointDir,readOwnedCheckpoint,collectMohrssCandidates,mohrssCheckpointNeedsContinuation,process:{env:{}},request,safeName,comboFile,fetchMohrssList,collectedAt:'fixture',htmlToText:value=>String(value||''),writeJsonAtomic:async(file,data)=>{const pending=file+'.tmp';await fs.writeFile(pending,JSON.stringify(data));await fs.rename(pending,file);},console:{log(){}}});
   vm.runInContext(functionSource,context);
   return {run:()=>context.collectMohrss('数据分析',city),calls,config,checkpoint:path.join(checkpointDir,`mohrss_数据分析_${city.name}.json`),raw:comboFile('中国公共招聘网','数据分析',city.name)};
 }

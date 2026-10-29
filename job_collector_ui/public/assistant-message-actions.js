@@ -41,7 +41,7 @@ export function addMessageActions(item,{role,text,onEdit,onRetry,notify,write}={
   }
   for(const [kind,label,handler] of [['edit','编辑',onEdit],['retry','重新提问',onRetry]])if(handler){
     const button=actionButton(item.ownerDocument,kind,label);button.dataset.requiresIdle='true';
-    button.title=kind==='edit'?'编辑到输入框，确认发送后作为新消息；保留历史':'回填原提问，确认后发送；不会自动执行工具';
+    button.title=kind==='edit'?'在此消息中编辑提问':'回填原提问，确认后发送；不会自动执行工具';
     button.addEventListener('click',()=>{if(!button.disabled)handler();});bar.append(button);
   }
   item.append(bar);return bar;

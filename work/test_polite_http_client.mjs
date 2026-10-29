@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {createPoliteHttpClient,validateDirectHttpEndpoint} from './polite_http_client.mjs';
+import {parseZhaopinApi} from './zhaopin_api.mjs';
 const url='https://www.shixiseng.com/app/interns/search/v2';
 const dir=await fs.mkdtemp(path.join(os.tmpdir(),'polite-http-'));
 const json=(status=200,headers={})=>new Response('{"code":100,"data":[]}',{status,headers:{'content-type':'application/json',...headers}});
@@ -53,7 +54,13 @@ assert.throws(()=>validateDirectHttpEndpoint('http://job.mohrss.gov.cn/other'));
 let badSsrCalls=0;const badSsr=createPoliteHttpClient({...common,stateDir:path.join(dir,'bad-ssr'),fetchImpl:async()=>{badSsrCalls++;return new Response('<html>missing expected data</html>');}});
 await assert.rejects(badSsr(ssrUrl));await assert.rejects(badSsr(ssrUrl),{code:'origin_cooldown'});assert.equal(badSsrCalls,1);checks++;
 const zhaopin=createPoliteHttpClient({...common,stateDir:path.join(dir,'zp-verification'),fetchImpl:async()=>new Response('{"code":200,"data":{"isVerification":1,"list":[]}}',{headers:{'content-type':'application/json'}})});
-await assert.rejects(zhaopin('https://fe-api.zhaopin.com/c/i/search/positions'),{code:'verification_required'});await assert.rejects(zhaopin('https://fe-api.zhaopin.com/c/i/search/positions'),{code:'origin_cooldown'});checks++;
+// Business verification is interpreted by the channel adapter, not the shared
+// HTTP layer. The channel then penalizes the same origin; do not weaken either
+// the response check or the cooldown merely to retain the old layering test.
+const verificationBody=await (await zhaopin('https://fe-api.zhaopin.com/c/i/search/positions')).json();
+assert.throws(()=>parseZhaopinApi(verificationBody),{code:'verification_required'});checks++;
+await zhaopin.penalize('zhaopin_condition_verification');
+await assert.rejects(zhaopin('https://fe-api.zhaopin.com/c/i/search/positions'),{code:'origin_cooldown'});checks++;
 let redirects=0;const redirect=createPoliteHttpClient({...common,stateDir:path.join(dir,'redirect'),fetchImpl:async()=>{redirects++;return new Response(null,{status:302,headers:{location:'https://example.com'}});}});
 await assert.rejects(redirect(url));assert.equal(redirects,1);checks++;
 // Independent OS processes share the same per-origin lock and request clock.

@@ -16,11 +16,13 @@ export function classifierAnalysisState(state){
   if(state.screening?.ready===true)return {kind:'ready',title:role+' · 可分析',reason:run?.status==='completed'&&run.eligible===false?'使用已有合格模型；本轮候选未替换。':'使用当前岗位的合格专用分类器。'};
   if(state.analysis?.ready===true&&state.analysis.mode==='candidate-trial'&&state.analysis.runId===run?.id)return {kind:'trial',title:role+' · 可试分析',reason:'候选未达标，允许全量试分析；结果仅供探索，不替换合格模型。'};
   if(['preparing','labeling','training'].includes(run?.status))return {kind:'pending',title:role+' · 训练中',reason:'训练完成后，可生成全量分析；未达标候选仅供试分析。'};
+  if(run?.status==='needs_samples'||run?.status==='failed'&&/正负样本不足|有效正负标签不足/.test(run.message||''))return {kind:'blocked',title:role+' · 待补样',reason:'标签已保留；请核对规范检索词，补充有效正负样本后重新标注。'};
   if(state.analysis?.error)return {kind:'blocked',title:role+' · 模型不可用',reason:state.analysis.error};
   if(run?.status==='completed'&&run.eligible===false)return {kind:'blocked',title:role+' · 候选未达标',reason:classifierAcceptanceIssues(run.evaluation).join('；')+'。需补充有效样本后重新训练。'};
-  return {kind:'blocked',title:role+' · 待训练',reason:state.analysis?.error||state.screening?.error||'请先确认标注规范，再联合标注并训练。'};
+  return {kind:'blocked',title:role+' · 待训练',reason:state.analysis?.error||state.screening?.error||'输入岗位关键词，或从聚类结果选择方向后开始训练。'};
 }
-export function insightReportContext({report,inputFile='',running=false,normalize=value=>String(value||'')}={}){
-  const stale=!!report&&normalize(inputFile)!==normalize(report.input_file);
-  return {stale,hideReport:stale&&!running,title:stale&&!running?'当前数据集尚未生成报告':null};
+export function insightReportContext({report,inputFile='',role='',running=false,normalize=value=>String(value||'')}={}){
+  const roleChanged=!!report&&!!role&&role!==(report.detected_role?.name||report.role);
+  const stale=!!report&&(normalize(inputFile)!==normalize(report.input_file)||roleChanged);
+  return {stale,hideReport:stale&&!running,title:stale&&!running?(roleChanged?'当前岗位类别尚未生成报告':'当前数据集尚未生成报告'):null};
 }

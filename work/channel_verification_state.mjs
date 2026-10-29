@@ -40,7 +40,7 @@ export async function readChannelVerification(task){
 }
 export function verificationDiagnostic(diagnostic,entry){
   if(!entry)return diagnostic;
-  if(entry.state==='manual_checked')return {status:'paused',label:'已核对，待复检',reason:entry.reason||'普通浏览器的登录不自动同步到采集会话；请点击“复检采集会话”',code:'manual_checked'};
+  if(entry.state==='manual_checked')return {status:'paused',label:'已核对，待复检',reason:entry.reason||'请在同一采集会话中完成登录/验证后点击“复检采集会话”',code:'manual_checked'};
   if(entry.state==='checking')return {status:'paused',label:'正在复检',reason:'仅检查当前渠道，不启动采集；遇到验证即停',code:'verification_checking'};
   if(entry.state==='recheck_failed')return {status:entry.failureStatus||'manual',label:'复检未通过',reason:entry.reason,code:entry.failureCode||'verification_required'};
   if(entry.state==='verified'&&!['manual','failed'].includes(diagnostic?.status))return {status:'paused',label:'复检通过，待续采',reason:'已观察到采集会话的有效搜索响应；未自动启动采集，冷却期保持不变',code:'verification_verified'};

@@ -10,9 +10,12 @@ import {requestBudget} from './assistant_request_budget.mjs';
 function json(res,status,value){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));}
 export function createAssistantHandler(store,credentials=null,chatOptions={}){
   let active=0;
-  const chat=createChatAgent({getModel:()=>credentials?credentials.load():Promise.resolve(process.env),...chatOptions});
+  const chat=createChatAgent({getModel:()=>credentials?credentials.load():Promise.resolve(process.env),candidateSearch:store.searchCandidates?.bind(store),...chatOptions});
   const interviewMetadata=async()=>{try{return chatOptions.interviewStore?await chatOptions.interviewStore.metadata():{posts:0,available:false};}catch{return {posts:0,available:false,warning:'面经目录读取失败，不代表空库'};}};
-  const loadIndex=async(body,options={})=>{try{return await store.load(options);}catch(error){if(options.signal?.aborted)throw options.signal.reason;if(chatOptions.interviewStore&&isInterviewQuestion(body.message))return interviewOnlyIndex;throw error;}};
+  const loadIndex=async(body,options={})=>{try{
+    if(store.consultationIndex&&body.resume==null&&resumeMessage(String(body.message||''))===null&&await chat.isConsultationMessage(body.message,body.conversationId))return await store.consultationIndex(options);
+    return await store.load(options);
+  }catch(error){if(options.signal?.aborted)throw options.signal.reason;if(chatOptions.interviewStore&&isInterviewQuestion(body.message))return interviewOnlyIndex;throw error;}};
   return async(req,res,pathname)=>{
     if(!['/api/assistant/context','/api/assistant/ask','/api/assistant/model','/api/assistant/chat','/api/assistant/action','/api/assistant/reset','/api/assistant/attachment','/api/assistant/sessions','/api/assistant/session'].includes(pathname))return false;
     const budget=['/api/assistant/context','/api/assistant/ask','/api/assistant/chat'].includes(pathname)?requestBudget(res,chatOptions.requestTimeoutMs??180000):null;
@@ -24,6 +27,8 @@ export function createAssistantHandler(store,credentials=null,chatOptions={}){
       if(req.method==='GET'&&pathname.endsWith('/model')){json(res,200,credentials?await credentials.status():modelAvailability());return true;}
       if(req.method==='GET'&&pathname.endsWith('/sessions')){json(res,200,{sessions:await chat.list(),persistent:!!chatOptions.repository,collection_flow_version:5});return true;}
       if(req.method==='GET'&&pathname.endsWith('/context')){
+        res.setHeader('x-job-assistant-consultation','1');
+        res.setHeader('x-job-assistant-raw-evidence',store.searchCandidates?'1':'0');
         // Opening a chat is not a request to classify/tokenize the entire KB.
         // Keep the full context contract for existing analytical consumers.
         if(new URL(req.url,'http://localhost').searchParams.get('summary')==='1'&&store.metadata){

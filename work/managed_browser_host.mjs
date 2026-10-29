@@ -22,7 +22,7 @@ try{
  // Standard Playwright automation remains identifiable. Do not hide webdriver or spoof fingerprints.
  context=await chromium.launchPersistentContext(profile,{headless:false,chromiumSandbox:true,viewport:null,
   executablePath,locale:'zh-CN',proxy:initialization.proxy,
-  args:['--remote-debugging-address=127.0.0.1','--remote-debugging-port=0'],
+  args:['--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--source-shortcut-location=start-menu'],
  });
  const [port,wsPath]=(await fs.readFile(path.join(profile,'DevToolsActivePort'),'utf8')).trim().split(/\r?\n/);
  if(!/^\d+$/.test(port)||!wsPath.startsWith('/devtools/browser/'))throw Error('浏览器调试端口未就绪');

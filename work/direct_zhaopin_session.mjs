@@ -8,6 +8,7 @@ import path from 'node:path';
 import {parseZhaopinApi,zhaopinJobId} from './zhaopin_api.mjs';
 import {normalizeDirectZhaopin} from './direct_zhaopin_adapter.mjs';
 import {jsonBodyBytes} from './json_request_body.mjs';
+import {pageSignature,paginationVersion} from './session_pagination_health.mjs';
 
 const ENDPOINT = 'https://fe-api.zhaopin.com/c/i/search/positions';
 // 刷新端点是智联前端 chunk-common 里的 f=~apiDomain/c/i/refresh-token（运行时替换为 fe-api）。
@@ -174,22 +175,26 @@ export async function fetchZhaopinSessionPage(request, keyword, city, pageIndex,
 
 // 深翻页采集一个关键词/城市条件，直到 count 上限或 endPage。
 // 返回与 collect_public_job_platforms 标准化格式一致的行。
-export async function collectZhaopinSession(keyword, city, { request, session, maxPages=100, maxRows=Infinity, pageSize=20, startPage=1, seenIds=[], onPage=()=>{}, onProgress=()=>{} } = {}) {
+export async function collectZhaopinSession(keyword, city, { request, session, maxPages=100, maxRows=Infinity, pageSize=20, startPage=1, seenIds=[], previousPagination=null, onPage=()=>{}, onProgress=()=>{} } = {}) {
   if (!session?.cookie) throw fail('缺少本人登录会话 cookie；请先运行 zhaopin_login_helper.mjs', 'session_missing');
   // 已知 ID 来自断点：命中不算新增，但绝不能因此判定 «空页» 结束条件。
   // 旧实现每次从 p1 重放并只做行级去重，重复页会吃掉风控额度，且 lowStreak 让位会误杀未完条件。
   const seen = new Set((seenIds || []).map(String).filter(Boolean));
   const rows = [];
-  let total = 0, page = Math.max(1, Number(startPage) || 1), endReached = false;
+  let total = 0, page = Math.max(1, Number(startPage) || 1), endReached = false, pagesFetched=0, pagination=previousPagination;
   const pageLimit = Math.max(1, Number(maxPages) || 100), rowLimit = Math.max(1, Number(maxRows) || Infinity);
   for (; page <= pageLimit; page++) {
     const result = await fetchZhaopinSessionPage(request, keyword, city, page, session, pageSize);
-    total = result.count || total;
-    if (!result.rows.length) { endReached = true; break; }
+    pagesFetched++;total = result.count;
+    if(!Number.isSafeInteger(total)||total<0||total===0&&result.rows.length)throw fail('岗位列表与分页总数不一致');
+    const signature=pageSignature(result.rows.map(zhaopinJobId));
+    if(result.rows.length&&pagination?.page!==page&&pagination?.signature===signature)throw Object.assign(fail('不同页返回相同岗位，保留当前页待复检','pagination_stalled'),{stopChannel:false,conditionScoped:true});
     let added = 0;
     const newRows = [];
+    let consumed=0;
     for (const raw of result.rows) {
       const id = zhaopinJobId(raw);
+      consumed++;
       if (!id || seen.has(id)) continue;
       seen.add(id);
       const item = { raw, id };
@@ -198,13 +203,17 @@ export async function collectZhaopinSession(keyword, city, { request, session, m
       added++;
       if (seen.size >= rowLimit) break;
     }
+    const consumedAll=consumed===result.rows.length;
+    // count is an estimate/window, not an authoritative terminal boundary.
+    // Historical successful queries returned more stable IDs than count.
+    endReached=consumedAll&&(result.endPage||total===0&&seen.size===0);
+    pagination={version:paginationVersion,platform:'zhaopin',keyword,cityCode:String(city.code),page,received:result.rows.length,total,rows:seen.size,consumedAll,serverEnd:result.endPage,signature,reason:endReached?(total===0&&seen.size===0?'confirmed_empty':'server_end'):'in_progress'};
     onPage({ page, added, unique: seen.size, total, endPage: result.endPage });
     // 逐页回写进度：风控打断也不会丢掉已翻到的页面，下次从 nextPage 继续。
     // 只回传本页新增行：全量回传会让 100 页条件出现 O(n²) 的重复标准化与重写。
-    await onProgress({ page, nextPage: page + 1, total, rows: newRows.map(({ raw }) => normalizeDirectZhaopin(raw, keyword, city.name, total, new Date().toISOString(), 'session_json_api')).map(r => ({ ...r, acquisition_mode: 'session_json_api', access_level: '本人登录会话 HTTP 直连岗位搜索接口' })) });
-    if (seen.size >= rowLimit) break;
-    if (result.endPage) { endReached = true; break; }
-    if (added === 0 && page > 1 && seen.size === 0) { endReached = true; break; }
+    await onProgress({ page, nextPage:endReached?null:consumedAll?page+1:page, completed:endReached, pagination,total, rows: newRows.map(({ raw }) => normalizeDirectZhaopin(raw, keyword, city.name, total, new Date().toISOString(), 'session_json_api')).map(r => ({ ...r, acquisition_mode: 'session_json_api', access_level: '本人登录会话 HTTP 直连岗位搜索接口' })) });
+    if(endReached)break;
+    if(seen.size>=rowLimit){if(consumedAll)page++;break;}
   }
   // 页码耗尽（例如 maxPages 上限）与真正翻到末页必须区分：前者标记为翻页受限，
   // 否则断点会把未完成条件写成 completed=true，剩余页永远不再补采。
@@ -212,7 +221,7 @@ export async function collectZhaopinSession(keyword, city, { request, session, m
   const nextPage = endReached ? null : page;
   const collectedAt = new Date().toISOString();
   return {
-    total, pagesFetched: page - Math.max(1, Number(startPage) || 1), endReached, pageLimitReached, nextPage,
+    total,pagesFetched,endReached,pageLimitReached,nextPage,pagination,
     rows: rows.map(({ raw }) => normalizeDirectZhaopin(raw, keyword, city.name, total, collectedAt, 'session_json_api')).map(r => ({ ...r, acquisition_mode: 'session_json_api', access_level: '本人登录会话 HTTP 直连岗位搜索接口' })),
   };
 }

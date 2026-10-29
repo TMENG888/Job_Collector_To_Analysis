@@ -4,7 +4,8 @@ import {parseChannelCsv} from './public_channel_csv.mjs';
 
 const cache = new Map();
 const publicChannels = ['shixiseng', 'iguopin', 'mohrss', 'jobonline', 'job51', 'liepin'];
-const rawNames = {'实习僧':'shixiseng','国聘':'iguopin','中国公共招聘网':'mohrss','就业在线':'jobonline','前程无忧':'job51','猎聘':'liepin'};
+const observedChannels=[...publicChannels,'zhaopin'];
+const rawNames = {'实习僧':'shixiseng','国聘':'iguopin','中国公共招聘网':'mohrss','就业在线':'jobonline','前程无忧':'job51','猎聘':'liepin','智联招聘':'zhaopin'};
 const idOf = row => row?.uuid ?? row?.job_id ?? row?.jobId ?? row?.acb200;
 
 // Cache compact IDs/counters, never the full descriptions. Atomic checkpoint
@@ -21,13 +22,13 @@ async function cached(file, key, project) {
 }
 
 export async function liveCollectionMetrics(task) {
-  const ids = Object.fromEntries(publicChannels.map(key => [key, new Set()]));
+  const ids = Object.fromEntries(observedChannels.map(key => [key, new Set()]));
   const progress = [];
   for (const folder of ['断点数据', '原始数据']) {
     const dir = path.join(task.outputDir, folder);
     const names = await fs.readdir(dir).catch(() => []);
     for (const name of names.filter(name => name.endsWith('.json') && !name.endsWith('.diagnostic.json'))) {
-      const platform = publicChannels.find(key => name.startsWith(`${key}_`)) || Object.entries(rawNames).find(([label]) => name.startsWith(`${label}_`))?.[1];
+      const platform = observedChannels.find(key => name.startsWith(`${key}_`)) || Object.entries(rawNames).find(([label]) => name.startsWith(`${label}_`))?.[1];
       if (!platform) continue;
       const snapshot = await cached(path.join(dir,name), task.id, text => {
         const data = JSON.parse(text);
@@ -51,11 +52,11 @@ export async function liveCollectionMetrics(task) {
   // Channel CSVs already contain retained exports; union with checkpoints,
   // instead of adding the same jobs again across keywords or sources.
   const owner = await fs.readFile(path.join(task.outputDir,'任务归属.json'),'utf8').then(JSON.parse).catch(()=>null);
-  if (owner?.task_id === task.id) for (const platform of publicChannels) {
+  if (owner?.task_id === task.id) for (const platform of observedChannels) {
     const rowIds = await cached(path.join(task.outputDir,`${platform}_标准化数据.csv`), task.id,
       text => parseChannelCsv(text).map(idOf).filter(id=>id !== undefined && id !== null && id !== '').map(String));
     rowIds?.forEach(id=>ids[platform].add(id));
   }
-  const platformCounts = Object.fromEntries(publicChannels.map(key=>[key, ids[key].size]));
-  return {task_id:task.id, updatedAt:new Date().toISOString(), publicRows:Object.values(platformCounts).reduce((sum,n)=>sum+n,0), platformCounts, details:progress};
+  const platformCounts = Object.fromEntries(observedChannels.map(key=>[key, ids[key].size]));
+  return {task_id:task.id, updatedAt:new Date().toISOString(), publicRows:publicChannels.reduce((sum,key)=>sum+platformCounts[key],0), platformCounts, details:progress};
 }
