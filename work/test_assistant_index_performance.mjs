@@ -17,6 +17,7 @@ import {readAssistantIndexSnapshot} from './assistant_index_snapshot.mjs';
 import {createChatAgent} from './job_assistant_chat.mjs';
 
 const dir=await fs.mkdtemp(path.join(os.tmpdir(),'assistant-index-test-'));
+process.env.JOB_INSIGHT_CLASSIFIER_DIR=path.join(dir,'classifiers');
 const cacheDir=path.join(dir,'derived-cache'),store=createKnowledgeStore(dir);
 await store.sync({tasks:[],refresh:false});
 const body='岗位职责：负责构建智能体与RAG知识库，开发多智能体编排服务；搭建检索增强生成系统，开发工具调用接口和多轮对话流程，将大模型能力集成到业务应用中，负责应用部署及效果评估。任职要求：本科，Python LangChain LLM。支持自研插件协议。';
@@ -36,34 +37,34 @@ const progress=[],first=await threaded.load({onProgress:p=>progress.push(p)});
 assert.deepEqual(first.jobs,direct.jobs);assert.deepEqual(first.frequencies,direct.frequencies);assert.deepEqual(first.tokenSets,direct.tokenSets);
 assert.deepEqual(first.indexBuild,{reused:0,classified:20,total:20});
 assert.ok(progress.some(p=>p.phase==='index_classifying'&&p.completed===20));
-assert.strictEqual(await threaded.load(),first,'unchanged memory index must be reused');threaded.close();
+assert.strictEqual((await threaded.load()).jobs,first.jobs,'unchanged memory job snapshot must be reused');threaded.close();
 threaded=createKnowledgeAssistantStore(dir,{readOnly:true,cacheDir});
 const restarted=await threaded.load();assert.deepEqual(restarted.indexBuild,{reused:20,classified:0,total:20});assert.equal(restarted.indexCache,'disk');
 assert.equal(await readAssistantIndexSnapshot(cacheDir,restarted.report.revision,'other-knowledge-database'),null,'snapshot cannot cross database scopes');
 update(db=>{const row=db.prepare('SELECT job_key,raw FROM jobs ORDER BY job_key LIMIT 1').get(),raw=JSON.stringify({...JSON.parse(row.raw),company_name:'已更新公司'});db.prepare('UPDATE jobs SET raw=?,content_hash=? WHERE job_key=?').run(raw,hash(raw),row.job_key);});
-assert.deepEqual((await threaded.load()).indexBuild,{reused:19,classified:1,total:20},'only changed content is classified');
+assert.deepEqual((await threaded.load({forceRefresh:true})).indexBuild,{reused:19,classified:1,total:20},'only changed content is classified');
 // Approved labels are deliberately outside the raw-classification cache.
 const firstKey='K'+'0'.repeat(24);
 update(db=>{const row=db.prepare('SELECT content_hash FROM jobs WHERE job_key=?').get(firstKey);db.prepare('INSERT INTO labels VALUES(?,?,?,?,?)').run('test-label',firstKey,row.content_hash,'approved',JSON.stringify({skills:['自研插件协议'],evidence_json:[{label_type:'skill',label:'自研插件协议',quote:'支持自研插件协议'}]}));});
-let index=await threaded.load();assert.equal(index.indexBuild.classified,0);assert.ok(index.jobs.find(j=>j.key===firstKey).skills.includes('自研插件协议'));
+let index=await threaded.load({forceRefresh:true});assert.equal(index.indexBuild.classified,0);assert.ok(index.jobs.find(j=>j.key===firstKey).skills.includes('自研插件协议'));
 update(db=>db.prepare("UPDATE labels SET state='withdrawn' WHERE label_id='test-label'").run());
-index=await threaded.load();assert.equal(index.indexBuild.classified,0);assert.ok(!index.jobs.find(j=>j.key===firstKey).skills.includes('自研插件协议'));
+index=await threaded.load({forceRefresh:true});assert.equal(index.indexBuild.classified,0);assert.ok(!index.jobs.find(j=>j.key===firstKey).skills.includes('自研插件协议'));
 threaded.close();
 // A corrupted entry or a different classifier/implementation contract is a miss.
 let cache=new DatabaseSync(path.join(cacheDir,'classifications.sqlite'));
 cache.prepare('UPDATE observations SET observation=? WHERE job_key=?').run('{}',firstKey);cache.close();
 update(()=>{});
-threaded=createKnowledgeAssistantStore(dir,{readOnly:true,cacheDir});assert.equal((await threaded.load()).indexBuild.classified,1);threaded.close();
+threaded=createKnowledgeAssistantStore(dir,{readOnly:true,cacheDir});assert.equal((await threaded.load({forceRefresh:true})).indexBuild.classified,1);threaded.close();
 cache=new DatabaseSync(path.join(cacheDir,'classifications.sqlite'));cache.prepare('UPDATE observations SET pipeline=? WHERE job_key=?').run('old-model-contract',firstKey);cache.close();
 update(()=>{});
-threaded=createKnowledgeAssistantStore(dir,{readOnly:true,cacheDir});assert.equal((await threaded.load()).indexBuild.classified,1);threaded.close();
+threaded=createKnowledgeAssistantStore(dir,{readOnly:true,cacheDir});assert.equal((await threaded.load({forceRefresh:true})).indexBuild.classified,1);threaded.close();
 assert.match(assistantClassificationVersion(),/^[a-f0-9]{64}$/);
 update(db=>db.prepare("UPDATE tasks SET archived=1 WHERE task_id='fixture'").run());
-threaded=createKnowledgeAssistantStore(dir,{readOnly:true,cacheDir});assert.equal((await threaded.load()).jobs.length,0);threaded.close();
+threaded=createKnowledgeAssistantStore(dir,{readOnly:true,cacheDir});assert.equal((await threaded.load({forceRefresh:true})).jobs.length,0);threaded.close();
 
 const fakeIndex=createAssistantIndex({role:'fixture',generated_at:'fixture',cohort_observations:[]});
 const unsupportedAgent=createChatAgent({getModel:async()=>{throw Error('unsupported scope must not call model');}});
-const unsupported=await unsupportedAgent.run({...fakeIndex,report:{...fakeIndex.report,knowledge:true,roles:['智能体/大模型应用']}},{message:'目前爬虫岗位大概率会做什么样的业务去赚钱呢'});
+const unsupported=await unsupportedAgent.run({...fakeIndex,report:{...fakeIndex.report,knowledge:true,roles:['智能体/大模型应用']}},{message:'查询爬虫岗位的JD原文证据'});
 assert.match(unsupported.answer,/尚无.*爬虫\/数据采集/);assert.equal(unsupported.task.status,'waiting_for_user');assert.equal(unsupported.trace.length,0);unsupportedAgent.close();
 const modelAgent=createChatAgent({getModel:()=>new Promise(()=>{})});
 const before=await modelAgent.run(fakeIndex,{message:'查询岗位',useModel:false});
@@ -79,12 +80,12 @@ class FakeWorker extends EventEmitter{
 const shared=createBackgroundAssistantStore(dir,{cacheDir,WorkerClass:FakeWorker,workerTimeoutMs:1000});
 const abort=new AbortController(),one=shared.load({signal:abort.signal}),two=shared.load();
 const oneRejected=assert.rejects(one,/已停止|abort/i);await delay(20);abort.abort(new Error('本轮已停止'));
-await oneRejected;assert.deepEqual(await two,fakeIndex);assert.equal(spawned,1,'concurrent callers share one build');shared.close();
+await oneRejected;assert.strictEqual((await two).jobs,fakeIndex.jobs);assert.equal(spawned,1,'concurrent callers share one build');shared.close();
 const single=createBackgroundAssistantStore(dir,{cacheDir,WorkerClass:FakeWorker});const stop=new AbortController();
 const cancelled=assert.rejects(single.load({signal:stop.signal}),/本轮已停止/);await delay(20);const prior=terminated;stop.abort(new Error('本轮已停止'));await cancelled;assert.equal(terminated,prior+1,'last cancellation terminates worker');
-assert.deepEqual(await single.load(),fakeIndex,'a cancelled build can be retried explicitly');single.close();
+assert.strictEqual((await single.load()).jobs,fakeIndex.jobs,'a cancelled build can be retried explicitly');single.close();
 respond=false;const bounded=createBackgroundAssistantStore(dir,{cacheDir,WorkerClass:FakeWorker,workerTimeoutMs:40});
-await assert.rejects(bounded.load(),/索引构建超时/);bounded.close();respond=true;
+await assert.rejects(bounded.load(),/快照更新超时/);bounded.close();respond=true;
 
 // HTTP timeout must cover loading, including implementations ignoring the signal.
 let modelRequests=0,loads=0,loadAborts=0;

@@ -19,7 +19,7 @@ export function ordinaryChromeArguments(profile){
   return [`--user-data-dir=${profile}`,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run','--source-shortcut-location=start-menu','--new-window','about:blank'];
 }
 const invalidWindow=()=>failure('当前 Chrome 页面不属于普通浏览器窗口（可能是旧的首次引导窗口）；请关闭旧猎聘窗口后重新打开，登录资料会保留');
-const blankTab=value=>value==='about:blank'||value==='chrome://newtab/';
+const blankTab=value=>value==='about:blank'||value==='chrome://newtab/'||value==='edge://newtab/';
 export async function assertOrdinaryChromePage(context,page){
   let url;try{url=new URL(page.url());}catch{throw invalidWindow();}
   if(page.isClosed?.()||!(url.protocol==='http:'||url.protocol==='https:'||blankTab(url.href)))throw invalidWindow();
@@ -53,7 +53,7 @@ function endpointFromPortFile(raw){
   if(!/^\d+$/.test(port)||Number(port)<1||Number(port)>65535||!/^\/devtools\/browser\/[a-f0-9-]+$/i.test(route||''))throw failure('普通浏览器本机会话端口无效');
   return {endpoint:`http://127.0.0.1:${port}`,browser_ws:`ws://127.0.0.1:${port}${route}`};
 }
-export async function launchOrdinaryChromeContext(profile,{executablePath,launch=spawn,connect=(endpoint)=>chromium.connectOverCDP(endpoint,{timeout:10000}),fetchImpl=fetch,processAlive=alive,wait=sleep,timeoutMs=15000}={}){
+export async function launchOrdinaryChromeContext(profile,{executablePath,existingOnly=false,launch=spawn,connect=(endpoint)=>chromium.connectOverCDP(endpoint,{timeout:10000}),fetchImpl=fetch,processAlive=alive,wait=sleep,timeoutMs=15000}={}){
   if(!executablePath||!path.isAbsolute(executablePath))throw failure('系统 Chrome 路径无效');
   ordinaryChromeArguments(profile);profile=path.resolve(profile);
   await fs.mkdir(profile,{recursive:true});
@@ -77,6 +77,7 @@ export async function launchOrdinaryChromeContext(profile,{executablePath,launch
       if(saved.profile!==profile||saved.executable!==executablePath)throw failure('普通浏览器会话归属不匹配');
       await check(saved);return {...saved,reused:true};
     }
+    if(existingOnly)throw failure('登录窗口未连接，请先在渠道明细中打开登录窗口');
     const previousPort=await readPort(),temp=path.join(profile,'temp');await fs.mkdir(temp,{recursive:true});
     const child=launch(executablePath,ordinaryChromeArguments(profile),{detached:true,windowsHide:false,stdio:'ignore',env:{...process.env,TEMP:temp,TMP:temp}});
     let exited=false;child.once('exit',()=>{exited=true;});

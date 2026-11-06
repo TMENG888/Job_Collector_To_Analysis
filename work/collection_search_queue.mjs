@@ -10,6 +10,7 @@ import {untilExhausted} from './collection_goal.mjs';
 import {mohrssCheckpointNeedsContinuation,mohrssConsumedPages} from './mohrss_related_search.mjs';
 import {zhaopinSessionCheckpointPath,validateZhaopinSessionCheckpoint,zhaopinSessionCheckpointState} from './zhaopin_session_checkpoint.mjs';
 import {hasVerifiedSessionCompletion,sessionCompletionNeedsAudit} from './session_pagination_health.mjs';
+import {jobonlineCheckpointCurrent} from './jobonline_public_pagination.mjs';
 
 const unique=values=>[...new Set(values.map(x=>String(x||'').trim()).filter(Boolean))];
 const safeName=value=>String(value).replace(/[\\/:*?"<>|]/g,'_');
@@ -29,6 +30,7 @@ export function checkpointSearchState(platform,saved,settings={}){
   if(saved.acquisition_mode==='browser_dom')return saved.completed?(saved.records?.length?'query_finished':'empty_unverified'):saved.budget_finished?'browser_budget_limit':saved.stop_reason||'pending';
   if(isConditionScopedStop({code:saved.stop_reason}))return saved.stop_reason;
   if(platform==='jobonline'&&unverifiedLegacyCompletion(saved))return 'legacy_pagination_unverified';
+  if(platform==='jobonline'&&saved.direct_search_verified&&!jobonlineCheckpointCurrent(saved))return 'pending';
   if(platform==='mohrss'&&mohrssCheckpointNeedsContinuation(saved,{keyword:saved.keyword,city:saved.city,settings,taskId:saved.task_id??null}))return 'pending';
   if(platform==='job51'&&saved.completed)return hasVerifiedSessionCompletion(saved,'job51')?'query_finished':'pending';
   if(saved.low_yield)return 'low_yield_deferred';
@@ -84,6 +86,7 @@ export async function readCollectionSearchQueue(task,{channelAvailable=key=>coll
         :path.join(task.outputDir,'断点数据',`${platform}_${safeName(keyword)}_${safeName(city.name)}.json`);
       const legacy=await read(file);
       let saved=legacy;
+      if(platform==='jobonline')saved=await read(path.join(task.outputDir,'断点数据',`jobonline_logged_${safeName(keyword)}_${safeName(city.name)}.json`))||(legacy?.direct_search_verified?null:legacy);
       if(platform==='zhaopin'){
         if(legacy&&legacy.task_id!==task.id)throw Error('采集调度断点任务 ID 不匹配');
         const direct=await read(path.join(task.outputDir,'断点数据','智联招聘_HTTP',`${safeName(keyword)}_${safeName(city.name)}.json`));

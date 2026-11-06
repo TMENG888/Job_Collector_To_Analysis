@@ -10,7 +10,7 @@ import {liepinCities} from './liepin_cities.mjs';
 import {openOfficialInOrdinaryBrowser} from './official_manual_browser.mjs';
 import {browserProfileRoot} from './managed_browser.mjs';
 import {channelErrorDiagnostic} from './channel_collection_diagnostics.mjs';
-import {saveChannelVerification,readChannelVerification} from './channel_verification_state.mjs';
+import {saveChannelVerification,readChannelVerification,ensureChannelManifest} from './channel_verification_state.mjs';
 import {guard} from './browser_channel_common.mjs';
 import {parse51Payload} from './job51/collector.mjs';
 
@@ -146,9 +146,8 @@ export function createCollectorChannelVerification({openContext=openOwnedContext
       if(!entry.ready||!officialPage(platform,entry.page.url()))throw fail('尚未观察到官网搜索成功；请在该窗口刷新并完成验证，确认岗位列表出现后再点“已处理”');
       if(platform==='liepin')await assertWebsitePage(entry.page);
       else{const {guard}=await import('./browser_channel_common.mjs');await guard(entry.page);}
-      const file=path.join(task.outputDir,'采集清单.json');const manifest=JSON.parse(await fs.readFile(file,'utf8'));
-      if(manifest.task_id!==task.id)throw fail('采集清单归属不匹配',400);
-      const channel=manifest.platforms?.[platform];if(!channel)throw fail('渠道清单不存在',400);
+      const file=path.join(task.outputDir,'采集清单.json'),manifest=await ensureChannelManifest(task,platform);
+      const channel=manifest.platforms[platform];
       const verifiedAt=entry.verifiedAt;
       channel.errors=(channel.errors||[]).map(error=>requiresManual(error)&&!error.resolved_at?{...error,resolved_at:verifiedAt,resolution:'manual_website_search'}:error);
       await writeJsonAtomic(file,manifest);
@@ -215,11 +214,11 @@ export function createChannelVerification({openContext=openOwnedContext,openBrow
         const result=await collector.finish(task,platform);
         await saveChannelVerification(task,platform,{...result,mode:'collector'});return result;
       }
-      const config=JSON.parse(await fs.readFile(task.publicConfigPath,'utf8')),manifest=JSON.parse(await fs.readFile(path.join(task.outputDir,'采集清单.json'),'utf8'));
+      const config=JSON.parse(await fs.readFile(task.publicConfigPath,'utf8')),manifest=await ensureChannelManifest(task,platform);
       verificationTarget(task,platform,config,manifest);
       await saveChannelVerification(task,platform,{state:'manual_checked',mode:'ordinary',acknowledgedAt:now(),verifiedAt:null});
       external.delete(key(task,platform));
-      return {platform,state:'manual_checked',mode:'ordinary',verifiedAt:null,message:'已保存人工核对；请点击“复检采集会话”，通过后再续采'};
+      return {platform,state:'manual_checked',mode:'ordinary',verifiedAt:null,message:'已记录人工处理；请手动继续采集，遇到登录或验证要求仍会暂停'};
     },
     async recheck(task,platform,config,manifest){
       const id=key(task,platform);

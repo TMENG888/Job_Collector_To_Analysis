@@ -1,0 +1,73 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import http from 'node:http';
+import {randomUUID} from 'node:crypto';
+const dir=await fs.mkdtemp(path.join(os.tmpdir(),'classifier-delete-'));
+process.env.JOB_INSIGHT_CLASSIFIER_DIR=path.join(dir,'models');
+const {createInsightSupervised}=await import('./insight-supervised.mjs');
+const {createInsightTrainingQueue,createInsightTrainingHandler}=await import('./insight-training-queue.mjs');
+const {roleClassifier,roleScreeningCacheKey}=await import('./role-classifier-registry.mjs');
+const {renderRoleOptions,renderClassifierManager}=await import('../job_collector_ui/public/insight-training-queue.js');
+const directory=process.env.JOB_INSIGHT_CLASSIFIER_DIR,role='测试工程';
+const fixtureModel=await fs.readFile(new URL('./models/role-screening/software-testing-tfidf-lr-v1.json',import.meta.url));
+const source={schemas:{status:async()=>({busy:false,model:{configured:false}})},credentials:{status:async()=>({configured:false})},fetcher:()=>{throw Error('network forbidden');}};
+const save=async(file,value)=>{await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,JSON.stringify(value));};
+const id=randomUUID();
+async function seed(runId,createdAt){
+  await save(path.join(directory,runId,'state.json'),{id:runId,inputFile:'kb://all',role,status:'completed',eligible:true,createdAt,promptTokens:0,completionTokens:0,costEstimate:0});
+  await save(path.join(directory,runId,'evaluation.json'),{eligible:true,predictions:[]});
+  await fs.writeFile(path.join(directory,runId,'model.json'),fixtureModel);
+}
+await seed(id,'2020-01-01T00:00:00Z');await save(path.join(directory,'index.json'),[{id,inputFile:'kb://all'}]);
+let service=createInsightSupervised(dir,{...source,directory});
+const queue=createInsightTrainingQueue({directory:path.join(dir,'queue'),service,isRetired:service.isRetired,now:()=> '2020-01-01T00:00:00Z'});
+await queue.enqueue({taskId:'all',label:'fixture',inputFile:'kb://all',role,keywords:role,rows:500});
+assert.equal((await service.catalog()).roles.find(item=>item.role===role).source,'trained');
+assert.ok(await service.resolve('kb://all',role));await service.activate(id,'kb://all');
+const key=roleScreeningCacheKey();
+await assert.rejects(service.removeRole(role),/确认删除/);
+assert.ok(roleClassifier(role));
+await service.removeRole(role,{confirmed:true});
+assert.equal(roleClassifier(role),null);
+assert.notEqual(roleScreeningCacheKey(),key);
+assert.equal(await service.resolve('kb://all',role),null);
+assert.equal((await service.status('kb://all',role)).analysis.ready,false);
+assert.equal((await service.catalog()).roles.some(item=>item.role===role),false);
+assert.deepEqual(await service.browserModels(),[]);
+assert.equal((await queue.list()).jobs.length,0);
+assert.deepEqual(await fs.readFile(path.join(directory,id,'model.json')),fixtureModel);
+service=createInsightSupervised(dir,{...source,directory});
+assert.equal(await service.resolve('kb://all',role),null);
+await assert.rejects(service.activate(id,'kb://all'),/已删除/);
+await new Promise(resolve=>setTimeout(resolve,5));
+const nextId=randomUUID();await seed(nextId,new Date().toISOString());
+await save(path.join(directory,'index.json'),[{id:nextId,inputFile:'kb://all'},{id,inputFile:'kb://all'}]);
+assert.equal((await service.resolve('kb://all',role)).id,nextId);
+assert.equal(roleClassifier(role),null);
+assert.ok((await service.catalog()).roles.some(item=>item.role===role&&item.source==='trained'));
+
+const options=renderRoleOptions({roles:[{role:'数据分析',status:'ready'},{role:'旧候选',status:'rejected'},{role:'未启动',status:'queued'}]});
+assert.ok(options.includes('数据分析'));assert.ok(!options.includes('旧候选'));assert.ok(!options.includes('待训练或候选'));
+assert.ok(renderClassifierManager({roles:[{role:'<危险名称>',status:'ready'}]}).includes('&lt;危险名称&gt;'));
+assert.ok(renderClassifierManager({roles:[{role,status:'ready'}]},{busy:true}).includes('disabled'));
+
+let blocked=true;
+const locked=createInsightSupervised(dir,{...source,directory,beforeDelete:async()=>{if(blocked)throw Error('正在分析');}});
+await assert.rejects(locked.removeRole(role,{confirmed:true}),/正在分析/);
+const handler=createInsightTrainingHandler({queue,catalog:()=>locked.catalog(),removeRole:(role,options)=>locked.removeRole(role,options)});
+const server=http.createServer(async(req,res)=>{if(!await handler(req,res,new URL(req.url,'http://localhost').pathname)){res.writeHead(404);res.end();}});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+try{
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const send=(body,origin)=>fetch(base+'/api/insights/classifiers/delete',{method:'POST',headers:{'content-type':'application/json',...(origin?{origin}:{} )},body:JSON.stringify(body)});
+  assert.equal((await send({role,confirmed:true},'https://example.com')).status,403);
+  assert.equal((await send({role,confirmed:true,filename:'../other'})).status,400);
+  assert.equal((await send({role,confirmed:true})).status,400);
+  blocked=false;
+  assert.equal((await send({role,confirmed:false})).status,400);
+  const response=await send({role,confirmed:true});assert.equal(response.status,200);assert.equal((await response.json()).deleted,true);
+  assert.equal((await locked.catalog()).roles.some(item=>item.role===role),false);
+}finally{await new Promise(resolve=>server.close(resolve));}
+console.log('PASS: ready-only selector, local confirmed deletion, archive retained, no built-in fallback, activation blocked, restart persistence, retraining allowed, queue cleanup, busy/cross-origin/parameter guards; paid requests=0');

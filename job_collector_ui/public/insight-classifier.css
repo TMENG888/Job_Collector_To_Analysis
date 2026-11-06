@@ -252,6 +252,17 @@
 .training-panel>summary>span{font-size:12px;color:var(--muted);font-weight:400;margin-left:12px}
 .training-panel-body{padding:12px 16px;margin-bottom:8px;border-radius:9px;background:var(--soft)}
 .training-panel-body .training-entry{max-width:none}
+.training-live{margin:8px 0 16px;padding:12px 16px;border:1px solid var(--line);border-left:3px solid var(--teal);border-radius:8px;background:var(--paper);font-size:13px;line-height:1.6}
+.training-live[hidden]{display:none}
+.training-live-head,.training-live-labels,.training-live-footer{display:flex;align-items:center;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}
+.training-live-head>span,.training-live-labels>span:last-child,.training-live-footer small{font-size:12px;color:var(--muted)}
+.training-live-steps{display:flex;gap:6px 20px;flex-wrap:wrap;list-style:none;counter-reset:training-step;padding:0;margin:10px 0;color:var(--muted);font-size:12px}
+.training-live-steps li{counter-increment:training-step}.training-live-steps li::before{content:counter(training-step) ". ";font-variant-numeric:tabular-nums}
+.training-live-steps [data-state="current"]{color:var(--teal-dark);font-weight:600}.training-live-steps [data-state="done"]{color:var(--teal)}
+.training-live progress{display:block;width:100%;height:8px;margin:8px 0;accent-color:var(--teal)}
+.training-live-counts{display:flex;flex-wrap:wrap;gap:6px 24px;font-variant-numeric:tabular-nums}.training-live-counts span:last-child{margin-left:auto;color:var(--muted)}
+.training-live p{margin:6px 0;overflow-wrap:anywhere}.training-live .training-live-error{color:var(--red)}
+.training-live-footer{margin-top:8px}.training-live-footer button{min-height:44px}
 .training-panel-body .training-settings{margin-top:8px;padding-top:0}
 .training-panel-body .training-settings>summary{font-weight:400;color:var(--muted)}
 .workflow-secondary-tools{display:flex;align-items:start;gap:0 28px;flex-wrap:wrap;border-top:1px solid var(--line)}
@@ -261,6 +272,15 @@
 #insightWorkflow .training-discovery,#insightWorkflow .training-history{border:0;padding:0;margin:0}
 #insightWorkflow .training-history>summary,#insightWorkflow .training-discovery>summary{font-weight:400;padding:10px 0}
 .workflow-service-warning{margin:0 0 12px;padding:8px 12px;border-left:3px solid var(--amber);background:var(--soft);color:var(--amber);font-size:13px;line-height:1.7}
+.classifier-manager{border:0;margin:0;padding:0;flex:0 1 auto;min-width:0}
+.classifier-manager[open]{flex-basis:100%}
+.classifier-manager>summary{cursor:pointer;font-size:13px;font-weight:400;line-height:1.6;padding:10px 0;color:var(--ink)}
+.classifier-manage-list{list-style:none;margin:0;padding:0}
+.classifier-manage-list>li{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 0;border-top:1px solid var(--line)}
+.classifier-manage-list>li>div{min-width:0}
+.classifier-manage-list strong{font-size:13px;font-weight:500;overflow-wrap:anywhere}
+.classifier-manage-list small{display:block;font-size:12px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
+.classifier-manage-list button{flex-shrink:0;min-height:36px;color:var(--ink)}
 .training-job-menu{position:relative;min-width:44px;margin:0;padding:0;border:0;background:transparent}
 .training-job-menu>summary{cursor:pointer;font-size:12px;line-height:36px;color:var(--muted)}
 .training-job-menu>div{display:grid;gap:4px;min-width:120px}

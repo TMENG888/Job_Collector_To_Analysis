@@ -137,12 +137,12 @@ export async function runLayoutTest({app,createDesktop,runtime}) {
     desktop=await createDesktop({runtime,baseURL:base,visible:true,screening:{catalog:async()=>[]}});
     const local=desktop.workspace.webContents;
     desktop.window.show();desktop.window.focus();local.focus();
-    for(const route of ['insights','tasks','assistant','profile']) {
+    for(const route of ['insights','tasks','assistant']) {
       await desktop.command('workspace',{route});
       await wait(()=>local.executeJavaScript('document.body.dataset.view==='+JSON.stringify(route)));
       check('real '+route+' Web sidebar hidden',await local.executeJavaScript('getComputedStyle(document.querySelector(".sidebar")).display'),'none');
       check('real '+route+' single-column grid',await local.executeJavaScript('getComputedStyle(document.querySelector(".shell")).gridTemplateColumns.trim().split(/\\s+/).length'),1);
-      check('real '+route+' title',await local.executeJavaScript('document.querySelector("#pageTitle").textContent'),{tasks:'采集任务',insights:'岗位洞察',assistant:'求职助手',profile:'个人 Wiki 与简历库'}[route]);
+      check('real '+route+' title',await local.executeJavaScript('document.querySelector("#pageTitle").textContent'),{tasks:'采集任务',insights:'岗位洞察',assistant:'求职助手'}[route]);
       check('real '+route+' visible content',await local.executeJavaScript('document.querySelector("#'+route+'View").getBoundingClientRect().height>0'),true);
       await wait(()=>desktop.state().workspaceStatus==='ready');
       await wait(()=>desktop.window.webContents.executeJavaScript('document.querySelector("[data-route='+route+']").classList.contains("active")'));

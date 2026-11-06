@@ -52,7 +52,7 @@ export async function createDesktop({runtime, baseURL=process.env.JOB_DESKTOP_BA
   function setMode(value) {mode=value;layout();emit();}
   function syncWorkspaceView(view) {
     if(view==='browser'){setMode('browser');return;}
-    if(['tasks','insights','assistant','profile'].includes(view)) {workspaceRoute=view;emit();}
+    if(['tasks','insights','assistant'].includes(view)) {workspaceRoute=view;emit();}
   }
   function syncWorkspaceURL(value) {syncWorkspaceView(workspaceViewForURL(value,base));}
   function visibleFocus() {if(mode==='browser'&&tabs.has(selectedId))current().view.webContents.focus();else if(mode==='workspace')workspace.webContents.focus();}
@@ -161,7 +161,6 @@ export async function createDesktop({runtime, baseURL=process.env.JOB_DESKTOP_BA
         const bytes=await fs.readFile(file);if(bytes.length>3*1024*1024)throw Error('PDF超过3MB');
         return service.upload({filename:path.basename(file),base64:bytes.toString('base64')});
       }
-      if(name==='recruiter-select')return service.selectResume(value.id);
       if(name==='recruiter-preview')return service.preview();
       if(name==='recruiter-ack')return service.acknowledge(value);
       if(name==='recruiter-plan')return service.generate(value);

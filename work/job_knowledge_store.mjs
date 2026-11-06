@@ -30,7 +30,7 @@ export function canonicalKnowledgeRow(input){
   return row;
 }
 export const knowledgeJobKey=row=>'K'+hash([row.platform,row.job_id]).slice(0,24);
-export function classifyKnowledgeRow(row){
+export function classifyKnowledgeRow(row,{classifiers=[]}={}){
   const title=String(row.job_name||''),sections=roleSections({'岗位描述':row.job_description||''});
   const body=sections.map(s=>s.quote).join('\n');
   const full=[title,row.skills,body].join('\n');
@@ -43,8 +43,10 @@ export function classifyKnowledgeRow(row){
   // Apply last: title rules or historical Agent engineering hints cannot revive
   // a rejected supervised family. Other family memberships remain independent.
   const supervised={};
-  for(const family of supervisedRoleFamilies()){
-    const result=roleClassifier(family).match(row);supervised[family]={decision:result.decision,...result.classifier_evidence};
+  const models=new Map(supervisedRoleFamilies().map(family=>[family,roleClassifier(family)]));
+  for(const classifier of classifiers)models.set(classifier.metadata.family,classifier);
+  for(const [family,classifier] of models){
+    const result=classifier.match(row);supervised[family]={decision:result.decision,...result.classifier_evidence};
     for(let i=families.length-1;i>=0;i--)if(families[i]===family)families.splice(i,1);
     if(result.matched)families.push(family);
   }
@@ -207,11 +209,11 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
     }finally{db.close();}},
     async snapshot(uri){const data=await this.read(uri);const db=await open();try{const id=randomUUID();db.prepare('INSERT INTO snapshots VALUES(?,?,?,?,?)').run(id,data.revision,uri,JSON.stringify(data.rows),new Date().toISOString());return {uri:`kb://snapshot/${id}`,revision:data.revision,rows:data.rows.length};}finally{db.close();}},
     async publishAnalysis(report){const db=await open();try{const id=hash([report.role,report.generated_at,report.input_file]);db.prepare('INSERT OR REPLACE INTO analyses VALUES(?,?,?,?,?,?)').run(id,report.role,report.knowledge_revision??null,report.knowledge_snapshot||'',JSON.stringify(report),report.generated_at||new Date().toISOString());bump(db);return id;}finally{db.close();}},
-    async assistantData({readOnly=false,classificationCache,onProgress,signal}={}){if(!readOnly)await ensure();const db=readOnly?new DatabaseSync(filename,{readOnly:true}):await open();try{
+    async assistantData({readOnly=false,classificationCache,classifiers=[],onProgress,signal}={}){if(!readOnly)await ensure();const db=readOnly?new DatabaseSync(filename,{readOnly:true}):await open();try{
       signal?.throwIfAborted();onProgress?.({phase:'index_reading',message:'正在读取岗位库快照'});
       if(readOnly)db.exec('PRAGMA busy_timeout=10000');
       db.exec('BEGIN');
-      const state=status(db),cacheKey=`knowledge:${state.revision}:${ADMISSION_VERSION}:${roleScreeningCacheKey()}`;
+      const state=status(db),cacheKey=`knowledge:${state.revision}:${ADMISSION_VERSION}:${roleScreeningCacheKey()}:${classifiers.map(c=>c.metadata.artifact_sha256).join('|')}`;
       if(assistantCache?.cacheKey===cacheKey)return assistantCache;
       const analyses=db.prepare('SELECT role,data FROM analyses ORDER BY created_at DESC LIMIT 20').all();
       const accepted=new Map();for(const analysis of analyses)for(const observation of JSON.parse(analysis.data).cohort_observations||[]){const key=`${observation.knowledge_key}:${observation.knowledge_hash}`;if(!accepted.has(key))accepted.set(key,{...observation,role:analysis.role});}
@@ -224,7 +226,7 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
         const raw=JSON.parse(j.raw),saved=classificationCache?.get(j.job_key,j.content_hash);
         let observation;
         if(saved){observation=saved;reused++;}
-        else{observation=classifyKnowledgeRow(raw);classified++;classificationCache?.put(j.job_key,j.content_hash,observation);}
+        else{observation=classifyKnowledgeRow(raw,{classifiers});classified++;classificationCache?.put(j.job_key,j.content_hash,observation);}
         const approved=approvedLabels(db,j);
         const analysis=accepted.get(`${j.job_key}:${j.content_hash}`);
         if(analysis){observation.skills=analysis.skills||observation.skills;observation.tasks=analysis.tasks||[];observation.domains=analysis.domains||[];observation.label_source='同内容版本属性标签＋当前岗位专用监督筛选';}
@@ -240,7 +242,7 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
         }
       }
       const governed=admitKnowledgeJobs(jobs);
-      assistantCache={jobs:governed,report:{role:'全岗位知识库',generated_at:state.updated_at,knowledge:true,revision:state.revision,roles:[...new Set(governed.filter(j=>j.admission.retrieval).flatMap(j=>j.role_families))].sort(),candidate_rows:jobs.length,data_quality:admissionSummary(governed)},cacheKey,indexBuild:{reused,classified,total:jobs.length}};return assistantCache;
+      assistantCache={jobs:governed,report:{role:'全岗位知识库',generated_at:state.updated_at,knowledge:true,revision:state.revision,roles:[...new Set([...supervisedRoleFamilies(),...classifiers.map(c=>c.metadata.family)])].sort(),candidate_rows:jobs.length,data_quality:admissionSummary(governed)},cacheKey,indexBuild:{reused,classified,total:jobs.length}};return assistantCache;
     }finally{db.close();}},
   };
 }

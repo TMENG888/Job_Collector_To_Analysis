@@ -1,6 +1,6 @@
 import {channelAcquisition,collectionMode,HYBRID_MODE,browserFallbackPlatforms,sessionProxyPlatforms,explicitWebsiteSessionPlatforms} from './channel_acquisition.mjs';
 // Retired adapters/data are retained for audit; retirement stops new requests.
-export const retiredCollectionChannels=new Set(['yupao','boss']);
+export const retiredCollectionChannels=new Set(['yupao','boss','liepin']);
 export const collectionChannelAvailable=(key,task)=>!retiredCollectionChannels.has(key)&&(!channelAcquisition[key]||channelAcquisition[key].directHttpReady===true||explicitWebsiteSessionPlatforms.includes(key)||sessionProxyPlatforms.includes(key)||collectionMode(task)===HYBRID_MODE&&browserFallbackPlatforms.includes(key));
 export function collectionChannelPauseReason(key){
   if(retiredCollectionChannels.has(key))return '渠道已撤下，历史数据与断点保留';

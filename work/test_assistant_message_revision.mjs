@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {createAssistantSessionStore} from './job_assistant_sessions.mjs';
+import {createChatAgent} from './job_assistant_chat.mjs';
+import {createAssistantIndex} from './job_decision_assistant.mjs';
+import {reviseConversation} from './assistant_message_revision.mjs';
+
+const directory=await fs.mkdtemp(path.join(os.tmpdir(),'assistant-edit-test-'));
+const protect=async(op,value)=>op==='encrypt'?Buffer.from(value).toString('base64'):Buffer.from(value,'base64').toString();
+const observations=Array.from({length:6},(_,i)=>({row_no:i+2,job_id:String(i),job_name:'数据分析师',city:i<3?'北京':'上海',experience:'1-3年',education:'本科',skills:['Python','SQL'],salary_midpoint_k:20+i}));
+const index=createAssistantIndex({role:'数据分析',generated_at:'test',cohort_observations:observations},observations.map(j=>({...j,job_description:'使用Python和SQL分析业务数据'})));
+const repository=createAssistantSessionStore(directory,{protect});
+let modelCalls=0;
+let agent=createChatAgent({repository,getModel:async()=>{modelCalls++;return {};}});
+try{
+  const first=await agent.run(index,{message:'北京岗位有哪些？',useModel:false});
+  const second=await agent.run(index,{message:'上海岗位有哪些？',conversationId:first.conversationId,useModel:false});
+  const edited=await agent.run(index,{message:'继续看岗位',conversationId:first.conversationId,editTurnId:second.turnId,expectedSessionUpdated:second.session.updated,useModel:false});
+  assert.equal(edited.filters.city,'北京');
+  let record=await repository.read(first.conversationId),view=await agent.view(first.conversationId);
+  assert.equal(view.turns.length,2);assert.equal(view.turns[1].message,'继续看岗位');
+  assert.equal(record.revisions[0].turns[0].message,'上海岗位有哪些？');
+  assert.equal('context' in view.turns[0],false);
+  const before=JSON.stringify(record),callsBefore=modelCalls;
+  await assert.rejects(agent.run(index,{message:'修改',conversationId:first.conversationId,editTurnId:edited.turnId,expectedSessionUpdated:edited.session.updated-1}),/会话已更新/);
+  assert.equal(modelCalls,callsBefore);assert.equal(JSON.stringify(await repository.read(first.conversationId)),before);
+  await assert.rejects(agent.run(index,{message:'修改',conversationId:first.conversationId,editTurnId:edited.turnId,expectedSessionUpdated:edited.session.updated,useModel:false},AbortSignal.abort()),/abort|取消/i);
+  assert.equal(JSON.stringify(await repository.read(first.conversationId)),before);
+  const replaced=await agent.run(index,{message:'上海岗位有哪些？',conversationId:first.conversationId,editTurnId:first.turnId,expectedSessionUpdated:edited.session.updated,useModel:false});
+  assert.equal(replaced.filters.city,'上海');
+  agent.close();agent=createChatAgent({repository});
+  view=await agent.view(first.conversationId);assert.equal(view.turns.length,1);assert.equal(view.turns[0].message,'上海岗位有哪些？');
+  assert.equal(view.turns[0].turn.turnId,replaced.turnId);assert.equal(view.turn_count,1);
+  const fixture={id:'fixture',updated:1,state:{cacheKey:'test',actions:[{id:'pending',status:'pending'},{id:'sent',status:'completed'}]},turns:[{at:1,message:'原提问',turn:{answer:'旧回答',result:{action:{id:'pending'}}}},{at:2,message:'后续问题',turn:{answer:'后续回答',result:{action:{id:'sent'}}}}]};
+  const legacy=reviseConversation(fixture,{editTurnId:'legacy:0:1',expectedSessionUpdated:1});
+  assert.equal(legacy.turns.length,0);assert.equal(legacy.state.actions[0].status,'cancelled');assert.equal(legacy.state.actions[1].status,'completed');
+  assert.equal(fixture.state.actions[0].status,'pending');
+  console.log('PASS: in-place edit, retained prefix context, encrypted revisions, restart persistence, legacy turns, stale and aborted request rollback, old pending actions cancelled without replay');
+}finally{agent.close();}

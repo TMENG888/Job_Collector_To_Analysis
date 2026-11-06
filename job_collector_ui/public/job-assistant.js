@@ -1,7 +1,7 @@
 import {fetchJsonWithTimeout} from './http-client.js';
 import {setAssistantMarkdown,sourceAnchorId} from './assistant-markdown.js';
 import {addMessageActions} from './assistant-message-actions.js?v=20261029-inline-edit';
-import {createMessageEditor} from './assistant-message-editor.js';
+import {createMessageEditor} from './assistant-message-editor.js?v=20261104-multi-query';
 import {requestAssistantStream} from './assistant-event-stream.js';
 import {createLiveAssistantRun,collapseAssistantEvidence} from './assistant-live-run.js';
 import {assistantTaskStatus,assistantExecutionLabel} from './assistant-task-status.js';
@@ -55,13 +55,14 @@ async function collectionAction(actionId,decision){
   busy=true;controls();notice(decision==='confirm'?'正在提交已确认方案…':'正在取消方案…');
   try{
     const turn=await request('/api/assistant/action',{conversationId,actionId,decision});
+    conversationRevision=turn.session?.updated||conversationRevision;
     bubble('user',decision==='confirm'?'确认执行采集方案':'取消采集方案');renderTurn(bubble('assistant',''),turn);
     await syncActionCards();await refreshSessions();notice('操作回执已返回；后台进度可继续查询。');
   }catch(error){bubble('assistant',`操作结果需要核对：${error.message}。请先查询任务状态，不要重复创建或启动。`);try{await syncActionCards();}catch{}notice('操作未确认完成。');}
   finally{busy=false;controls();}
 }
 let serviceBase='',context=null,initialized=false,busy=false,uploading=false,conversationId='',resumePending=null,attachmentName='',modelConfigured=false;
-let renderedTurns=0;
+let renderedTurns=0,conversationRevision=0;
 let messageEdit=null,followLatest=true;
 const messagePrompts=new WeakMap();
 let sessions=[],switching=false,sessionDialogId='',deletedSessionId='';
@@ -76,14 +77,20 @@ function restoreDraft(){
   if(draft)document.querySelector('.assistant-chat-stage').scrollTop=draft.scroll;updateScrollButton();
 }
 function endMessageEdit(focus=true){
-  if(!messageEdit)return;const {item,editor}=messageEdit;messageEdit=null;editor.destroy();controls();
+  if(!messageEdit)return;const {item,editor,following,conditionsHidden}=messageEdit;messageEdit=null;editor.destroy();
+  document.querySelector('#assistantConditions').hidden=conditionsHidden;
+  for(const row of following){row.item.classList.toggle('hidden',row.hidden);row.item.inert=row.inert;}
+  controls();
   if(focus)item.querySelector('[data-message-action="edit"]')?.focus({preventScroll:true});
 }
 function beginMessageEdit(item,message,hasAttachment=false,focus=true){
   if(busy||uploading||switching&&focus)return;
   if(messageEdit?.item===item){messageEdit.editor.focus();return;}
   endMessageEdit(false);
-  const edit={item,editor:null};messageEdit=edit;
+  const following=[];
+  for(let next=item.nextElementSibling;next;next=next.nextElementSibling){following.push({item:next,hidden:next.classList.contains('hidden'),inert:next.inert});next.classList.add('hidden');next.inert=true;}
+  const conditions=document.querySelector('#assistantConditions');
+  const edit={item,editor:null,following,hasAttachment,conditionsHidden:conditions.hidden};messageEdit=edit;conditions.hidden=true;
   edit.editor=createMessageEditor(item,{text:message,hasAttachment,onSend:()=>submit(edit),onCancel:()=>{endMessageEdit();notice('已取消编辑。');}});
   controls();
   if(focus){edit.editor.focus();const stage=document.querySelector('.assistant-chat-stage'),rect=item.getBoundingClientRect(),bounds=stage.getBoundingClientRect();if(rect.top<bounds.top||rect.bottom>bounds.bottom)item.scrollIntoView({block:'nearest'});updateScrollButton();}
@@ -119,7 +126,7 @@ async function refreshSessions(){
 }
 function clearChat(){endMessageEdit(false);document.querySelector('#assistantMessages').innerHTML='';followLatest=true;document.querySelector('.assistant-chat-shell').classList.remove('assistant-is-empty');renderConditions({});}
 function newConversation(){
-  if(busy||uploading||switching)return;rememberDraft();conversationId='';saveActive();clearChat();welcome();restoreDraft();conversationTitle();renderSessions();
+  if(busy||uploading||switching)return;rememberDraft();conversationId='';conversationRevision=0;saveActive();clearChat();welcome();restoreDraft();conversationTitle();renderSessions();
   notice('新对话已就绪，旧会话已保留。');if(matchMedia('(max-width:900px)').matches)historyOpen(false);document.querySelector('#assistantMessage').focus();
 }
 async function selectConversation(id){
@@ -127,8 +134,8 @@ async function selectConversation(id){
   rememberDraft();switching=true;controls();notice('正在恢复会话…');
   try{
     const record=await request('/api/assistant/session',{action:'read',id});
-    conversationId=id;saveActive();clearChat();
-    for(const entry of record.turns){const receipt=['确认执行采集方案','取消采集方案'].includes(entry.message);bubble('user',entry.message+(entry.attachment?'\n'+entry.attachment:''),{editable:!receipt,prompt:entry.message,hasAttachment:!!entry.attachment});const answer=bubble('assistant','');if(!receipt)messagePrompts.set(answer,{message:entry.message,hasAttachment:!!entry.attachment});renderTurn(answer,entry.turn);}
+    conversationId=id;conversationRevision=record.updated;saveActive();clearChat();
+    for(const entry of record.turns){const receipt=['确认执行采集方案','取消采集方案'].includes(entry.message);bubble('user',entry.message+(entry.attachment?'\n'+entry.attachment:''),{editable:!receipt,prompt:entry.message,hasAttachment:!!entry.attachment,turnId:entry.turn.turnId});const answer=bubble('assistant','');if(!receipt)messagePrompts.set(answer,{message:entry.message,hasAttachment:!!entry.attachment});renderTurn(answer,entry.turn);}
     if(!record.turns.length)welcome();else renderConditions({...record.turns.at(-1).turn,has_resume:record.has_resume});
     restoreDraft();conversationTitle();renderSessions();notice('已恢复历史与筛选条件。历史数据为当时快照，继续提问使用当前知识库；简历如已过期请重新提供。');
     if(matchMedia('(max-width:900px)').matches)historyOpen(false);
@@ -170,8 +177,9 @@ function renderModel(model){
   const badge=document.querySelector('#assistantModelBadge');badge.textContent=modelConfigured?`${model.provider} · ${model.model}`:'本地模式';badge.title=modelConfigured?'发送消息默认调用此模型；简历原文不外发':'尚未配置模型，使用本地多轮规则与岗位工具';
   const form=document.querySelector('#assistantModelForm');form.elements.provider.value=model.provider_id||'deepseek';form.elements.model.value=model.model||(model.provider_id==='qwen'?'':'deepseek-flash');
 }
-function bubble(role,text,{editable=false,prompt=text,hasAttachment=false}={}){
+function bubble(role,text,{editable=false,prompt=text,hasAttachment=false,turnId=''}={}){
   const item=document.createElement('article');item.className=`assistant-message assistant-message-${role}`;
+  if(turnId)item.dataset.turnId=turnId;
   item.innerHTML=`<div class="assistant-message-label">${role==='user'?'你':'岗位助手'}</div><div class="assistant-message-text">${escape(text)}</div>`;
   if(role==='assistant')setAssistantMarkdown(item.querySelector('.assistant-message-text'),text);
   if(editable)messagePrompts.set(item,{message:prompt,hasAttachment});
@@ -206,8 +214,14 @@ async function uploadResume(file){
   finally{uploading=false;controls();renderAttachment();}
 }
 function renderConditions(turn){
+  if(turn.result?.mode==='consultation'&&turn.discussion_context){
+    const scope=turn.discussion_context;
+    const tags=[scope.roles?.length?`<span>咨询岗位：${escape(scope.roles.join(' / '))}</span>`:'',scope.cities?.length?`<span>查询城市：${escape(scope.cities.join(' / '))}</span>`:'',scope.stage_comparison?'<span>实习与正式岗位分别统计</span>':''];
+    const root=document.querySelector('#assistantConditions');root.innerHTML=tags.join('');root.hidden=!tags.some(Boolean);return;
+  }
   const labels={roles:'岗位方向',city:'城市',cities:'可选城市',exclude_cities:'排除城市',candidate_education:'本人学历（门槛核对）',education:'岗位学历要求',experience:'经验',years:'工作年限',employment_type:'用工',career_stage:'求职阶段',graduation_year:'毕业届次',salary_min_k:'月薪中点下限',salary_max_k:'月薪中点上限'};
   const tags=Object.entries(turn.filters||{}).filter(([f,v])=>v!=null&&v!==''&&!['career_stage','graduation_year'].includes(f)).map(([f,v])=>`<span>${escape(labels[f]||f)}：${escape(Array.isArray(v)?v.join(' / '):v)}${f==='years'?'年':f.startsWith('salary_')?'K':''}</span>`);
+  if(turn.knowledge_snapshot?.available)tags.push(`<span>快照全库基数：${Number(turn.knowledge_snapshot.baseline_rows).toLocaleString('zh-CN')}条${turn.knowledge_snapshot.stale?' · 待更新':''} · 全库达到${Number(turn.knowledge_snapshot.next_trigger_rows).toLocaleString('zh-CN')}条触发刷新</span>`);
   if(turn.has_resume)tags.push('<span>简历已暂存本机内存</span>');
   if(turn.goal?.stage)tags.push(`<span>${turn.goal.analysis_mode==='market'?'统计范围':'目标'}：${escape({internship:'实习',campus:'正式校招',social:'社招',formal:'正式岗位',all:'不限招聘阶段'}[turn.goal.stage]||turn.goal.stage)}${turn.filters?.graduation_year?` · ${turn.filters.graduation_year}届`:''} · ${escape({day:'日薪',hour:'时薪',month:'月薪',year:'年包'}[turn.goal.salary_period]||'薪资周期待明确')}</span>`);
   const root=document.querySelector('#assistantConditions');root.innerHTML=tags.join('');root.hidden=!tags.length;
@@ -222,7 +236,7 @@ function renderTurn(item,turn){
     ${renderAnswerQuality(result?.answer_quality)}
     ${result?.mode==='consultation'&&result.sections?.some(s=>s.segments?.length)?'<details class="assistant-tool-trace"><summary>完整薪资统计与限制</summary><div class="assistant-consultation-salary-details"></div></details>':''}
     ${(result?.tasks||[]).map(collectionTaskCard).join('')}${result?.task?.id?collectionTaskCard(result.task):''}${result?.action?collectionActionCard(result.action):''}${result?.logs?`<details class="assistant-collection-logs"><summary>最近运行日志（已脱敏）</summary><pre>${escape(result.logs)}</pre></details>`:''}
-    ${turn.task?`<details class="assistant-tool-trace"><summary>任务：${escape(assistantTaskStatus(turn))}</summary><p>${escape(turn.task.plan.join(' → '))}</p>${turn.task.pending_questions.map(q=>`<p>${escape(q)}</p>`).join('')}<small>最多6轮模型请求／10次工具调用；不开放任意SQL。</small></details>`:''}
+    ${turn.task?`<details class="assistant-tool-trace"><summary>任务：${escape(assistantTaskStatus(turn))}</summary><p>${escape(turn.task.plan.join(' → '))}</p>${turn.task.pending_questions.map(q=>`<p>${escape(q)}</p>`).join('')}<small>最多${Number(turn.task.limits?.model_rounds)||6}轮模型请求${turn.task.limits?.intent_requests?'（含1次意图识别）':''}／10次工具调用；不开放任意SQL。</small></details>`:''}
     ${turn.warning?`<p class="assistant-warning">${escape(turn.warning)}</p>`:''}
     ${result?.raw_evidence?`<details class="assistant-tool-trace"><summary>原始岗位查询与核验</summary><p>${escape({query_failed:'原始库查询失败',no_candidates:'本次标题召回未找到候选',unverified:'已找到候选，尚未做模型核验',verification_failed:'候选模型核验未通过',insufficient:'没有通过本轮核验的目标岗位',verified:'本轮模型核验已完成'}[result.raw_evidence.status]||'待核验')} · 标题命中 ${Number(result.raw_evidence.total_title_hits)||0} 条 · 选样 ${Number(result.raw_evidence.sampled)||0} 条 · 通过方向核验 ${Number(result.raw_evidence.accepted)||0} 条。核验不是人工金标准；按招聘阶段选样，不能代表全市场。</p></details>`:''}
     ${turn.trace?.length?`<details class="assistant-tool-trace"><summary>本轮执行了 ${turn.trace.length} 步工具</summary><ol>${turn.trace.map(t=>`<li><span>${escape(toolNames[t.tool]||t.tool)}</span> · ${escape({preflight:'系统预检',model:'模型调用',fallback:'本地兜底',local:'本地规则',consultation:'本轮只读查询'}[t.origin]||'本地工具')}${t.status==='failed'?'':` · ${Number(t.rows)||0} 条`} · ${t.status==='ready'?'完成':t.status==='failed'?(t.phase==='validation'?'参数校验失败（未查数）':t.phase==='retry_guard'?'已拦截重复失败调用':'执行失败'):'需要补充信息'}${t.message?`<p>${escape(t.message)}${t.failure_code?`（${escape(t.failure_code)}）`:''}${t.resolved?' · 已通过有效范围查询恢复':''}</p>`:''}</li>`).join('')}</ol></details>`:''}
@@ -268,20 +282,37 @@ async function submit(edit=null){
   if(busy||uploading||switching||messageEdit&&edit!==messageEdit)return;
   const form=document.querySelector('#assistantForm'),pendingResume=edit?null:resumePending,message=edit?edit.editor.value.trim():form.elements.message.value.trim()||(pendingResume!==null?'请根据这份简历匹配岗位，并给出准备方向。':'');if(!message)return;
   const body={message,conversationId:conversationId||undefined};
+  if(edit?.item.dataset.turnId){
+    if(context?.message_editing!==true){edit.editor.showError('后台尚未加载原位编辑，请重启后台后再发送。');return;}
+    body.editTurnId=edit.item.dataset.turnId;body.expectedSessionUpdated=conversationRevision;
+  }
   if(pendingResume!==null)body.resume=pendingResume;
   document.querySelector('.assistant-welcome')?.remove();document.querySelector('.assistant-chat-shell').classList.remove('assistant-is-empty');
-  bubble('user',message+(pendingResume?`\n［附件：${attachmentName}，仅在本机解析］`:''),{editable:true,prompt:message,hasAttachment:pendingResume!==null});
+  const user=edit?.item||bubble('user',message+(pendingResume?`\n［附件：${attachmentName}，仅在本机解析］`:''),{editable:true,prompt:message,hasAttachment:pendingResume!==null});
   const pending=bubble('assistant','正在处理这一轮任务…');pending.classList.add('assistant-pending');
   pending.querySelector('.assistant-message-actions')?.remove();
   messagePrompts.set(pending,{message,hasAttachment:pendingResume!==null});scrollToLatest(true);
   const live=createLiveAssistantRun(pending,{labels:toolNames,renderMarkdown:setAssistantMarkdown,onUpdate:()=>scrollToLatest()});
   streamController=new AbortController();busy=true;controls();
   if(!edit)form.elements.message.value='';resizeComposer();document.querySelector('#assistantNotice').textContent=modelConfigured?'Agent正在规划工具；写操作需要确认':'正在使用本地规则与系统工具';
-  try{const turn=await requestChat(body,event=>live.event(event),streamController.signal);await live.complete(turn.answer,streamController.signal);const previous=conversationId;conversationId=turn.conversationId;saveActive();drafts.delete(previous);if(!edit){resumePending=null;attachmentName='';renderAttachment();}else endMessageEdit(false);renderTurn(pending,turn);
+  try{const turn=await requestChat(body,event=>live.event(event),streamController.signal);await live.complete(turn.answer,streamController.signal);const previous=conversationId;conversationId=turn.conversationId;conversationRevision=turn.session?.updated||0;saveActive();drafts.delete(previous);
+    if(turn.turnId)user.dataset.turnId=turn.turnId;
+    if(!edit){resumePending=null;attachmentName='';renderAttachment();}
+    else{
+      for(const row of edit.following)row.item.remove();edit.following=[];
+      user.querySelector('.assistant-message-text').textContent=message;
+      messagePrompts.set(user,{message,hasAttachment:edit.hasAttachment});
+      addMessageActions(user,{role:'user',text:message,notify:notice,onEdit:()=>beginMessageEdit(user,message,edit.hasAttachment)});
+      endMessageEdit(false);
+    }
+    renderTurn(pending,turn);
     if(turn.session){sessions=[turn.session,...sessions.filter(s=>s.id!==turn.session.id)];renderSessions();conversationTitle();}
     else document.querySelector('#assistantHistoryNotice').textContent='本轮服务未保存历史，请检查服务版本。';
     if(turn.result?.action)await syncActionCards();document.querySelector('#assistantNotice').textContent=turn.assistant_flow_version>=4?'回答完成':'回答完成 · 当前后端仍为旧版，请重启控制台与兼容助手，启用多城市任务与数据准入机制';}
-  catch(error){live.stop();const errorText=`本轮未完成：${error.message}。请先核对任务状态再重新提问，不会自动重复调用模型或执行工具。`;setAssistantMarkdown(pending.querySelector('.assistant-message-text'),errorText);addMessageActions(pending,{role:'assistant',text:errorText,notify:notice,onRetry:()=>refillPrompt(message,!!body.resume)});document.querySelector('#assistantNotice').textContent='本轮已停止或失败，请先核对任务状态。';if(edit)edit.editor.showError('发送未完成，修改内容已保留；请先核对任务状态再重发。');else form.elements.message.value=message;}
+  catch(error){live.stop();const errorText=`本轮未完成：${error.message}。请先核对任务状态再重新提问，不会自动重复调用模型或执行工具。`;
+    if(edit){pending.remove();edit.editor.showError(errorText+' 修改内容已保留。');}
+    else{setAssistantMarkdown(pending.querySelector('.assistant-message-text'),errorText);addMessageActions(pending,{role:'assistant',text:errorText,notify:notice,onRetry:()=>refillPrompt(message,!!body.resume)});form.elements.message.value=message;}
+    document.querySelector('#assistantNotice').textContent='本轮已停止或失败，请先核对任务状态。';}
   finally{streamController=null;if(body.resume)body.resume='';pending.classList.remove('assistant-pending');busy=false;controls();resizeComposer();if(edit&&messageEdit===edit){edit.editor.focus();edit.item.scrollIntoView({block:'nearest'});}else form.elements.message.focus();}
 }
 export async function loadJobAssistant(){
@@ -337,7 +368,7 @@ export async function loadJobAssistant(){
   try{await refreshSessions();if(!conversationId){const saved=savedActive();if(saved&&sessions.some(s=>s.id===saved))await selectConversation(saved);}}
   catch(error){document.querySelector('#assistantHistoryNotice').textContent=`历史记录暂不可用：${error.message}`;}
   const info=document.querySelector('#assistantContext');
-  try{context=await request('/api/assistant/context?summary=1');info.textContent=(context.index_deferred?`全岗位知识库 v${context.revision} · ${context.candidate_rows}条去重候选 · 提问时加载检索证据`:context.knowledge?`全岗位知识库 v${context.revision} · ${context.candidate_rows}条去重候选 · ${context.indexed_jobs}条可检索正文岗位。方向：${context.roles.join('、')}`:`${context.role} · ${context.indexed_jobs}条纳入岗位 · ${context.verified_sources}条已核对原文`)+(context.interview_knowledge?.available===false?' · 面经库暂不可用':context.interview_knowledge?` · 牛客面经 ${Number(context.interview_knowledge.posts||0)} 篇（去重）`:'');renderModel(context.model);}
+  try{context=await request('/api/assistant/context?summary=1');info.textContent=(context.index_deferred?`全岗位知识库 v${context.revision} · ${context.candidate_rows}条去重候选 · 岗位筛选快照累计增长20%后后台更新`:context.knowledge?`全岗位知识库 v${context.revision} · ${context.candidate_rows}条去重候选 · ${context.indexed_jobs}条可检索正文岗位。方向：${context.roles.join('、')}`:`${context.role} · ${context.indexed_jobs}条纳入岗位 · ${context.verified_sources}条已核对原文`)+(context.interview_knowledge?.available===false?' · 面经库暂不可用':context.interview_knowledge?` · 牛客面经 ${Number(context.interview_knowledge.posts||0)} 篇（去重）`:'');renderModel(context.model);}
   catch(error){info.textContent=`证据库暂不可用：${error.message}。现有采集不受影响。`;try{renderModel(await request('/api/assistant/model'));}catch{}}
   if(context&&!(context.assistant_flow_version>=4)){info.textContent='【后端待重启：多城市任务与数据准入尚未生效】'+info.textContent;notice('源码已更新，后端仍为旧版；请重启主控制台与兼容助手后再试。');}
 }

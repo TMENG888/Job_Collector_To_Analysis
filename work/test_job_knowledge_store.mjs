@@ -31,8 +31,8 @@ process.env.JOB_UI_DATA_DIR=dir;const data=await readJobDataset(snapshot.uri);as
 const index=await createKnowledgeAssistantStore(dir).load();assert.equal(index.jobs.length,24);assert.ok(index.jobs.every(j=>j.url===''));
 const result=answerRoleComparison(index,['智能体/大模型应用','嵌入式开发'],{city:'北京',years:3,education:'本科'});
 assert.equal(result.status,'ready');assert.equal(result.comparisons[0].statistics.median_salary_k,25);assert.equal(result.comparisons[1].statistics.median_salary_k,20);assert.equal(result.comparable_strata.length,1);assert.equal(new Set(result.sources.map(s=>s.key)).size,4);
-const chat=createChatAgent();const turn=await chat.run(index,{message:'智能体岗位和嵌入式软件的技术要求和薪资，哪个更有性价比'});assert.equal(turn.trace[0].tool,'compare_role_markets');assert.equal(turn.result.comparisons.length,2);assert.ok(!turn.answer.includes('先在岗位洞察'));
-const next=await chat.run({...index,cacheKey:index.cacheKey+'updated'},{message:'只看北京，三年经验，本科',conversationId:turn.conversationId});assert.deepEqual(next.filters.roles,['嵌入式开发','智能体/大模型应用']);assert.equal(next.dataset_changed,false);chat.close();
+const chat=createChatAgent();const turn=await chat.run(index,{message:'对比智能体岗位和嵌入式软件的JD原文技术要求'});assert.equal(turn.trace[0].tool,'compare_role_markets');assert.equal(turn.result.comparisons.length,2);assert.ok(!turn.answer.includes('先在岗位洞察'));
+const next=await chat.run({...index,cacheKey:index.cacheKey+'updated'},{message:'只看北京，三年经验，本科',conversationId:turn.conversationId});assert.deepEqual(new Set(next.filters.roles),new Set(['嵌入式开发','智能体/大模型应用']));assert.equal(next.dataset_changed,false);chat.close();
 assert.equal(answerRoleComparison(index,['不存在','嵌入式开发']).status,'clarification');
 const labelDir=path.join(dir,'labels');await fs.mkdir(labelDir);const job=(await store.read('kb://task/agent')).rows[0];
 const label={row_no:2,job_id:job.knowledge_key,knowledge_key:job.knowledge_key,knowledge_hash:job.knowledge_hash,job_name:job.job_name,job_description:job.job_description,skills:['Python','虚构技术'],evidence_json:[{label_type:'skill',label:'Python',quote:'Python LangChain'},{label_type:'skill',label:'虚构技术',quote:'不存在的原文'}]};

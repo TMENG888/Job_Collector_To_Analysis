@@ -27,6 +27,7 @@ import {channelErrorDiagnostic} from './channel_collection_diagnostics.mjs';
 import {jsonRequestBody} from './json_request_body.mjs';
 import {nativeTaskCounts,writeNativeChannelRows} from './collector_native_sink.mjs';
 import {createCollectorProgressSink} from './collector_progress_sink.mjs';
+import {jobonlineDetailSettled,hasJobonlineDetail} from './jobonline_details.mjs';
 import {collectionRequestProfile} from './collection_channel_profiles.mjs';
 import {zhaopinSessionCheckpointPath,validateZhaopinSessionCheckpoint} from './zhaopin_session_checkpoint.mjs';
 import {hasVerifiedSessionCompletion,sessionCompletionNeedsAudit,sessionAuditStartPage} from './session_pagination_health.mjs';
@@ -64,6 +65,7 @@ const shixiDetailCache=await loadShixiDetailCache(checkpointDir,config.task_id);
 const discoveredIds={shixiseng:new Set(),iguopin:new Set(),jobonline:new Set(),liepin:new Set(),nowcoder:new Set()};
 const deferredCombos=new Set();
 let jobonlineBudget=null;
+const jobonlineDetailCache=new Map();
 const comboKey=(platform,keyword,city)=>JSON.stringify([platform,keyword,city]);
 // 本轮实际尝试的平台：轮次文件里的平台集合，或 JOB_STRUCTURED_ROUND_ONLY 指定的平台。
 // 未尝试平台的历史 stopChannel 错误只登记为待人工处理，不继承为阻塞，避免单平台轮次被别的平台历史阻塞拖住退出码。
@@ -460,33 +462,26 @@ async function collectJobonlineLimited(keyword,city) {
 }
 
 async function collectJobonlineHttp(keyword, city) {
-  // 就业在线公开搜索接口（SM 加密请求，明文响应）。无服务端分页；按 关键词×城市 扩量。
-  const { fetchJobonlinePage, normalizeJobonline } = await import('./direct_jobonline_adapter.mjs');
-  const settings = config.platforms.jobonline || {};
-  const checkpointPath = path.join(checkpointDir, `jobonline_${safeName(keyword)}_${safeName(city.name)}.json`);
-  let saved = await readOwnedCheckpoint(checkpointPath);
-  if(!Object.keys(saved).length)saved=await readOwnedCheckpoint(path.join(checkpointDir,`jobonline_http_${safeName(keyword)}_${safeName(city.name)}.json`));
-  if(saved.keyword&&saved.keyword!==keyword||saved.city?.name&&saved.city.name!==city.name)throw Object.assign(Error('就业在线断点查询条件不匹配'),{code:'TASK_OUTPUT_OWNERSHIP',stopChannel:true});
-  const retained=saved.records??saved.rows??[];
-  if(!Array.isArray(retained)||retained.some(row=>!row.job_id||row.platform!=='就业在线'||row.task_id&&row.task_id!==currentTaskId))throw Object.assign(Error('就业在线断点记录归属不匹配'),{code:'TASK_OUTPUT_OWNERSHIP',stopChannel:true});
-  const known = new Map(retained.map(r => [String(r.job_id), r]));
-  const rowLimit=Math.max(1,Number(settings.maxRows)||Infinity);
-  if(saved.completed&&saved.direct_search_verified||known.size>=rowLimit)return [...known.values()].slice(0,rowLimit);
-  // 会话相较完整：每次请求都新密钥；直接请求当前条件。
-  const cityCode = /^\d{6}$/.test(String(city.code || '')) ? city : { ...city, code: '' };
-  let list;try{({list}=await fetchJobonlinePage(request,keyword,cityCode));}catch(error){error.partialRows=[...known.values()];throw error;}
-  const collectedAt = new Date().toISOString();
-  for (const raw of list) {
-    try { const row = normalizeJobonline(raw, keyword, city.name, collectedAt); if (!known.has(row.job_id)) known.set(row.job_id, row); }
-    catch (error) { if (error.stopChannel) throw error; }
-  }
-  const rows = [...known.values()].slice(0,rowLimit);
-  // This public endpoint exposes a single search window, not paginated totals.
-  // Complete this condition only; do not claim the entire site's jobs exhausted.
-  const windowComplete=known.size<=rowLimit;
-  await writeJsonAtomic(checkpointPath, { task_id: currentTaskId, keyword, city, records:rows, completed:windowComplete,direct_search_verified:true,completion_reason:windowComplete?'public_search_window_end':'row_limit',acquisition_mode: 'public_json_api', collected_at: collectedAt });
-  await writeJsonAtomic(comboFile('就业在线', keyword, city.name), { task_id: config.task_id, keyword, city, records: rows });
-  console.log(`jobonline ${keyword}/${city.name}: ${rows.length}条`);
+  const {collectJobonlineLoggedWindow}=await import('./jobonline_logged_collection.mjs');
+  const {createJobonlineLoginManager}=await import('./jobonline_login_session.mjs');
+  const settings=config.platforms.jobonline||{},login=createJobonlineLoginManager();
+  const checkpointPath=path.join(checkpointDir,`jobonline_logged_${safeName(keyword)}_${safeName(city.name)}.json`);
+  const saved=await readOwnedCheckpoint(checkpointPath);
+  const previous=await readOwnedCheckpoint(path.join(checkpointDir,`jobonline_${safeName(keyword)}_${safeName(city.name)}.json`));
+  for(const value of [saved,previous])if(value.keyword&&value.keyword!==keyword||value.city?.name&&value.city.name!==city.name)throw Object.assign(Error('就业在线断点查询条件不匹配'),{code:'TASK_OUTPUT_OWNERSHIP',stopChannel:true});
+  const retained=previous.records||[];
+  if([...retained,...(saved.records||[])].some(row=>!row.job_id||row.platform!=='就业在线'||row.task_id&&row.task_id!==currentTaskId))throw Object.assign(Error('就业在线断点记录归属不匹配'),{code:'TASK_OUTPUT_OWNERSHIP',stopChannel:true});
+  console.log(`[就业在线流程] ${keyword}/${city.name}：核对登录会话，读取官网列表并补齐岗位详情`);
+  const progress=createCollectorProgressSink({enabled:process.env.JOB_COLLECTOR_NATIVE_STORE==='1',write:values=>writeNativeChannelRows(outputDir,currentTaskId,values)});
+  let rows;
+  try{rows=await login.withCollection(keyword,city,readers=>collectJobonlineLoggedWindow({keyword,city,saved,retained,maxRows:Math.max(1,Number(settings.maxRows)||Infinity),...readers,detailCache:jobonlineDetailCache,
+    checkResources:()=>assertCollectorResources(1024**3),
+    onFlow:({stage})=>console.log(`[就业在线流程] ${keyword}/${city.name}：${stage==='details_started'?'补采职责与任职要求':'本轮详情请求已结束'}`),
+    onCheckpoint:value=>writeJsonAtomic(checkpointPath,{task_id:currentTaskId,...value}),
+    onRows:async values=>{for(const row of values)discoveredIds.jobonline.add(String(row.job_id));await progress.append(values);}}),{requestOptions:config.request});}
+  finally{await progress.flush();}
+  await writeJsonAtomic(comboFile('就业在线',keyword,city.name),{task_id:currentTaskId,keyword,city,records:rows});
+  console.log(`[就业在线流程] ${keyword}/${city.name}：列表与详情已去重保存`);
   return rows;
 }
 
@@ -505,7 +500,7 @@ async function collectLiepinLimited(keyword,city) {
 
 const collectors = { shixiseng: collectShixiseng, zhaopin: collectZhaopin, job51: collect51job, jobonline: collectJobonlineHttp, iguopin: collectIguopin, mohrss: collectMohrss, liepin:collectLiepinLimited };
 const allRows = [];
-const manifest = { task_id:config.task_id||process.env.JOB_COLLECTOR_TASK_ID||null,collected_at: collectedAt, config, platforms: {}, note: 'HTTP 核验数据为主；猎聘为显式授权的官网页面会话搜索响应，不做 Node 会话重放或失败后浏览器回退。同站共享限速，验证或访问受限即停。' };
+const manifest = { task_id:config.task_id||process.env.JOB_COLLECTOR_TASK_ID||null,collected_at: collectedAt, config, platforms: {}, note: 'HTTP 核验数据为主；猎聘与就业在线通过本人官网页面会话读取搜索响应。同站共享限速，登录失效、验证或访问受限即停，原数据与断点保留。' };
 const previousManifest = await fs.readFile(path.join(outputDir,'采集清单.json'),'utf8').then(JSON.parse).catch(()=>null);
 if(previousManifest&&previousManifest.task_id!==currentTaskId)throw Error('采集清单任务 ID 不匹配');
 if(requestedRound||process.env.JOB_STRUCTURED_ROUND_ONLY==='jobonline')manifest.platforms={...previousManifest?.platforms};
@@ -562,12 +557,7 @@ const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,N
   }catch(error){if(error.code!=='ENOENT')throw error;}
   if(['jobonline','liepin'].includes(platform))for(const row of rows)if(row.job_id)discoveredIds[platform].add(String(row.job_id));
   if(platform==='jobonline'){
-    const {checkJobonlineDependencies}=await import('./direct_jobonline_adapter.mjs');
-    const preflight=checkJobonlineDependencies();
-    if(!preflight.ok){
-      manifest.platforms[platform]={rows:rows.length,errors:[{keyword:null,city:null,code:preflight.code,error:preflight.message,stopChannel:true}],acquisition:channelAcquisition[platform]||null};
-      console.error(`[渠道预检] jobonline ${preflight.message}`);allRows.push(...rows);return;
-    }
+    for(const row of rows)if(jobonlineDetailSettled(row))jobonlineDetailCache.set(String(row.job_id),row);
     const targetRemaining=settings.totalMaxRows&&config.taskTargetRows?Math.max(0,Number(config.taskTargetRows)-await otherChannelValidCount(outputDir,'',currentTaskId)):Infinity;
     jobonlineBudget=jobonlineRoundBudget(settings,discoveredIds.jobonline.size,{targetRemaining});
     if(process.env.JOB_JOBONLINE_ROUND_BUDGET){
@@ -611,14 +601,14 @@ const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,N
         else if(collectionExitCode(error)===42)outputPaused=true;
         const stopChannel=Boolean(error.stopChannel)&&!isConditionScopedStop(error);
         const conditionScoped=stopChannel?false:Boolean(error.conditionScoped)||isConditionScopedStop(error);
-        errors.push({ keyword, city, error: String(error.stack || error.message || error), code:error.code||'collection_error', stopChannel, ...(conditionScoped?{conditionScoped:true}:{}) });
+        errors.push({ keyword, city, error: String(error.stack || error.message || error), code:error.code||'collection_error', stopChannel, ...(error.storageDiagnostic?{storageDiagnostic:error.storageDiagnostic}:{}), ...(conditionScoped?{conditionScoped:true}:{}) });
         console.error(`${platform} failed ${keyword}/${city.name}: ${error.message || error}`);
         if(error.code==='origin_cooldown'||error.conditionScoped&&error.code==='verification_required'){
           scheduling={reason:'origin_cooldown',remaining:combinations.slice(comboIndex+1),at:new Date().toISOString()};
           console.log(`[来源等待] ${platform} 已进入共享冷却，保留本条件与剩余条件，不逐个撞冷却闸门；稍后可人工续采`);
           break channel;
         }
-        if(isConditionScopedStop(error))console.log(`[条件让位] ${platform} ${keyword}/${city.name} 分页停滞；保留该断点，继续其他关键词和城市，不自动重试当前条件`);
+        if(isConditionScopedStop(error))console.log(`[条件让位] ${platform} ${keyword}/${city.name} ${error.code==='details_incomplete'?'部分详情待补齐':'分页停滞'}；保留该断点，继续其他关键词和城市，不自动重试当前条件`);
         if(stopChannel||outputPaused) { console.error(`${platform} 已停止后续城市请求，已采集数据保留在断点；人工处理后可续采`); break channel; }
       }
   }
@@ -626,9 +616,12 @@ const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,N
   allRows.push(...deduped);
   manifest.platforms[platform] = { rows: deduped.length, errors, scheduling, acquisition:channelAcquisition[platform]||null };
   if(platform==='jobonline'){
+    manifest.platforms[platform].detail_summary={successful:deduped.filter(hasJobonlineDetail).length,unavailable:deduped.filter(row=>row.detail_status==='job_unavailable').length,pending:deduped.filter(row=>!jobonlineDetailSettled(row)).length};
+    manifest.platforms[platform].completion_scope='logged_website_window_with_details';
     const checkpoints=[];
     for(const {keyword,city} of combinations){
-      const saved=await readOwnedCheckpoint(path.join(checkpointDir,`jobonline_${safeName(keyword)}_${safeName(city.name)}.json`));
+      const logged=await readOwnedCheckpoint(path.join(checkpointDir,`jobonline_logged_${safeName(keyword)}_${safeName(city.name)}.json`));
+      const saved=Object.keys(logged).length?logged:await readOwnedCheckpoint(path.join(checkpointDir,`jobonline_${safeName(keyword)}_${safeName(city.name)}.json`));
       // Missing checkpoints represent conditions not reached within this round.
       checkpoints.push(Object.keys(saved).length?saved:{completed:false,nextPageNo:1});
     }

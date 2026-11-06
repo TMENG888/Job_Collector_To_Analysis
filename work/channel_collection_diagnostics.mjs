@@ -15,6 +15,7 @@ const policies = {
   access_blocked: ['manual','访问受限','已停止请求，请人工核对'],
   api_schema_changed: ['failed','接口结构变化','需要更新适配器；已停止该渠道，不把异常当作空结果'],
   invalid_response: ['failed','响应校验失败','接口未返回可核验数据；请检查接口或官网状态'],
+  details_incomplete: ['paused','详情待补齐','部分岗位详情为空或请求失败；已保存成功数据，续采时补齐，不将列表结束当作详情完成'],
   invalid_config: ['failed','配置有误','请检查该渠道关键词、城市及采集配置'],
   http_error: ['failed','接口请求失败','接口返回异常 HTTP 状态；请检查渠道服务'],
   api_business_error: ['failed','接口业务异常','接口业务状态异常；不据此断言 Cookie 失效'],

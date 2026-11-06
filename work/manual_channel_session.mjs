@@ -12,7 +12,7 @@ import {spawn} from 'node:child_process';
 import {launchOrdinaryChromeContext} from './ordinary_chrome_session.mjs';
 import {standardBrowserExecutable} from './browser_executables.mjs';
 import {writeJsonAtomic} from './collector_storage.mjs';
-import {saveChannelVerification} from './channel_verification_state.mjs';
+import {saveChannelVerification,ensureChannelManifest} from './channel_verification_state.mjs';
 
 const loginCodes=new Set(['session_required','login_required','auth_required']);
 const verifiedCodes=new Set([...loginCodes,'verification_required','access_blocked','navigation_error']);
@@ -53,7 +53,7 @@ export async function openPureManualBrowser(platform,url,{profile=manualBrowserP
     await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
     child.unref();
   }catch{throw fail('普通 Chrome 未能启动，请检查安装路径或配置目录占用',409);}
-  return {state:'manual_open',platform,profile,url,message:'已用普通 Chrome 打开（不带调试端口、未接管）；完成登录/验证后请关闭该窗口，再点“复检采集会话”'};
+  return {state:'manual_open',platform,profile,url,message:'已用普通 Chrome 打开；完成登录/验证并关闭窗口后，点击“已处理”'};
 }
 
 const fail=(message,status=409)=>Object.assign(Error(message),{status});
@@ -72,13 +72,11 @@ export async function clearPlatformCooldown(platform,rateDir,{now=new Date().toI
 // acknowledgement must not silently mark a captcha/verification failure as
 // resolved; that requires the explicit "已验证" action.
 export async function markChannelReady(task,platform,{state='verified',rateDir,note=''}={}){
-  if(!['job51','liepin','zhaopin'].includes(platform))throw fail('该渠道不支持人工会话确认',400);
+  if(!['job51','liepin','zhaopin','jobonline'].includes(platform))throw fail('该渠道不支持人工会话确认',400);
   if(!['logged_in','verified'].includes(state))throw fail('人工状态无效',400);
   const file=path.join(task.outputDir,'采集清单.json');
-  const manifest=await fs.readFile(file,'utf8').then(JSON.parse);
-  if(manifest.task_id!==task.id)throw fail('采集清单归属不匹配',400);
-  const channel=manifest.platforms?.[platform];
-  if(!channel)throw fail('渠道清单不存在',400);
+  const manifest=await ensureChannelManifest(task,platform);
+  const channel=manifest.platforms[platform];
   const now=new Date().toISOString(),resolved=[];
   channel.errors=(channel.errors||[]).map(error=>{
     if(error.resolved_at)return error;
@@ -95,7 +93,7 @@ export async function markChannelReady(task,platform,{state='verified',rateDir,n
     state:verificationState,mode:'manual',verifiedAt:state==='verified'?now:null,
     acknowledgedAt:now,reason:note||(state==='verified'?'人工已完成登录/验证，采集会话可继续':'人工已确认登录，待观察搜索响应'),
   });
-  return {platform,state:verificationState,resolvedCount:resolved.length,resolved,verifiedAt:now};
+  return {platform,state:verificationState,resolvedCount:resolved.length,resolved,verifiedAt:state==='verified'?now:null};
 }
 
 export async function openZhaopinSession(taskId,{url='https://www.zhaopin.com/'}={}){

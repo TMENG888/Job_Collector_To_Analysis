@@ -13,6 +13,12 @@
   --shadow: 0 12px 34px rgba(23, 34, 46, .07);
 }
 #insightKeywordCloud { grid-column:1 / -1; }
+.jobonline-login-prompt { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; padding:10px 12px; margin-bottom:12px; border:1px solid var(--line); border-left:3px solid var(--teal); border-radius:8px; background:var(--teal-soft); color:var(--ink); }
+.jobonline-login-prompt strong { display:block; font-size:13px; }
+.jobonline-login-prompt small { display:block; margin-top:3px; color:var(--muted); font-size:12px; line-height:1.5; }
+.jobonline-login-prompt button { min-height:36px; }
+.jobonline-login-prompt button:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+@media (max-width:600px) { .jobonline-login-prompt .channel-verification-actions { width:100%; flex-wrap:wrap; } .jobonline-login-prompt button { min-height:44px; } }
 .insight-wordcloud { width:100%; max-width:900px; margin-inline:auto; container-type:inline-size; }
 .insight-wordcloud { overflow:hidden; }
 .insight-wordcloud svg { display:block; width:100%; height:360px; font-family:"Segoe UI","Microsoft YaHei",sans-serif; cursor:grab; touch-action:none; user-select:none; }
@@ -71,6 +77,11 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .panel-head p { margin: 0; color: var(--muted); font-size: 11px; }
 .icon-button, .close { border: 0; background: transparent; color: #6b7886; font-size: 22px; }
 .task-list { max-height: 630px; overflow: auto; padding: 9px; }
+.task-load-notice { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:10px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--teal-soft); color:var(--teal-dark); font-size:13px; line-height:1.6; }
+.task-load-notice[hidden],.task-load-notice [hidden] { display:none; }
+.task-load-notice[data-state="error"] { color:var(--red); background:var(--soft); border-left:3px solid var(--red); }
+.task-load-notice span { min-width:0; overflow-wrap:anywhere; }
+.task-load-notice button { flex-shrink:0; min-height:44px; }
 .task-item { width: 100%; padding: 14px; border: 1px solid transparent; border-radius: 9px; text-align: left; background: transparent; transition: .15s; }
 .task-item + .task-item { margin-top: 4px; }
 .task-item:hover { background: #f7faf9; }

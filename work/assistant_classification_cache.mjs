@@ -6,16 +6,16 @@ import {roleScreeningCacheKey} from './role-classifier-registry.mjs';
 
 // Include implementation and model contracts: a code/model upgrade must not
 // silently resurrect a classification computed with a different pipeline.
-export function assistantClassificationVersion(){
+export function assistantClassificationVersion(models=[]){
   const digest=createHash('sha256');
-  for(const file of ['job_knowledge_store.mjs','job_knowledge_schema.mjs','role-evidence-v2.mjs','data-analysis-classifier.mjs','insight-classifier-input.mjs','role-classifier-registry.mjs'])digest.update(fs.readFileSync(new URL(file,import.meta.url)));
-  return digest.update(roleScreeningCacheKey()).digest('hex');
+  for(const file of ['job_knowledge_store.mjs','job_knowledge_schema.mjs','role-evidence-v2.mjs','data-analysis-classifier.mjs','insight-classifier-input.mjs','role-classifier-registry.mjs','classifier-retirement.mjs'])digest.update(fs.readFileSync(new URL(file,import.meta.url)));
+  return digest.update(roleScreeningCacheKey()).update(JSON.stringify(models.map(m=>({role:m.role,sha256:m.sha256,version:m.version,threshold:m.threshold})).sort((a,b)=>a.role.localeCompare(b.role)))).digest('hex');
 }
-export function createClassificationCache(directory){
+export function createClassificationCache(directory,{models=[]}={}){
   fs.mkdirSync(directory,{recursive:true});
   const db=new DatabaseSync(path.join(directory,'classifications.sqlite'));
   db.exec('PRAGMA busy_timeout=2000; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS observations(job_key TEXT PRIMARY KEY, content_hash TEXT NOT NULL, pipeline TEXT NOT NULL, observation TEXT NOT NULL, digest TEXT NOT NULL)');
-  const pipeline=assistantClassificationVersion(),get=db.prepare('SELECT observation,digest FROM observations WHERE job_key=? AND content_hash=? AND pipeline=?');
+  const pipeline=assistantClassificationVersion(models),get=db.prepare('SELECT observation,digest FROM observations WHERE job_key=? AND content_hash=? AND pipeline=?');
   const put=db.prepare('INSERT OR REPLACE INTO observations VALUES(?,?,?,?,?)');
   const hash=text=>createHash('sha256').update(text).digest('hex');
   let transaction=false;

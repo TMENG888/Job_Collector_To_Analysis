@@ -26,6 +26,7 @@ function subjectOf(text){
   const created=text.match(/(?:创建|新建|建立)(?:并(?:启动|开始|运行))?(?:一个|一项)?\s*(.*?)(?:采集任务|爬虫任务|任务)/);
   const gathered=text.match(new RegExp(`(?:${collect})(.*)`));
   let subject=leading?.[1]??created?.[1]??gathered?.[1]??'';
+  if(leading)subject=subject.replace(/^(?:(?:帮我|请|把|将)\s*)*/,'').replace(new RegExp(`^(?:${collect})(?:下|一下)?(?:在)?\\s*`),'');
   subject=subject.split(/[，,。；;\n]/)[0].split(/(?:目标)?\s*\d+(?:\.\d+)?\s*(?:万)?\s*条/)[0];
   subject=subject.replace(/^(?:下|一下|点|一些|一批|一个|更多的?)\s*/,'').replace(/[吧呗呀啊呢！!？?。\s]+$/,'').replace(/(?:可以|行|能做)?[吗么]$/,'').replace(/(?:的)?(?:岗位数据|数据|采集任务|任务)$/,'').replace(/[“”「」『』"']/g,'').trim();
   return /^(?:全部|所有|更多|全平台|全城市|全国|全平台和全城市|相关|类似|按原条件)?$/.test(subject)?'':subject;
@@ -58,7 +59,7 @@ export function parseCollectionIntent(message){
     for(const[action,pattern]of Object.entries(actionPatterns))for(const match of occurrences(clause,pattern))(match.negative?negative:positive).add(action);
     for(const match of occurrences(clause,new RegExp(collect))){if(match.negative)negative.add('collect');else if(!/^(?:中心|任务|进度|日志|工具|机制|功能)/.test(clause.slice(match.index+match.value.length)))collectPositive=true;}
   }
-  const existing=/这个|该任务|原任务|现有|已有|上次|之前|第[一二三四五六七八九十1-9].{0,2}任务/.test(text);
+  const existing=/(?:(?:这个|该|原|现有|已有|上次|之前)(?:的)?(?:采集|爬虫)?任务|(?:现有|已有|上次|之前)(?:的)?[^，,。；;\n]{1,40}任务|第[一二三四五六七八九十1-9].{0,2}任务)/.test(text);
   if(collectPositive&&!positive.size)positive.add(existing?'resume':'collect');
   // Contradictions and several different write operations need human resolution.
   const types=[...positive].filter(action=>action!=='create'&&action!=='collect');

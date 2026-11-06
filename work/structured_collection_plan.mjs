@@ -3,6 +3,7 @@ import {writeJsonAtomic} from './collector_storage.mjs';
 import {channelAcquisition,collectionPolicyFor,collectionMode,HYBRID_MODE} from './channel_acquisition.mjs';
 import {jobonlineCities} from './collection_cities.mjs';
 import {taskInterviewSettings} from './nowcoder_interviews.mjs';
+import {collectionChannelAvailable,retiredCollectionChannels} from './channel_availability.mjs';
 
 // Only transport and pacing change: quotas, cities and checkpoints are preserved.
 export async function prepareStructuredCollection(task){
@@ -10,6 +11,7 @@ export async function prepareStructuredCollection(task){
   const config=JSON.parse(await fs.readFile(task.publicConfigPath,'utf8'));
   if(config.task_id!==task.id)throw Error('接口执行配置任务 ID 不匹配');
   const before=JSON.stringify(config),request=config.request||{},changes=[];
+  for(const key of retiredCollectionChannels)if(config.platforms?.[key])config.platforms[key].enabled=false;
   if(task.label||task.primaryKeyword||task.keywords?.length||config.keywords?.length||config.interviews?.roleKey){
     config.interviews=taskInterviewSettings({...task,keywords:task.keywords?.length?task.keywords:config.keywords,interviews:{...task.interviews,...config.interviews}});
     task.interviews=config.interviews;
@@ -24,6 +26,6 @@ export async function prepareStructuredCollection(task){
   config.request={...request,concurrency:1,platformConcurrency:2,minimumIntervalMs:Math.max(policy.minimumIntervalMs,Number(request.minimumIntervalMs)||0),attempts:Math.min(2,Math.max(1,Number(request.attempts)||2))};
   config.acquisitionMode=policy.mode;config.transportMode=collectionMode(task);config.collectionTransportPolicy=policy;
   config.taskTargetRows=task.collectUntilExhausted?0:task.targetRows;config.collectUntilExhausted=!!task.collectUntilExhausted;config.apiExecutionVersion=3;
-  if(before!==JSON.stringify(config)){await writeJsonAtomic(task.publicConfigPath,config);changes.push(policy.mode===HYBRID_MODE?'接口优先；已适配渠道可回退可见页面 RPA；验证/拒绝访问不自动回退，浏览器串行':'HTTP 核验数据为主；猎聘仅走显式官网页面会话，共享限速、验证即停，不进行失败后浏览器回退');}
-  return {changes,policy,channels:(task.platforms||[]).filter(key=>channelAcquisition[key]).map(key=>({key,...channelAcquisition[key],maxPages:config.platforms?.[key]?.maxPages??null,maxRows:config.platforms?.[key]?.maxRows??null}))};
+  if(before!==JSON.stringify(config)){await writeJsonAtomic(task.publicConfigPath,config);changes.push(policy.mode===HYBRID_MODE?'接口优先；已适配渠道可回退可见页面 RPA；验证/拒绝访问不自动回退，浏览器串行':'HTTP 核验数据为主；就业在线使用官网登录会话，共享限速、验证即停');}
+  return {changes,policy,channels:(task.platforms||[]).filter(key=>channelAcquisition[key]&&collectionChannelAvailable(key,task)).map(key=>({key,...channelAcquisition[key],maxPages:config.platforms?.[key]?.maxPages??null,maxRows:config.platforms?.[key]?.maxRows??null}))};
 }

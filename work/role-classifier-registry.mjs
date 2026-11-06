@@ -2,12 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {createRoleClassifierMatcher,dataAnalysisScreeningEnabled,dataAnalysisInsightModel,matchDataAnalysis} from './data-analysis-classifier.mjs';
+import {isClassifierRetired,classifierRetirementKey} from './classifier-retirement.mjs';
 const dir=path.join(import.meta.dirname,'models/role-screening');
 const registryBytes=fs.readFileSync(path.join(dir,'multirole-registry-v1.json'));
 if(createHash('sha256').update(registryBytes).digest('hex')!=='4a6adf7b9607e1ebbc82949321494a06dc27e882affc13e8075ff6f240b84b63')throw Error('多岗位分类器注册清单校验失败');
 const registry=JSON.parse(registryBytes),instances=new Map();
 export function roleScreeningEnabled(){const setting=process.env.JOB_ROLE_SCREENING||'tfidf-lr';if(!['tfidf-lr','legacy'].includes(setting))throw Error('JOB_ROLE_SCREENING仅支持tfidf-lr或legacy');return setting==='tfidf-lr';}
-export function hasRoleClassifier(family){return roleScreeningEnabled()&&(family==='数据分析'?dataAnalysisScreeningEnabled():Object.hasOwn(registry.models,family));}
+export function hasRoleClassifier(family){return !isClassifierRetired(family)&&roleScreeningEnabled()&&(family==='数据分析'?dataAnalysisScreeningEnabled():Object.hasOwn(registry.models,family));}
 export function supervisedRoleFamilies(){return ['数据分析',...Object.keys(registry.models)].filter(hasRoleClassifier);}
 export function roleClassifier(family){
   if(!hasRoleClassifier(family))return null;
@@ -31,4 +32,4 @@ export function roleScreeningStatus(){return {version:registry.version,mode:'sup
   {family:'爬虫/数据采集',reason:'隔离测试召回率不足，未通过发布门槛'},
   {family:'大数据开发',reason:'隔离验证集无负例，暂不发布'},
   {family:'其他岗位族',reason:'需岗位专用标签、训练和隔离评测；无合格分类器时暂停筛选，不回退规则或语义参照'}]};}
-export const roleScreeningCacheKey=()=>supervisedRoleFamilies().map(f=>f+':'+(f==='数据分析'?'data-analysis-tfidf-lr-v1':registry.models[f].version)).join('|');
+export const roleScreeningCacheKey=()=>supervisedRoleFamilies().map(f=>f+':'+(f==='数据分析'?'data-analysis-tfidf-lr-v1':registry.models[f].version)).join('|')+':retired:'+classifierRetirementKey();

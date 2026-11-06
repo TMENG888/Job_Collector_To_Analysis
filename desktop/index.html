@@ -14,7 +14,6 @@
       <button data-route="tasks">采集任务</button>
       <button data-route="insights" class="active">岗位洞察</button>
       <button data-route="assistant">求职助手</button>
-      <button data-route="profile">个人资料</button>
       <button id="browserMode">求职浏览器</button>
     </nav>
     <span class="local"><i></i> 本地运行</span>
@@ -40,12 +39,9 @@
       <h3>简历</h3>
       <div class="tool-actions"><button id="resumeUpload">上传PDF</button><button id="resumePreview" disabled>逐页预览</button><button id="resumeClear" disabled>清除</button></div>
       <p id="resumeInfo" class="muted">未上传简历</p>
-      <div class="tool-actions"><select id="resumeLibrary" aria-label="简历库版本"><option value="">简历库暂无版本</option></select><button id="resumeSelect">选用</button><button id="resumeLibraryOpen">管理</button></div>
       <div id="resumePages" hidden></div>
       <button id="resumeAck" disabled hidden>确认核对</button>
-      <label class="check"><input id="shareConsent" type="checkbox">允许DeepSeek使用脱敏简历、Wiki和JD进行匹配</label>
-      <label class="check"><input id="libraryMode" type="checkbox" checked>优选本批已批准的库存简历</label>
-      <label class="check"><input id="autoTailor" type="checkbox" checked>库存不适配时用Wiki生成草稿，暂停待人工审核</label>
+      <label class="check"><input id="shareConsent" type="checkbox">允许DeepSeek使用脱敏简历和JD进行匹配</label>
       <button id="recruiterPlan" class="primary">生成检索词</button>
       <details id="recruiterQueryDetails" hidden><summary id="recruiterQuerySummary">检索词</summary><div id="recruiterQueries"></div></details>
       <div class="recruiter-options">
@@ -57,7 +53,7 @@
       <div class="delivery-settings">
         <h3>自动沟通 · BOSS</h3>
         <div class="recruiter-options"><label>沟通人数（1–5）<input id="recruiterRecipients" type="number" min="1" max="5" value="3"></label><label>间隔（60–300秒）<input id="recruiterInterval" type="number" min="60" max="300" value="90"></label></div>
-        <label class="check"><input id="deliveryConsent" type="checkbox">授权本批开启沟通，发送招呼及所选已批准版本的截图（含个人信息）；新草稿不发送</label>
+        <label class="check"><input id="deliveryConsent" type="checkbox">授权本批开启沟通，发送招呼及当前已核对简历的截图（含个人信息）</label>
         <details class="delivery-notice"><summary>发送须知</summary><p class="muted">开启沟通可能触发平台默认招呼或简历发送。遇验证或发送结果不明即停；不自动重试。24小时最多10次尝试（含结果不明），不保证免于平台限流。</p></details>
       </div>
       <div class="tool-actions"><button id="recruiterDryRun" disabled>预览（不发送）</button><button id="recruiterSend" class="primary" disabled aria-describedby="recruiterStartHelp">授权并开始</button></div>

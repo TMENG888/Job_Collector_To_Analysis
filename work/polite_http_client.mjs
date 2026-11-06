@@ -14,7 +14,7 @@ const endpoints=new Map([
   ['https://www.shixiseng.com',new Set(['/app/interns/search/v2','/proxy-prefix/new-intern-api-host/api/interns/v3.0/interns/info/wxz'])],
   ['https://gp-api.iguopin.com',new Set(['/api/jobs/v1/recom-job'])],
   ['https://fe-api.zhaopin.com',new Set(['/c/i/search/positions','/c/i/refresh-token'])],
-  ['https://api.jobonline.cn',new Set(['/jobtbao-es-api/elastic/api/position/common/v1/showlist'])],
+  ['https://api.jobonline.cn',new Set(['/jobtbao-es-api/elastic/api/position/common/v1/showlist','/jobtbao-platform-srv/v1/platform/unsafe/position/getPositionDetail'])],
   ['https://api-c.liepin.com',new Set(['/api/com.liepin.searchfront4c.pc-search-job'])],
   ['http://job.mohrss.gov.cn',new Set(['/cjobs/jobinfolist/listJobinfolist'])],
 ]);

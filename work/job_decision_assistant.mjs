@@ -79,10 +79,10 @@ export function createAssistantIndex(report,sourceRows=[]){
 const roleVocabulary=[['嵌入式',/嵌入式|单片机|固件/i],['智能体',/智能体|大模型|agent|llm/i],['数据分析',/数据分析/i],['新媒体运营',/新媒体|短视频运营/i]];
 import {rolesInQuestion} from './job_assistant_roles.mjs';
 export {rolesInQuestion};
-export function createKnowledgeAssistantStore(dataDir,{readOnly=false,background=readOnly,classificationCache,cacheDir,workerTimeoutMs}={}){
-  if(background){if(!readOnly)throw Error('后台岗位检索只允许只读知识库');return createBackgroundAssistantStore(dataDir,{cacheDir,workerTimeoutMs});}
+export function createKnowledgeAssistantStore(dataDir,{readOnly=false,background=readOnly,classificationCache,cacheDir,workerTimeoutMs,classifiers=[],getRoleModels,canRefresh,pollMs}={}){
+  if(background){if(!readOnly)throw Error('后台岗位检索只允许只读知识库');return createBackgroundAssistantStore(dataDir,{cacheDir,workerTimeoutMs,getRoleModels,canRefresh,pollMs});}
   let cached=null,pending=null;
-  async function load(options={}){const data=await knowledgeStore(dataDir).assistantData({readOnly,classificationCache,...options});if(cached?.cacheKey===data.cacheKey)return cached;
+  async function load(options={}){const data=await knowledgeStore(dataDir).assistantData({readOnly,classificationCache,classifiers,...options});if(cached?.cacheKey===data.cacheKey)return cached;
     options.onProgress?.({phase:'index_tokenizing',message:'岗位分类已完成，正在构建检索索引'});
     const jobs=data.jobs.filter(j=>j.admission?.retrieval??j.decision==='include').map(j=>({...j,url:safeLink(j.url),skills:(j.skills||[]).filter(s=>s!=='React'||hasReactSkill(j.description+' '+j.job_name))}));const documents=jobs.map(j=>terms([j.job_name,...j.skills||[],j.description].join(' '))),frequencies=new Map();
     documents.forEach(ts=>ts.forEach(t=>frequencies.set(t,(frequencies.get(t)||0)+1)));

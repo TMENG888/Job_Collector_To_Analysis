@@ -13,7 +13,6 @@
       const status=document.createElement('span');status.className='result-state';status.textContent=({reading:'读取中',matching:'匹配中',excluded:'非目标岗位',review:'待复核','low-match':'条件未满足',ready:run?.delivery?'准备发送':'可沟通 · 草稿未发送',sending:'发送待确认',sent:'已发送招呼及简历',skipped:'未重复发送',quota:'达到授权人数','delivery-stopped':'发送中断，需核对',stopped:'已停止'})[row.state]||'待核对';node.append(status);
       const paragraph=(parent,text)=>{const p=document.createElement('p');p.textContent=text;parent.append(p);};
       if(row.resumeFilename)paragraph(node,'使用简历：'+row.resumeFilename);
-      if(row.state==='awaiting-review'){status.textContent='新简历待人工审核 · 未发送';paragraph(node,row.message||'请到个人资料审核草稿，再重新授权');const button=document.createElement('button');button.textContent='打开简历库';button.onclick=()=>window.jobDesktop.command('workspace',{route:'profile'});node.append(button);}
       const details=(title,section)=>{const d=document.createElement('details'),s=document.createElement('summary');d.dataset.section=section;s.textContent=title;d.append(s);node.append(d);return d;};
       if(['delivery-stopped','stopped'].includes(row.state)&&row.message)paragraph(node,row.message);
       if(row.greeting)paragraph(details(row.state==='sent'?'已发送招呼':row.state==='ready'&&!run?.delivery?'预览草稿 · 未发送':'招呼内容 · 发送待确认','draft'),row.greeting);

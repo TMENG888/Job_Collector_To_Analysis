@@ -5,13 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>岗位采集控制台</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%2383ded0%22/><text x=%2214%22 y=%2241%22 font-size=%2226%22 font-family=%22Arial%22 font-weight=%22700%22 fill=%22%230d3735%22>JC</text></svg>" />
-  <link rel="stylesheet" href="/styles.css?v=20261026-statistics" />
+  <link rel="stylesheet" href="/styles.css?v=20261104-task-list-recovery" />
   <link rel="stylesheet" href="/design-system.css?v=20261029-inline-edit" />
   <link rel="stylesheet" href="/interview-tools.css?v=20261022-qwen-1" />
   <link rel="stylesheet" href="/insight-layout.css?v=20261028-training-queue" />
-  <link rel="stylesheet" href="/insight-classifier.css?v=20261029-semantic-preview" />
+  <link rel="stylesheet" href="/insight-classifier.css?v=20261104-training-progress" />
   <link rel="stylesheet" href="/browser-workspace.css?v=20261019-interactive-8" />
-  <link rel="stylesheet" href="/personal-wiki.css?v=20261022-single-organizer" />
 </head>
 <body>
   <div class="shell">
@@ -21,7 +20,6 @@
         <div><strong>Job Collector</strong><span>岗位采集控制台</span></div>
       </div>
       <nav aria-label="主导航">
-        <a class="nav-item" href="/profile" data-view="profile" aria-label="个人资料" title="个人 Wiki 与简历库"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5zM8 8h8M8 12h8M8 16h5"/></svg></span> 个人资料</a>
         <a class="nav-item active" href="/tasks" data-view="tasks" aria-label="任务中心" title="任务中心"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg></span> 任务中心</a>
         <a class="nav-item" href="/insights" data-view="insights" aria-label="岗位洞察" title="岗位洞察"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4v16h16M8 15l4-5 4 2 4-7"/></svg></span> 岗位洞察</a>
         <a class="nav-item" href="/browser" data-view="browser" aria-label="求职浏览器" title="求职浏览器"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg></span> 求职浏览器</a>
@@ -50,8 +48,9 @@
           <div class="task-panel card">
             <div class="panel-head">
               <div><h2>任务列表</h2></div>
-              <button class="icon-button" id="refreshBtn" title="刷新">↻</button>
+              <button class="icon-button" id="refreshBtn" title="刷新" aria-label="刷新采集任务">↻</button>
             </div>
+            <div class="task-load-notice" id="taskLoadNotice" role="status" aria-live="polite" hidden><span id="taskLoadMessage"></span><button type="button" class="ghost" id="taskLoadRetry" hidden>重试</button></div>
             <div class="task-list" id="taskList"></div>
           </div>
 
@@ -92,7 +91,6 @@
           <form id="assistantSessionForm"><div class="assistant-session-dialog-head"><h3 id="assistantSessionDialogTitle">管理会话</h3><button type="button" class="ghost" id="assistantSessionDialogClose" aria-label="关闭会话管理">×</button></div><label>会话名称<input name="title" maxlength="80" required autocomplete="off" /></label><p>删除后会从列表移除，可在提示栏撤销。不会影响岗位知识库。</p><p id="assistantSessionDialogNotice" role="status"></p><div class="assistant-session-dialog-actions"><button type="button" class="assistant-delete-session" id="assistantSessionDelete">删除会话</button><button type="submit" class="primary" id="assistantSessionRename">保存名称</button></div></form>
         </dialog>
       </div>
-      <div id="profileView" class="app-view hidden"></div>
       <div id="browserView" class="app-view hidden"><section id="jobBrowserWorkspace" aria-label="求职浏览器工作区"></section></div>
       <div id="insightsView" class="app-view hidden">
         <section class="card insight-workflow" id="insightWorkflow" aria-label="岗位分析工作区">
@@ -162,7 +160,6 @@
         <label class="check-card"><input type="checkbox" name="platforms" value="zhaopin" checked /><span><b>智联招聘</b></span></label>
         <label class="check-card"><input type="checkbox" name="platforms" value="jobonline" /><span><b>就业在线</b></span></label>
         <label class="check-card"><input type="checkbox" name="platforms" value="job51" /><span><b>前程无忧</b></span></label>
-        <label class="check-card"><input type="checkbox" name="platforms" value="liepin" /><span><b>猎聘</b></span></label>
       </div>
 
       <div class="section-title"><span>牛客面经 · 默认采集</span></div>
@@ -232,6 +229,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/vendor/d3.min.js"></script>
-  <script type="module" src="/app.js?v=20261029-job51-liepin-manual"></script>
+  <script type="module" src="/app.js?v=20261104-task-list-recovery"></script>
 </body>
 </html>

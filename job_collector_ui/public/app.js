@@ -2,22 +2,21 @@ import {cohortConditionValue} from './insight-cohorts.js';
 import { patchHtml, updateLog } from './dom-updates.js';
 import {renderInsightWorkspace} from './insight-dashboard.js?v=20261024-concrete-skills';
 import {installWordCloudInteractions} from './insight-wordcloud.js';
-import {loadJobAssistant} from './job-assistant.js?v=20261029-inline-edit';
+import {loadJobAssistant} from './job-assistant.js?v=20261104-intent-api';
 import {installSkillTermReview} from './skill-term-review.js';
 installWordCloudInteractions();
 import {mergeLiveProgress, collectionProgress,collectionStatusLabel,collectionTaskSummary} from './collection-progress.js?v=20261026-statistics';
-import {renderCollectionDashboard} from './collection-dashboard.js?v=20261029-job51-liepin-manual';
+import {renderCollectionDashboard} from './collection-dashboard.js?v=20261104-remove-profile-liepin';
 import {formatCollectionFlowLog} from './collection-flow-log.js?v=20261026-statistics';
 import {renderInterviewPanel,installInterviewTools} from './interview-tools.js?v=20261026-statistics';
 import { fetchJsonWithTimeout } from './http-client.js';
 import {installInsightClassifier} from './insight-classifier.js?v=20261029-simple-workflow';
-import {installInsightTrainingQueue} from './insight-training-queue.js?v=20261029-simple-workflow';
+import {installInsightTrainingQueue} from './insight-training-queue.js?v=20261104-training-progress';
 import {installInsightDiscovery} from './insight-discovery.js?v=20261029-simple-workflow';
 import {insightReportContext} from './insight-classifier-state.js?v=20261027-stratified';
 import {installSemanticCloud} from './insight-semantic.js?v=20261029-semantic-preview';
 import {installJobBrowserWorkspace} from './browser-workspace.js?v=20261019-interaction-fix-9';
-import {installPersonalWiki} from './personal-wiki.js?v=20261022-single-organizer';
-const state = { tasks: [], selectedId: null, insight: null, insightRenderKey: null, insightFormInitialized: false, view: 'tasks', timer: null, logTimer: null };
+const state = { tasks: [], tasksLoaded:false,tasksError:'',selectedId: null, insight: null, insightRenderKey: null, insightFormInitialized: false, view: 'tasks', timer: null, logTimer: null };
 const normalizedLocalPath = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
 const $ = (selector) => document.querySelector(selector);
 const number = (value) => new Intl.NumberFormat('zh-CN').format(Number(value || 0));
@@ -91,6 +90,21 @@ function renderList() {
   });
 }
 
+function renderTaskLoadState(){
+  const notice=$('#taskLoadNotice'),message=$('#taskLoadMessage'),retry=$('#taskLoadRetry'),refreshButton=$('#refreshBtn');
+  notice.hidden=!state.tasksError&&(!state.tasksLoading||state.tasksLoaded);
+  notice.dataset.state=state.tasksError?'error':'loading';
+  notice.setAttribute('role',state.tasksError?'alert':'status');
+  message.textContent=state.tasksError?(state.tasksLoaded?'刷新失败，仍显示上次读取的任务。':'采集任务读取失败。')+state.tasksError:state.tasksLoading?'正在读取采集任务…':'';
+  retry.hidden=!state.tasksError;retry.disabled=!!state.tasksLoading;
+  refreshButton.disabled=!!state.tasksLoading;refreshButton.setAttribute('aria-busy',String(!!state.tasksLoading));
+  $('#taskList').setAttribute('aria-busy',String(!!state.tasksLoading));
+  if(!state.tasksLoaded){
+    patchHtml($('#taskList'),`<div class="empty-list">${state.tasksError?'暂未读取到任务，请点击重试':'正在读取任务列表…'}</div>`);
+    if(state.view==='tasks')patchHtml($('#detail'),`<div class="empty-state"><h2>${state.tasksError?'任务列表暂不可用':'正在加载采集任务'}</h2><p>${state.tasksError?'请点击左侧重试；本次未能读取列表，不代表任务或数据已删除。':'任务读取完成后，将显示采集进度与渠道状态。'}</p></div>`);
+  }
+}
+
 function renderDetail() {
   const task = state.tasks.find((item) => item.id === state.selectedId);
   if (!task) {
@@ -101,7 +115,7 @@ function renderDetail() {
   if ($('#detail').dataset.taskId !== task.id) { $('#detail').replaceChildren(); $('#detail').dataset.taskId = task.id; }
   const isRunning = ['running', 'stopping'].includes(task.status);
   const taskMessage = collectionTaskSummary(task);
-  const chips = [...task.platforms.map((key) => platformLabel[key]), ...task.cities.slice(0, 5), task.pace === 'safe' ? '稳健节奏' : task.pace === 'fast' ? '较快节奏' : '均衡节奏'];
+  const chips = [...task.platforms.filter(key=>key!=='liepin').map((key) => platformLabel[key]), ...task.cities.slice(0, 5), task.pace === 'safe' ? '稳健节奏' : task.pace === 'fast' ? '较快节奏' : '均衡节奏'];
   patchHtml($('#detail'), `
     <div class="detail-head">
       <div class="detail-title"><div><h2>${escapeHtml(task.label)}</h2><p>${escapeHtml(taskMessage)}</p></div><span class="badge ${task.status}">${escapeHtml(collectionStatusLabel(task))}</span></div>
@@ -117,7 +131,7 @@ function renderDetail() {
     <div class="detail-body">
       ${task.browserSession?`<p>登录状态：${escapeHtml(authLabels[task.browserSession.login_status]||'未确认')} · 验证状态：${escapeHtml(verificationLabels[task.browserSession.verification_status]||'未检查')}</p>`:''}
       ${task.hybridCollection?.results?.length?`<p role="status">本轮取数方式：${task.hybridCollection.results.map(row=>escapeHtml((platformLabel[row.platform]||row.platform)+'：'+(row.transport==='browser_dom'?'页面 RPA':row.transport==='http'?'HTTP':'暂停')+(row.reason?' · '+row.reason:''))).join('；')}</p>`:''}
-      ${task.pausedPlatforms?.length?'<p role="status">暂停渠道（数据与断点保留）：'+task.pausedPlatforms.map(item=>escapeHtml((platformLabel[item.key]||item.key)+'：'+item.reason)).join('；')+'</p>':''}
+      ${task.pausedPlatforms?.filter(item=>item.key!=='liepin').length?'<p role="status">暂停渠道（数据与断点保留）：'+task.pausedPlatforms.filter(item=>item.key!=='liepin').map(item=>escapeHtml((platformLabel[item.key]||item.key)+'：'+item.reason)).join('；')+'</p>':''}
       ${renderCollectionDashboard(task,{number,escapeHtml})}
       ${renderInterviewPanel(task,{number,escapeHtml})}
       ${task.latestExport?`<p class="latest-export-status">最新导出：${escapeHtml(task.latestExport.status==='running'?'正在处理':task.latestExport.status==='failed'?'失败':task.latestExport.status==='partial'?'CSV已更新，Excel未更新':'CSV／Excel已更新')} ${task.latestExport.rows?number(task.latestExport.rows)+' 条':''} ${escapeHtml(task.latestExport.updatedAt?new Date(task.latestExport.updatedAt).toLocaleString('zh-CN'):'')} ${escapeHtml(task.latestExport.warning||task.latestExport.error||'')}</p>`:''}
@@ -149,7 +163,7 @@ function syncRoute(replace = false) {
 
 function restoreRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
-  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'insights','browser','profile'].includes(parts[0]) ? parts[0] : 'tasks';
+  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'insights','browser'].includes(parts[0]) ? parts[0] : 'tasks';
   const id = parts[1] ? decodeURIComponent(parts[1]) : null;
   if (view === 'tasks') state.selectedId = id;
   switchView(view, { history: false });
@@ -166,9 +180,9 @@ function switchView(view, options = {}) {
     if (link.dataset.view === view) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   });
-  const titles = { tasks: '采集任务', insights: '岗位洞察', assistant: '求职助手',browser:'求职浏览器',profile:'个人 Wiki 与简历库' };
+  const titles = { tasks: '采集任务', insights: '岗位洞察', assistant: '求职助手',browser:'求职浏览器' };
   $('#pageTitle').textContent = titles[view];
-  $('#newTaskBtn').classList.toggle('hidden', ['insights', 'assistant','browser','profile'].includes(view));
+  $('#newTaskBtn').classList.toggle('hidden', ['insights', 'assistant','browser'].includes(view));
   $('#newTaskBtn').innerHTML = '<span>＋</span> 新建采集任务';
   if (options.history !== false) syncRoute();
   if (view === 'tasks') refresh(false);
@@ -377,11 +391,19 @@ async function loadInsight(silent = true) {
 async function refresh(silent = true) {
   if (state.tasksLoading) return;
   state.tasksLoading = true;
+  state.tasksError='';renderTaskLoadState();
   try {
     const data = await api('/api/tasks');
+    if(!Array.isArray(data.tasks))throw Error('后台返回的任务列表格式无效，请重试');
     state.tasks = data.tasks;
+    state.tasksLoaded=true;
+    if(state.view==='tasks'){
+      if(!state.selectedId&&state.tasks.length)state.selectedId=state.tasks[0].id;
+      syncRoute(true);render();
+      if(state.selectedId&&!$('#taskLog')?._logLoaded)loadLog();
+    }
     try {
-      const unified=await api(`/unified-progress.json?t=${Date.now()}`);
+      const unified=await api(`/unified-progress.json?t=${Date.now()}`,{timeoutMs:1500});
       if(Date.now()-Date.parse(unified.updatedAt)<45000)state.tasks=state.tasks.map(task=>{
         const report=unified.tasks?.[task.id];
         return report?.task_id===task.id?{...task,metrics:{...task.metrics,unifiedDataset:report}}:task;
@@ -391,7 +413,7 @@ async function refresh(silent = true) {
     // Native server metrics take precedence after a normal service restart.
     if (state.tasks.some(task=>!task.metrics.liveCollection)) {
       try {
-        const snapshot = await api(`/live-progress.json?t=${Date.now()}`);
+        const snapshot = await api(`/live-progress.json?t=${Date.now()}`,{timeoutMs:1500});
         state.tasks = mergeLiveProgress(state.tasks,snapshot);
       } catch {}
     }
@@ -400,8 +422,8 @@ async function refresh(silent = true) {
     syncRoute(true);
     render();
     if (state.selectedId && !$('#taskLog')?._logLoaded) loadLog();
-  } catch (error) { if (!silent) toast(error.message, true); }
-  finally { state.tasksLoading = false; }
+  } catch (error) { state.tasksError=error.message;if (!silent) toast(error.message, true); }
+  finally { state.tasksLoading = false;renderTaskLoadState(); }
 }
 
 async function loadLog() {
@@ -420,14 +442,14 @@ async function loadLog() {
 const pendingVerifications=new Set();
 async function handleAction(task, action) {
   try {
-    const verificationAction=action.match(/^verify-(open|finish|close|recheck|session)-(job51|liepin)$/);
+    const verificationAction=action.match(/^verify-(open|finish|close|session)-(job51|liepin)$/);
     if(verificationAction){
       const [,operation,platform]=verificationAction,key=task.id+':'+platform;
       if(pendingVerifications.has(key))return;
       pendingVerifications.add(key);
       const controls=[...document.querySelectorAll('button.channel-verify-control,button.channel-verify-trigger')].filter(button=>button.dataset.action?.endsWith('-'+platform));
       const labels=controls.map(button=>button.textContent);
-      controls.forEach(button=>{button.disabled=true;button.setAttribute('aria-busy','true');if(button.dataset.action===action)button.textContent=operation==='recheck'?'复检中…':'处理中…';});
+      controls.forEach(button=>{button.disabled=true;button.setAttribute('aria-busy','true');if(button.dataset.action===action)button.textContent='处理中…';});
       try{
         const opening=operation==='open'||operation==='session';
         // Always use the collector's own session browser. The old ordinary
@@ -452,12 +474,12 @@ async function handleAction(task, action) {
       const labels=controls.map(button=>button.textContent);
       controls.forEach(button=>{button.disabled=true;button.setAttribute('aria-busy','true');if(button.dataset.action===action)button.textContent='打开中…';});
       try{
-        const data=await api(`/api/tasks/${encodeURIComponent(task.id)}/channels/${platform}/manual-browser/open`,{method:'POST',body:'{}',timeoutMs:60000});
-        toast(data.message||'普通浏览器已打开');
+        await api(`/api/tasks/${encodeURIComponent(task.id)}/channels/${platform}/manual-browser/open`,{method:'POST',body:'{}',timeoutMs:60000});
+        toast('普通浏览器已打开；完成登录/验证并关闭窗口后，点击“已处理”');
       }finally{pendingVerifications.delete(key);controls.forEach((button,i)=>{if(button.isConnected){button.disabled=false;button.removeAttribute('aria-busy');button.textContent=labels[i];}});}
       return;
     }
-    const sessionAction=action.match(/^session-(open|login|verified|process|close|resume)-(job51|liepin|zhaopin)$/);
+    const sessionAction=action.match(/^session-(open|login|verified|process|close|resume)-(job51|liepin|zhaopin|jobonline)$/);
     if(sessionAction){
       const [,operation,platform]=sessionAction,key=task.id+':'+platform;
       if(pendingVerifications.has(key))return;
@@ -521,6 +543,7 @@ document.querySelectorAll('[data-close]').forEach((button) => button.addEventLis
 $('#showGuide').addEventListener('click', () => $('#guideDialog').showModal());
 document.querySelectorAll('[data-close-guide]').forEach((button) => button.addEventListener('click', () => $('#guideDialog').close()));
 $('#refreshBtn').addEventListener('click', () => refresh(false));
+$('#taskLoadRetry').addEventListener('click',()=>refresh(false));
 installInterviewTools({api,toast,refresh,getTask:()=>state.tasks.find(task=>task.id===state.selectedId),escapeHtml,number});
 // Mark edits immediately, before any delayed initial report can restore fields.
 for (const eventName of ['input', 'change']) $('#insightForm').addEventListener(eventName, () => {
@@ -547,7 +570,6 @@ $('#taskForm').addEventListener('submit', async (event) => {
   try {
     if (body.platforms.includes('boss') && !(await api('/api/state')).capabilities?.bossCollection) throw new Error('BOSS接入需要更新服务，请在当前采集停止后重启控制台');
     if(body.transportMode==='http_preferred_browser_fallback'&&!(await api('/api/state')).capabilities?.hybridCollection)throw new Error('请先更新并重启采集服务，当前服务不支持浏览器回退');
-    if (body.platforms.includes('liepin') && body.transportMode!=='http_preferred_browser_fallback' && !(await api('/api/state')).capabilities?.liepinCollection) throw new Error('猎聘独立 HTTP 尚未验证，请改用浏览器页面试验模式');
     const data = await api('/api/tasks', { method: 'POST', body: JSON.stringify(body) });
     state.selectedId = data.task.id;
     $('#taskDialog').close();
@@ -585,12 +607,11 @@ installInsightClassifier({api,toast});
 installInsightTrainingQueue({api,toast});
 installInsightDiscovery({api,toast});
 installJobBrowserWorkspace({api,toast});
-installPersonalWiki({api,toast});
 installSemanticCloud({api,toast});
 restoreRoute();
 state.timer = setInterval(() => {
   if (document.hidden) return;
-  if (state.view === 'tasks') refresh(true);
+  if (state.view === 'tasks'&&!state.tasksError) refresh(true);
   if (state.view === 'insights') loadInsight(true);
 }, 3000);
 state.logTimer = setInterval(() => {

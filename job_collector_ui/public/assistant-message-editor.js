@@ -1,7 +1,7 @@
 export function createMessageEditor(item,{text,hasAttachment=false,onSend,onCancel}={}){
   const doc=item.ownerDocument,form=doc.createElement('form');form.className='assistant-message-editor';form.setAttribute('aria-label','编辑提问');
   const input=doc.createElement('textarea');input.value=text;input.rows=2;input.maxLength=40000;input.setAttribute('aria-label','修改提问内容');
-  const note=doc.createElement('p');note.className='assistant-message-edit-hint';note.textContent=hasAttachment?'原简历附件不会重复上传；发送后保留原记录。':'发送为新提问，原记录保留。';
+  const note=doc.createElement('p');note.className='assistant-message-edit-hint';note.textContent=hasAttachment?'修改后从此处重新回答；原附件不会重复上传。':'修改后从此处重新回答。';
   const error=doc.createElement('p');error.className='assistant-message-edit-error';error.setAttribute('role','status');error.hidden=true;
   const actions=doc.createElement('div');actions.className='assistant-message-edit-actions';
   const cancel=doc.createElement('button');cancel.type='button';cancel.className='secondary';cancel.textContent='取消';

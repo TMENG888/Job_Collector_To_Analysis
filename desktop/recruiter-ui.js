@@ -15,9 +15,6 @@
     const gate=eligibility(),busy=gate.busy,hasResume=!!current?.resume.configured;
     $('resumeUpload').disabled=busy;$('resumeClear').disabled=!hasResume||working;
     $('resumePreview').disabled=!hasResume||busy;
-    $('resumeSelect').disabled=busy||!$('resumeLibrary').value;
-    $('resumeLibrary').disabled=busy;
-    $('libraryMode').disabled=busy;$('autoTailor').disabled=busy||!$('libraryMode').checked;
     $('recruiterPlan').disabled=!available||busy||!hasResume||!current?.model.configured||!$('shareConsent').checked;
     $('recruiterDryRun').disabled=gate.previewReasons.length>0;
     $('recruiterSend').disabled=gate.sendReasons.length>0;
@@ -42,9 +39,7 @@
       if(old?.resume.revision!==next.resume.revision){preview=null;$('resumePages').replaceChildren();$('resumePages').hidden=true;$('resumeAck').hidden=true;$('deliveryConsent').checked=false;}
       const r=next.resume,m=next.model,f=next.finder,u=m.usage;
       $('resumeInfo').textContent=r.configured?`${r.filename} · ${r.pages}页 · ${r.previewed?'已核对':'待核对'}`:'未上传简历';
-      $('resumeInfo').title='活动简历闲置30分钟从内存清除；加密简历库持久保存';
-      const versions=JSON.stringify(next.library?.resumes.map(x=>[x.id,x.status,x.sendable,x.approval?.at]));
-      if($('resumeLibrary').dataset.versions!==versions){const select=$('resumeLibrary'),prior=select.value;select.replaceChildren();for(const item of next.library?.resumes||[]){const option=document.createElement('option');option.value=item.id;option.textContent=(item.sendable?'已批准 · ':'待审核 · ')+item.filename;select.append(option);}if(!select.options.length){const o=document.createElement('option');o.value='';o.textContent='简历库暂无版本';select.append(o);}select.value=[...select.options].some(o=>o.value===prior)?prior:r.libraryId||select.options[0].value;select.dataset.versions=versions;}
+      $('resumeInfo').title='简历仅用于当前会话，闲置30分钟后从内存清除';
       $('recruiterModel').textContent=m.configured?`DeepSeek · ${m.model} ＋ 语义相似度与其他岗位参照`:'请在求职助手中配置DeepSeek';
       if(old?.finder.plan?.id!==f.plan?.id){
         $('deliveryConsent').checked=false;$('recruiterQueries').replaceChildren();
@@ -59,8 +54,6 @@
   }
   $('resumeUpload').onclick=action(async()=>{const r=await call('upload');if(!r.cancelled)$('recruiterStatus').textContent='简历已上传';});
   $('resumeClear').onclick=action(()=>call('clear'));
-  $('resumeSelect').onclick=action(()=>call('select',{id:$('resumeLibrary').value}));
-  $('resumeLibraryOpen').onclick=()=>api.command('workspace',{route:'profile'}).catch(error);
   $('resumePreview').onclick=action(async()=>{
     preview=await call('preview');$('resumePages').replaceChildren();$('resumePages').hidden=false;
     for(const page of preview.pages){const label=document.createElement('label');label.className='pdf-page';const img=document.createElement('img'),checkbox=document.createElement('input');checkbox.disabled=true;img.onload=()=>{checkbox.disabled=false;update();};img.onerror=()=>{checkbox.disabled=true;uiError='简历图片未加载，请重新预览';update();};img.src=`data:${page.mime};base64,${page.base64}`;img.alt=`原版式简历第${page.page}页`;checkbox.type='checkbox';checkbox.dataset.hash=page.sha256;checkbox.onchange=update;const text=document.createElement('span');text.textContent=`第${page.page}页已核对`;label.append(img,checkbox,text);$('resumePages').append(label);}
@@ -68,7 +61,7 @@
   });
   $('resumeAck').onclick=action(async()=>{if(!preview)return;const checks=[...$('resumePages').querySelectorAll('input')];if(checks.some(c=>!c.checked))throw Error('请逐页核对并勾选');await call('ack',{ticket:preview.ticket,revision:preview.revision,pages:checks.map(c=>c.dataset.hash)});$('resumePages').hidden=true;$('resumePages').replaceChildren();$('resumeAck').hidden=true;preview=null;});
   $('recruiterPlan').onclick=action(async()=>{await call('plan',{shareConfirmed:$('shareConsent').checked,budget:Number($('recruiterBudget').value)});$('recruiterStatus').textContent='检索词已生成';});
-  function body(send){const p=current.finder.plan,r=current.resume;return {planId:p.id,libraryMode:$('libraryMode').checked,autoTailor:$('autoTailor').checked,wikiShareConfirmed:$('shareConsent').checked,city:$('recruiterCity').value.trim(),maxCandidates:Number($('recruiterCount').value),minCoverage:Number($('recruiterCoverage').value)/100,budget:Number($('recruiterBudget').value),delivery:send?{enabled:true,confirmed:$('deliveryConsent').checked,planId:p.id,resumeRevision:r.revision,documentHash:r.documentHash,maxRecipients:Number($('recruiterRecipients').value),intervalSeconds:Number($('recruiterInterval').value)}:{enabled:false}};}
+  function body(send){const p=current.finder.plan,r=current.resume;return {planId:p.id,city:$('recruiterCity').value.trim(),maxCandidates:Number($('recruiterCount').value),minCoverage:Number($('recruiterCoverage').value)/100,budget:Number($('recruiterBudget').value),delivery:send?{enabled:true,confirmed:$('deliveryConsent').checked,planId:p.id,resumeRevision:r.revision,documentHash:r.documentHash,maxRecipients:Number($('recruiterRecipients').value),intervalSeconds:Number($('recruiterInterval').value)}:{enabled:false}};}
   function start(send){
     const gate=eligibility(),reasons=send?gate.sendReasons:gate.previewReasons;
     if(reasons.length){error(Error(reasons.join('；')));update();return;}
@@ -78,7 +71,7 @@
   $('recruiterSend').onclick=()=>start(true);
   // Stop is not blocked by an outstanding plan request or page preview.
   $('recruiterStop').onclick=async()=>{const previewOnly=!current?.finder.run?.delivery;try{await call('cancel');$('recruiterStatus').textContent=previewOnly?'已请求停止预览；停止后需重新点击授权，不会自动发送':'已请求停止，请核对最后一条发送记录';}catch(e){error(e);}await refresh();};
-  for(const id of ['shareConsent','deliveryConsent','libraryMode','autoTailor','resumeLibrary'])$(id).onchange=()=>{$('deliveryConsent').checked=false;update();};
+  $('shareConsent').onchange=()=>{$('deliveryConsent').checked=false;update();};
   $('deliveryConsent').onchange=update;
   for(const id of ['recruiterCount','recruiterCoverage','recruiterBudget','recruiterRecipients','recruiterInterval'])$(id).oninput=update;
   update();

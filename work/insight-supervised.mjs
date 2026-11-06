@@ -15,6 +15,7 @@ import {jointAnnotationPrompt,validateJointSemantics,summarizeJointSemantics} fr
 import {createAnnotationSchemas,compileAnnotationSchema,normalizeSchemaSemantics,schemaHash} from './insight-annotation-schema.mjs';
 import {sampleInsightCandidates,assessTrainingLabels,trainingKeywords} from './insight-sampling.mjs';
 import {readLibraryTrainingPool} from './insight-training-retrieval.mjs';
+import {classifierStorageDirectory,classifierRetirements,isClassifierRetired,retireClassifier} from './classifier-retirement.mjs';
 
 export const QWEN_ENDPOINT='https://llm-w9jb83fq7jia0ok4.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions';
 export const QWEN_MODEL='qwen3.7-flash';
@@ -24,9 +25,7 @@ const stamp=()=>new Date().toISOString();
 const read=async(file,fallback)=>{try{return JSON.parse(await fs.readFile(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 async function save(file,data){await fs.mkdir(path.dirname(file),{recursive:true});const temp=file+'.'+randomUUID()+'.tmp';await fs.writeFile(temp,JSON.stringify(data),{mode:0o600});await renameWithSharingRetry(temp,file);}
 export function classifierRoot(dataDir){
-  if(process.env.JOB_INSIGHT_CLASSIFIER_DIR)return process.env.JOB_INSIGHT_CLASSIFIER_DIR;
-  const canonical=value=>{const resolved=path.resolve(value);return process.platform==='win32'?resolved.toLowerCase():resolved;};
-  return canonical(dataDir)===canonical(path.join(root,'ui_data'))?'E:/Codex/work/20261018-insight-qwen-classifier/runtime':path.join(dataDir,'insight_classification');
+  return classifierStorageDirectory(dataDir);
 }
 export function classifierCredentials(dataDir,{protect=windowsProtect}={}){
   const filename=path.join(classifierRoot(dataDir),'private','credentials.json');
@@ -128,12 +127,13 @@ export function createInsightSupervisedHandler(service,resolveScope){
     }catch(error){json(400,{error:String(error.message).replace(/sk-[\w.\-]+/g,'[密钥隐藏]').slice(0,1900)});}return true;
   };
 }
-export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=classifierCredentials(dataDir),readRows=uri=>readClassifierRows(dataDir,uri),readTrainingPool=options=>readLibraryTrainingPool(dataDir,options),directory=classifierRoot(dataDir),trainRunner,beforeStart=async()=>{},publishJoint,schemas=createAnnotationSchemas(dataDir,{directory:path.join(directory,'schemas')}),experiment=false,sampleRows=sampleClassifierRows}={}){
+export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=classifierCredentials(dataDir),readRows=uri=>readClassifierRows(dataDir,uri),readTrainingPool=options=>readLibraryTrainingPool(dataDir,options),directory=classifierRoot(dataDir),trainRunner,beforeStart=async()=>{},beforeDelete=async()=>{},publishJoint,schemas=createAnnotationSchemas(dataDir,{directory:path.join(directory,'schemas')}),experiment=false,sampleRows=sampleClassifierRows}={}){
   let active=null,catalogCache=null;
   const filename=id=>{if(!/^[a-f0-9-]{36}$/.test(String(id)))throw Error('无效训练任务ID');return path.join(directory,id,'state.json');};
   const indexFile=path.join(directory,'index.json'),activeFile=path.join(directory,'active.json');
   const lockFile=path.join(directory,'run.lock');
   const semanticSummaries=new Map();
+  const retired=run=>run&&isClassifierRetired(run.role,run.createdAt||'1970-01-01',directory);
   async function selectTrainingRows(inputFile,role,count,frozen,{trainingScope='dataset',keywords='',signal}={}){
     let source=inputFile==='kb://all'&&trainingScope==='all'?null:await readRows(inputFile);
     if(trainingScope==='all'){
@@ -162,7 +162,7 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
     return {...run,semanticSummary,evaluation:evaluation?{...summary,human_metrics:human?.n?human:null}:null};
   }
   async function modelSpec(id,inputFile,{trial=false,role=''}={}){
-    const run=await read(filename(id),null);if(!run||run.inputFile!==inputFile||run.status!=='completed'||role&&run.role!==role||!trial&&!run.eligible)throw Error('该模型未完成、未通过隔离代理评测，或不属于当前数据集与岗位');
+    const run=await read(filename(id),null);if(retired(run))throw Error('该分类器已删除，请重新训练');if(!run||run.inputFile!==inputFile||run.status!=='completed'||role&&run.role!==role||!trial&&!run.eligible)throw Error('该模型未完成、未通过隔离代理评测，或不属于当前数据集与岗位');
     const evaluation=await read(path.join(directory,id,'evaluation.json'),null);if(!evaluation||typeof evaluation.eligible!=='boolean'||!trial&&!evaluation.eligible||run.eligible!==evaluation.eligible)throw Error('评测记录不可用或与训练状态不一致');
     const modelPath=path.join(directory,id,'model.json'),bytes=await fs.readFile(modelPath),model=JSON.parse(bytes);
     const spec={id,role:run.role,family:run.role,inputFile,file:modelPath,sha256:hash(bytes),version:model.version,threshold:model.threshold,inputPreprocessing:'redact-v1 + '+(model.input_preprocessing||'duties-v1'),annotationSchema:run.annotationSchema||null,activatedAt:stamp(),metricsBasis:'Qwen留出标签一致性，非人工金标准'};
@@ -170,7 +170,7 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
   }
   async function chooseModel(inputFile,role){
     const enabled=await read(activeFile,{}),existing=enabled[inputFile];
-    if(existing&&(!role||existing.role===role)){
+    if(existing&&(!role||existing.role===role)&&!retired(await read(filename(existing.id),null))){
       const validated=await modelSpec(existing.id,inputFile);
       if(validated.sha256!==existing.sha256)throw Error('已启用分类器文件校验失败，已停止；不会回退到规则');
       return existing;
@@ -178,13 +178,13 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
     const index=await read(indexFile,[]);
     for(const entry of index.filter(r=>r.inputFile===inputFile)){
       const run=await read(filename(entry.id),null);
-      if(run?.status==='completed'&&run.eligible&&(!role||run.role===role))return modelSpec(run.id,inputFile);
+      if(run?.status==='completed'&&run.eligible&&!retired(run)&&(!role||run.role===role))return modelSpec(run.id,inputFile);
     }
     // A qualified role model can filter other datasets. Its original training
     // scope remains in the model spec; never bind it to a different owner.
     if(role)for(const entry of index.filter(r=>r.inputFile!==inputFile)){
       const run=await read(filename(entry.id),null);
-      if(run?.role===role&&run.status==='completed'&&run.eligible)return modelSpec(run.id,run.inputFile,{role});
+      if(run?.role===role&&run.status==='completed'&&run.eligible&&!retired(run))return modelSpec(run.id,run.inputFile,{role});
     }
     return null;
   }
@@ -208,12 +208,12 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
   }
   async function status(inputFile='',role=''){
     const index=await read(indexFile,[]);let run=null;
-    for(const entry of index.filter(r=>!inputFile||r.inputFile===inputFile)){const candidate=await read(filename(entry.id),null);if(candidate&&(!role||candidate.role===role)){run=candidate;break;}}
+    for(const entry of index.filter(r=>!inputFile||r.inputFile===inputFile)){const candidate=await read(filename(entry.id),null);if(candidate&&!retired(candidate)&&(!role||candidate.role===role)){run=candidate;break;}}
     const lock=await read(lockFile,null),externalBusy=!!(lock&&alive(lock.pid));
     if(run&&['preparing','labeling','training'].includes(run.status)&&active?.id!==run.id&&!(externalBusy&&lock.id===run.id))run={...run,status:'interrupted',unknownUsageRequests:run.unknownUsageRequests+(run.inFlight?1:0),message:'服务已重启；本轮未自动续费，已完成标注保留，可重新发起'};
     let selected=null,selectionError='';
     try{selected=inputFile?await chooseModel(inputFile,role):null;}catch(e){selectionError=e.message;}
-    const released=!selected&&!selectionError&&role?roleClassifier(role):null;
+    const released=!selected&&!selectionError&&role&&!isClassifierRetired(role,null,directory)?roleClassifier(role):null;
     let trial=null,trialError='';
     if(!selected&&!released&&!selectionError&&run?.status==='completed'&&run.eligible===false){
       try{trial=await modelSpec(run.id,inputFile,{trial:true,role});}catch(e){trialError='候选试分析不可用：'+e.message;}
@@ -319,19 +319,42 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
   }
   return {
     directory,credentials,status,schemas,
+    isRetired:(role,createdAt)=>isClassifierRetired(role,createdAt,directory),
+    async removeRole(role,{confirmed}={}){
+      if(confirmed!==true)throw Error('请确认删除该岗位分类器');
+      if(experiment)throw Error('隔离实验不能删除生产分类器');
+      if((await status('')).busy)throw Error('标注、训练或规范任务运行中，请结束后删除');
+      await beforeDelete(role);
+      await fs.mkdir(directory,{recursive:true});
+      const lockId=randomUUID();
+      const handle=await fs.open(lockFile,'wx').catch(error=>{if(error.code==='EEXIST')throw Error('分类器正在使用中，请稍后删除');throw error;});
+      try{
+        await handle.writeFile(JSON.stringify({id:lockId,pid:process.pid}));await beforeDelete(role);
+        const record=await retireClassifier(role,directory);
+        catalogCache=null;
+        return {role,deleted:true,deletedAt:record.deletedAt,message:'分类器已从可用目录移除；原始岗位、标注及模型文件归档保留。重新训练可创建新分类器。'};
+      }finally{await handle.close();const lock=await read(lockFile,null);if(lock?.id===lockId)await fs.unlink(lockFile);}
+    },
     async run(id){const run=await result(await read(filename(id),null));return run?{...run,settling:active?.id===id}:null;},
     async catalog(){
       if(catalogCache&&Date.now()-catalogCache.at<5000)return structuredClone(catalogCache.value);
-      const models=new Map(supervisedRoleFamilies().map(role=>{const metadata=roleClassifier(role).metadata;return [role,{role,status:'ready',source:'bundled',version:metadata.version}];}));
+      const models=new Map(supervisedRoleFamilies().filter(role=>!isClassifierRetired(role,null,directory)).map(role=>{const metadata=roleClassifier(role).metadata;return [role,{role,status:'ready',source:'bundled',version:metadata.version}];}));
       const index=await read(indexFile,[]);
       for(const entry of index){
-        const run=await read(filename(entry.id),null);if(!run?.role)continue;
+        const run=await read(filename(entry.id),null);if(!run?.role||retired(run))continue;
         if(run.status==='completed'&&run.eligible){
           try{const spec=await modelSpec(run.id,run.inputFile,{role:run.role});if(models.get(run.role)?.source!=='trained')models.set(run.role,{role:run.role,status:'ready',source:'trained',version:spec.version,runId:run.id,inputFile:run.inputFile});}
           catch(error){if(!models.has(run.role))models.set(run.role,{role:run.role,status:'invalid',reason:error.message});}
         }else if(!models.has(run.role))models.set(run.role,{role:run.role,status:run.status==='completed'?'rejected':run.status,source:'candidate',inputFile:run.inputFile,runId:run.id});
       }
-      const roles=[...models.values()],value={roles,readyCount:roles.filter(r=>r.status==='ready').length,pendingCount:roles.filter(r=>r.status!=='ready').length};catalogCache={at:Date.now(),value};return structuredClone(value);
+      const roles=[...models.values()],value={roles,readyCount:roles.filter(r=>r.status==='ready').length,pendingCount:roles.filter(r=>r.status!=='ready').length,retiredRoles:classifierRetirements(directory).roles};catalogCache={at:Date.now(),value};return structuredClone(value);
+    },
+    async assistantModels(){
+      const catalog=await this.catalog(),models=[];
+      for(const item of catalog.roles.filter(item=>item.status==='ready'&&item.source==='trained')){
+        models.push(await modelSpec(item.runId,item.inputFile,{role:item.role}));
+      }
+      return models;
     },
     async previewSampling(inputFile,role,sampleCount=400,options={}){
       if(!String(inputFile).startsWith('kb://task/')&&!(inputFile==='kb://all'&&options.trainingScope==='all')||!role||!Number.isInteger(sampleCount)||sampleCount<120||sampleCount>2000)throw Error('请选择明确目标岗位，抽样条数须为120–2000');
@@ -375,6 +398,7 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
       if(experiment)return [];
       const enabled=await read(activeFile,{}),models=[];
       for(const [inputFile,existing] of Object.entries(enabled)){
+        if(retired(await read(filename(existing.id),null)))continue;
         const spec=await modelSpec(existing.id,inputFile);
         if(spec.sha256!==existing.sha256)throw Error('已启用分类器文件校验失败，停止浏览器筛选');
         models.push(spec);

@@ -19,7 +19,6 @@
 /work/*
 !/work/*.mjs
 !/work/*.py
-!/work/personal-wiki-ocr.ps1
 !/work/requirements*.txt
 !/work/COLLECTOR_DEPENDENCIES.md
 !/work/job51/
