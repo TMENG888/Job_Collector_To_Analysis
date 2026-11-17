@@ -132,7 +132,7 @@ def train(input_path, output_dir):
                  tfidf=dict(vocabulary={k:int(v) for k,v in vectorizer.vocabulary_.items()}, idf=vectorizer.idf_.tolist(), ngram_range=[2,4], sublinear_tf=True),
                  head=dict(classes=head.classes_.tolist(), coef=head.coef_[0].tolist(), intercept=float(head.intercept_[0])),
                  input_contract=selected['input_preprocessing']+'; original JD only; AI category labels as supervision; no training-only AI tags; body80–9000; no search-query/company-id/contact features',
-                 provenance=dict(annotation='Qwen3.7-Flash pseudo-labels, not human gold', train_rows=len(sets['train']), validation=validation, test=test,
+                 provenance=dict(annotation=f"{data.get('model', 'Qwen (model unspecified)')} pseudo-labels, not human gold", annotation_model=data.get('model'), train_rows=len(sets['train']), validation=validation, test=test,
                                  counts=counts, annotation_schema=data.get('annotationSchema'), corpus_sha256=hashlib.sha256(Path(input_path).read_bytes()).hexdigest(),
                                  sampling=data.get('sampling'),
                                  selection=selected, scope='dataset and role scoped experimental candidate', grouping='company + exact and cosine>=0.90 near-duplicate body isolation'))

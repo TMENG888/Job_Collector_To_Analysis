@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {classifierCredentials,QWEN_ENDPOINT,QWEN_MODEL,readClassifierRows} from './insight-supervised.mjs';
+import {classifierCredentials,QWEN_ENDPOINT,QWEN_MODEL,QWEN_PRICING,readClassifierRows} from './insight-supervised.mjs';
 import {roleClassifier} from './role-classifier-registry.mjs';
 import {createRoleClassifierMatcher} from './data-analysis-classifier.mjs';
 import {scopedClassifierRow,redactClassifierText as redact} from './insight-classifier-input.mjs';
@@ -10,7 +10,7 @@ import {summarizeJointSemantics} from './insight-joint-annotation.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const read=async(file,fallback)=>{try{return JSON.parse(await fs.readFile(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const now=()=>new Date().toISOString();
-import {semanticRowKey,extractionPrompt,semanticEvidence,validateExtraction,concreteSemanticVersion} from './insight-semantic-contract.mjs';
+import {semanticRowKey,extractionPrompt,semanticEvidence,validateExtraction,concreteSemanticVersion,semanticLabelFields} from './insight-semantic-contract.mjs';
 export {semanticRowKey,semanticPrompt,semanticEvidence,validateSemantic} from './insight-semantic-contract.mjs';
 export async function loadSemanticCloud(spec,{role,inputFile,classifierId}){
   if(!spec)return null;
@@ -52,7 +52,7 @@ export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,cred
     const index=await read(indexFile,{}),previousSpec=index[run.inputFile]?.role===run.role?index[run.inputFile]:null;
     const previous=previousSpec?await loadSemanticCloud(previousSpec,{inputFile:run.inputFile,role:run.role,classifierId:previousSpec.classifierId}):null;
     const merged=mergeSemanticRows(previous?.rows||[],rows);
-    const document={version:'qwen-semantic-cloud-v2',inputFile:run.inputFile,role:run.role,classifierId:run.classifierId,model:QWEN_MODEL,generatedAt:now(),sampled:merged.length,sourceRows:run.sourceRows,scannedRows:run.scannedRows};
+    const document={version:'qwen-semantic-cloud-v2',inputFile:run.inputFile,role:run.role,classifierId:run.classifierId,model:run.model,generatedAt:now(),sampled:merged.length,sourceRows:run.sourceRows,scannedRows:run.scannedRows};
     if(suffix.startsWith('complete-')||suffix.startsWith('joint-'))document.rows=merged;
     else{
       const previousByKey=new Map((previous?.rows||[]).map(row=>[row.key,JSON.stringify(row)])),changed=merged.filter(row=>previousByKey.get(row.key)!==JSON.stringify(row));
@@ -86,7 +86,7 @@ export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,cred
         run.semanticSummary=summaryCache.get(spec.sha256);
       }
     }
-    return {run:!role||run?.role===role?run:null,busy,capabilities:{incrementalConcreteSkills:true,allLibraryScope:true,contractVersion:concreteSemanticVersion}};
+    return {model:QWEN_MODEL,pricing:QWEN_PRICING,run:!role||run?.role===role?run:null,busy,capabilities:{incrementalConcreteSkills:true,allLibraryScope:true,contractVersion:concreteSemanticVersion,semanticFields:semanticLabelFields}};
   }
   async function execute(run,signal,matcher){
     let key='';
@@ -122,15 +122,15 @@ export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,cred
         else{
         const messages=[{role:'system',content:extractionPrompt},{role:'user',content:JSON.stringify({target_role:run.role,classification_source:'supervised-classifier',jobs:batch.map(r=>({id:r.id,title:r.title,evidence_options:r.options}))})}];
         const bytes=Buffer.byteLength(JSON.stringify(messages),'utf8');if(bytes>300000)throw Error('岗位全文超过单请求安全范围，未截断原文或发送模型');
-        const reserve=(bytes+1024)*.2/1e6+6000*.8/1e6;
+        const reserve=((bytes+1024)*run.inputPrice+6000*run.outputPrice)/1e6;
         if(run.costEstimate+reserve>run.budget)throw Error('本轮语义抽取已达费用估算预算；保留断点，不追加付费');
         if(!key)key=await credentials.load();
         await update({requestsStarted:run.requestsStarted+1,inFlight:true});
-        let response;try{response=await fetcher(QWEN_ENDPOINT,{method:'POST',redirect:'error',headers:{authorization:`Bearer ${key}`,'content-type':'application/json'},signal:AbortSignal.any([signal,AbortSignal.timeout(90000)]),body:JSON.stringify({model:QWEN_MODEL,messages,enable_thinking:false,temperature:0,max_tokens:6000,response_format:{type:'json_object'}})});}catch{throw Error('模型请求中断，可能已计费；未自动重试');}
+        let response;try{response=await fetcher(QWEN_ENDPOINT,{method:'POST',redirect:'error',headers:{authorization:`Bearer ${key}`,'content-type':'application/json'},signal:AbortSignal.any([signal,AbortSignal.timeout(90000)]),body:JSON.stringify({model:run.model,messages,enable_thinking:false,temperature:0,max_tokens:6000,response_format:{type:'json_object'}})});}catch{throw Error('模型请求中断，可能已计费；未自动重试');}
         if(!response.ok)throw Error(`语义抽取接口HTTP ${response.status}，已停止，不自动重试`);
         const payload=await response.json(),usage=payload.usage;
         if(!Number.isFinite(usage?.prompt_tokens)||!Number.isFinite(usage?.completion_tokens))throw Error('响应缺少Token用量，已停止');
-        run.promptTokens+=usage.prompt_tokens;run.completionTokens+=usage.completion_tokens;run.costEstimate=(run.promptTokens*.2+run.completionTokens*.8)/1e6;
+        run.promptTokens+=usage.prompt_tokens;run.completionTokens+=usage.completion_tokens;run.costEstimate=(run.promptTokens*run.inputPrice+run.completionTokens*run.outputPrice)/1e6;
         content=payload.choices?.[0]?.message?.content;
         await save(path.join(directory,run.id,'responses',String(offset+1)+'.json'),{content,usage,finishReason:payload.choices?.[0]?.finish_reason});
         await update({requestsCompleted:run.requestsCompleted+1,inFlight:false});
@@ -172,9 +172,10 @@ export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,cred
     if(inputFile!=='kb://all'&&!String(inputFile).startsWith('kb://task/')||!Number.isInteger(sampleCount)||sampleCount<1||sampleCount>1000||!Number.isFinite(budget)||budget<=0||budget>20)throw Error('请选择全岗位知识库或有效岗位范围，单批上限1–1000，预算不超过20元');
     const {role}=await scope(inputFile,requestedRole),model=await supervised.resolve(inputFile,role),matcher=await resolveMatcher(inputFile,role,model);
     if(!matcher)throw Error('请先训练并启用岗位专用监督分类器');
-    return launch({id:randomUUID(),inputFile,role,classifierId:model?.id||matcher.metadata.version,scoped:!!model,contractVersion:concreteSemanticVersion,shareConfirmed:true,status:'preparing',sampleCount,budget,promptTokens:0,completionTokens:0,costEstimate:0,requestsStarted:0,requestsCompleted:0,processed:0,dropped:0,createdAt:now()},matcher);
+    return launch({id:randomUUID(),model:QWEN_MODEL,semanticFields:semanticLabelFields,inputPrice:QWEN_PRICING.input_per_million,outputPrice:QWEN_PRICING.output_per_million,inputFile,role,classifierId:model?.id||matcher.metadata.version,scoped:!!model,contractVersion:concreteSemanticVersion,shareConfirmed:true,status:'preparing',sampleCount,budget,promptTokens:0,completionTokens:0,costEstimate:0,requestsStarted:0,requestsCompleted:0,processed:0,dropped:0,createdAt:now()},matcher);
   },async resume(id){
     const run=await read(runFile(id),null);if(!run||!['failed','cancelled','interrupted','preparing','extracting'].includes(run.status)||run.unknownUsageRequests||run.inFlight)throw Error('该任务不可续跑，或存在用量不明的请求；不会自动重复计费');
+    if(run.model!==QWEN_MODEL||!Number.isFinite(run.inputPrice)||!Number.isFinite(run.outputPrice))throw Error('旧模型任务不混合续跑，请新建增量任务复用已有标签');
     if(run.contractVersion!==concreteSemanticVersion||run.shareConfirmed!==true)throw Error('旧任务不使用新版提取协议；请通过增量提取复用已保存标签');
     const {role}=await scope(run.inputFile,run.role),model=await supervised.resolve(run.inputFile,role),matcher=await resolveMatcher(run.inputFile,role,model);
     if(!matcher||role!==run.role||(model?.id||matcher.metadata.version)!==run.classifierId)throw Error('岗位或分类器已变化，请重新抽样');

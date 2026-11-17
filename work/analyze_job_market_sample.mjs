@@ -4,6 +4,8 @@ import path from 'node:path';
 import { readJobDataset } from './job_dataset.mjs';
 import {normalizeSalary,normalizeEmploymentType,roleFamilies,skillRules} from './job_knowledge_schema.mjs';
 import {knowledgeStore} from './job_knowledge_store.mjs';
+import {insightSnapshotContextKey} from './insight-report-snapshots.mjs';
+import {writeJsonAtomic} from './collector_storage.mjs';
 import { approvedLabelsForWorkbook, consensusLabelsForWorkbook, prelabelsForWorkbook } from './reviewed_job_labels.mjs';
 import { cityName, summarizeCohort, experienceCohorts } from '../job_collector_ui/public/insight-cohorts.js';
 import { literalRoleFamily, selectManualRole } from './insight-role-selection.mjs';
@@ -797,7 +799,7 @@ const supervisedMatcher=scopedClassifier||roleClassifier(targetFamily.name);
 if(!supervisedMatcher)throw new Error(`“${targetFamily.name}”尚无通过验收的专用监督分类器，请先联合标注并训练；不回退规则或语义参照`);
 const supervisedRole=true;
 const experimental=config.insightClassifier?.experimental===true;
-const candidateMetadata=scopedClassifier?{...scopedClassifier.metadata,profile:'qwen-scoped-supervised',scope:targetFamily.name,display_name:`TF-IDF＋逻辑回归（Qwen标签训练 · ${targetFamily.name}）`,keywords:[],display_keywords:[],minimum_hits:null,training_seed_rows:[],rule_seed_candidates:0,training_background_rows:scopedClassifier.metadata.provenance.train_rows,cold_start:false,selection_policy:'通过验收的数据集专属监督模型；Qwen留出标签一致性不是人工准确率；当前待分析数据不参与拟合；不回退规则或语义参照',annotation_type:'Qwen3.7-Flash伪标签',validation:scopedClassifier.metadata.provenance}:null;
+const candidateMetadata=scopedClassifier?{...scopedClassifier.metadata,profile:'qwen-scoped-supervised',scope:targetFamily.name,display_name:`TF-IDF＋逻辑回归（Qwen标签训练 · ${targetFamily.name}）`,keywords:[],display_keywords:[],minimum_hits:null,training_seed_rows:[],rule_seed_candidates:0,training_background_rows:scopedClassifier.metadata.provenance.train_rows,cold_start:false,selection_policy:'通过验收的数据集专属监督模型；Qwen留出标签一致性不是人工准确率；当前待分析数据不参与拟合；不回退规则或语义参照',annotation_type:scopedClassifier.metadata.provenance?.annotation||'Qwen伪标签',validation:scopedClassifier.metadata.provenance}:null;
 const keywordModel=candidateMetadata||roleInsightModel(targetFamily.name);
 if(experimental)keywordModel.selection_policy='未达标候选全量试分析；Qwen留出标签一致性不等于人工准确率；不替换合格模型或发布正式知识库分析';
 const matchTarget=scopedClassifier?row=>scopedClassifier.match(scopedClassifierRow(row)):supervisedMatcher.match;
@@ -818,7 +820,7 @@ const relevantDetectedCount = focused.length;
 if (!focused.length) throw new Error(`没有岗位通过“${detectedRole.name}”专用监督分类器，已停止分析；不回退规则或语义参照`);
 const enriched = focused.map((item) => {
   const semantic=semanticData?.byKey.get(semanticRowKey(item.row));
-  const labels=Object.fromEntries(['skills','tasks','domains','industries'].map(field=>[field,semantic?.fit==='include'?(semantic[field]||[]).map(t=>t.name):[]]));
+  const labels={...Object.fromEntries(['skills','tasks'].map(field=>[field,semantic?.fit==='include'?(semantic[field]||[]).map(t=>t.name):[]])),domains:[],industries:[]};
   return { ...item, salary: normalizeSalary(item.row['薪资']), labels, semantic, label_source: semantic?.fit==='include'?'Qwen语义抽取':'未完成语义标注' };
 });
 const semanticAccepted=enriched.filter(item=>item.semantic?.fit==='include');
@@ -862,11 +864,13 @@ const cities = cityBase.map((item) => {
 
 const observations = enriched.map((item) => {
   const row = item.row;
-  const domainEvidence = ['skills','tasks','domains','industries'].flatMap(field=>(item.semantic?.fit==='include'?item.semantic[field]||[]:[]).map(tag=>({label:tag.name,quote:tag.quote,field:tag.field,category:field,...(tag.category?{technology_category:tag.category}:{})})));
+  const domainEvidence = ['skills','tasks'].flatMap(field=>(item.semantic?.fit==='include'?item.semantic[field]||[]:[]).map(tag=>({label:tag.name,quote:tag.quote,field:tag.field,category:field,...(tag.category?{technology_category:tag.category}:{})})));
   return { row_no: row.row_no, platform: text(row['平台']), job_id: text(row['岗位ID']) || `row-${row.row_no}`, job_name: text(row['岗位名称']),
-    city: row['工作城市'], raw_city: text(row['原始工作城市']), district: text(row['区县'] || row['工作区域']) || text(row['原始工作城市']).split(/[-—]/).slice(1).join('-'),
+    company_name:text(row['公司名称']), company_id:text(row['公司ID']),
+    province:text(row['省份']||row['工作省份']), city: row['工作城市'], raw_city: text(row['原始工作城市']), district: text(row['区县'] || row['工作区域']) || text(row['原始工作城市']).split(/[-—]/).slice(1).join('-'),
     experience: text(row['经验要求']) || '未明确', education: text(row['学历要求']) || '未明确', company_size: text(row['公司规模']) || '未明确',
     employment_type: normalizeEmploymentType(row['用工类型']), salary_midpoint_k: item.salary ? item.salary.midpoint / 1000 : null,
+    salary_raw:text(row['薪资']),salary_period:item.salary?.original_period||'',salary_basis:item.salary?.basis||'',salary_conversion_days:item.salary?.conversion_days??null,
     skills: [...new Set(item.labels.skills)], skill_tags:item.semantic?.fit==='include'?(item.semantic.skills||[]).map(tag=>({...tag})):[], tasks: [...new Set(item.labels.tasks)], domains: [...new Set(item.labels.domains)],
     knowledge_key:row.knowledge_key||'',knowledge_hash:row.knowledge_hash||'',
     industry:item.labels.industries[0]||'',industries:item.labels.industries,source_industry:text(row['行业']),semantic_labeled:item.semantic?.fit==='include',semantic_fit:item.semantic?.fit||'unlabeled',semantic_key:item.semantic?.key||'',company_key: text(row['公司ID'] || row['公司名称']) ? `${text(row['平台'])}:${text(row['公司ID'] || row['公司名称'])}` : '',
@@ -919,7 +923,8 @@ const report = {
   quality: { salary_rows: monthlySalaryK.length, salary_coverage: Number((monthlySalaryK.length / sample.length).toFixed(3)), description_rows: descriptionFilled, description_coverage: Number((descriptionFilled / sample.length).toFixed(3)), skill_labeled_rows: skillLabeled, skill_coverage: Number((skillLabeled / sample.length).toFixed(3)), task_labeled_rows: taskLabeled, task_coverage: Number((taskLabeled / sample.length).toFixed(3)), field_coverage: fieldCoverage },
   label_provenance:{mode:semanticData?'Qwen语义抽取（带原文证据；仅已覆盖岗位）':'未完成语义抽取；词云留空，不回退规则',used_in_focused_rows:semanticAccepted.length},
   semantic_cloud:{mode:'model-only',model:semanticData?.model||'',run_id:config.semanticCloud?.id||'',sampled:semanticData?.sampled||0,covered_rows:semanticAccepted.length,unique_accepted_rows:new Set(semanticAccepted.map(i=>i.semantic.key)).size,reused_identical_rows:semanticAccepted.length-new Set(semanticAccepted.map(i=>i.semantic.key)).size,audited_rows:enriched.filter(i=>i.semantic).length,excluded_in_sample:enriched.filter(i=>i.semantic?.fit==='exclude').length,uncertain_in_sample:enriched.filter(i=>i.semantic?.fit==='uncertain').length,population_rows:sample.length,sampling_policy:'岗位由监督分类器筛选，语义标签按角色与内容缓存复用、增量合并；词云统计具体技术名，上层类别独立保存；只统计已覆盖岗位，不外推全量频率；岗位总量和薪资仍来自监督筛选全量'},
-  salary: { unit: 'K/月', p25: quantile(monthlySalaryK, 0.25), median: overallMedian, p75: quantile(monthlySalaryK, 0.75), sample_count: monthlySalaryK.length },
+  salary: { unit: 'K/月', p25: quantile(monthlySalaryK, 0.25), median: overallMedian, p75: quantile(monthlySalaryK, 0.75), sample_count: monthlySalaryK.length,
+    daily_conversion_days:21.75,converted_daily_rows:enriched.filter(item=>item.salary?.converted).length,basis:'薪资区间中点；日薪按21.75天/月折算，非实际到手月薪' },
   salary_benchmarks: { experience: salaryBenchmark(enriched, '经验要求'), education: salaryBenchmark(enriched, '学历要求'), city: salaryBenchmark(enriched, '工作城市') },
   skills: skillStats.slice(0, 24), skill_combinations: skillCombinations, frequent_skill_sets: frequentSkillSets, salary_by_skill: salarySkillStats, salary_model: salaryModel,
   profiles: { education: distribution('学历要求'), experience: distribution('经验要求'), employment_type: distribution('用工类型'), role_segments: roleSegments, typical: { education: distribution('学历要求')[0]?.name || '未明确', experience: distribution('经验要求')[0]?.name || '未明确', employment_type: distribution('用工类型')[0]?.name || '未明确' } },
@@ -944,6 +949,7 @@ if(experimental){
   report.warnings.unshift('实验性结果：当前分类器未通过验收，可能存在较多漏纳或误纳；本报告不发布到正式知识库分析。');
 }
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
-await fs.writeFile(outputPath, JSON.stringify(report, null, 2), 'utf8');
+if(config.reportSnapshotContext)report.analysis_snapshot={contextKey:insightSnapshotContextKey(config.reportSnapshotContext),baselineRows:report.total_rows};
+await writeJsonAtomic(outputPath,report);
 if(inputFile.startsWith('kb://')&&!experimental)await knowledgeStore().publishAnalysis(report);
 console.log(JSON.stringify({ ok: true, output: outputPath, detected_role: detectedRole.name, confidence: detectedRole.confidence, total_rows: allRows.length, requested_sample_rows: initialSample.length, focused_rows: sample.length, salary_rows: monthlySalaryK.length }));

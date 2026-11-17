@@ -20,22 +20,13 @@ server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://1
 async function request(route,body,headers={}){const response=await fetch(base+route,{...(body===undefined?{}:{method:'POST',body:JSON.stringify(body),headers:{'content-type':'application/json',...headers}}),...(body===undefined?{headers}:{}),signal:AbortSignal.timeout(15000)});return {code:response.status,body:await response.json()};}
 const endpoint='/api/knowledge/skill-terms';
 try{
-  let response=await request(endpoint);assert.equal(response.code,200);assert.equal(response.body.counts.pending,1);const candidate=response.body.items[0];
-  assert.equal((await request(endpoint+'/status')).body.model.local_only,true);
-  assert.equal((await request(endpoint,undefined,{origin:'https://evil.example'})).code,400);
-  assert.equal((await request(endpoint+'/review',{id:candidate.id,decision:'approved'},{origin:'http://127.0.0.1:1'})).code,400,'origin port must match');
-  assert.equal((await request(endpoint+'/review',{id:candidate.id,decision:'approved'},{'content-type':'text/plain'})).code,400);
-  assert.equal((await request(endpoint+'/review',{id:candidate.id,decision:'approved'},{'sec-fetch-site':'cross-site'})).code,400);
-  assert.equal((await request(endpoint+'/review',{id:candidate.id,decision:'approved'},{origin:base})).code,200);
-  assert.equal((await request(endpoint+'?state=approved')).body.items.length,1);
-  assert.equal((await request(endpoint+'/review',{id:'f'.repeat(64),decision:'approved'})).code,400);
-  assert.equal((await request(endpoint+'/scan',{modelPath:'C:/malicious',limit:1})).code,400);
-  assert.equal((await request(endpoint+'/scan',{limit:999})).code,400);
-  assert.equal((await request(endpoint+'?state=invalid')).code,400);
-  assert.equal((await request(endpoint+'?offset=-1')).code,400);
-  assert.equal((await request(endpoint+'/review',{id:candidate.id,decision:'pending'})).code,200);
+  for(const [route,body]of [[endpoint,undefined],[endpoint+'/status',undefined],[endpoint+'?state=approved',undefined],[endpoint+'/scan',{limit:20}],[endpoint+'/review',{id:'f'.repeat(64),decision:'approved'}],[endpoint+'/unknown',{}]]){
+    const response=await request(route,body);assert.equal(response.code,410);assert.equal(response.body.code,'FEATURE_REMOVED');
+  }
+  const candidates=await store.termReview.list({synchronize:false});assert.equal(candidates.counts.pending,1);assert.equal(candidates.counts.approved||0,0);
+  assert.equal((await request('/api/knowledge/datasets')).code,200);
   assert.equal((await store.read()).rows[0].knowledge_approved_skills.length,0);
-  const html=await fs.readFile(new URL('../job_collector_ui/public/index.html',import.meta.url),'utf8');assert.match(html,/id="skillTermReview"/);
-  const app=await fs.readFile(new URL('../job_collector_ui/public/app.js',import.meta.url),'utf8');assert.match(app,/installSkillTermReview\(\{api,toast\}\)/);
-  console.log('PASS: live loopback term API status/list/review/revoke, exact-origin and JSON CSRF guards, input bounds, unknown ID, model-path injection rejection, panel installation');
+  const html=await fs.readFile(new URL('../job_collector_ui/public/index.html',import.meta.url),'utf8');assert.doesNotMatch(html,/id="skillTermReview"/);
+  const app=await fs.readFile(new URL('../job_collector_ui/public/app.js',import.meta.url),'utf8');assert.doesNotMatch(app,/installSkillTermReview|skill-term-review\.js/);
+  console.log('PASS: removed term-review panel and mounting; all retired endpoints return 410 without modifying stored labels; knowledge datasets remain available');
 }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}

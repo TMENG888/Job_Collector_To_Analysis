@@ -1,18 +1,19 @@
-import {renderKeywordWordCloud} from './insight-wordcloud.js';
+import {renderKeywordWordCloud,wordCloudTerms} from './insight-wordcloud.js';
 import {cohortConditionValue,cohortSalaryStatistics} from './insight-cohorts.js';
 import {fitSkillSalaryIncrements} from './skill-salary-increments.js';
+import {insightConditionValue,experienceGroups} from './insight-groups.js?v=20261111-province-ranking';
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const colors=['#117d70','#39a999','#658bc4','#9171b5','#dc9d50','#cf788d','#a3afb7'];
 
 export function renderProfileCloud(items,title,industry=false) {
   const terms=(items||[]).map(item=>({...item,score:Number(industry?item.share??item.count:item.count)})).filter(item=>item.score>0);
-  return renderKeywordWordCloud(terms,{title,summary:industry?'字号按公司行业占比加权':'字号按岗位覆盖频次加权，同一岗位同一标签只计一次',
+  return renderKeywordWordCloud(wordCloudTerms(terms,50),{title,summary:industry?'字号按公司行业占比加权':'字号按岗位覆盖频次加权，同一岗位同一标签只计一次',
     detailFor:word=>industry?`${word.name}；公司行业占比 ${(Number(word.share??0)*100).toFixed(1)}%`:`${word.name}；${word.count} 条岗位${word.rate==null?'':`；覆盖 ${(word.rate*100).toFixed(1)}%`}`});
 }
 
 export function distribution(rows,field,limit=6) {
   const counts=new Map();
-  for(const row of rows){const name=cohortConditionValue(row,field);counts.set(name,(counts.get(name)||0)+1);}
+  for(const row of rows){const name=field==='city'?cohortConditionValue(row,field):insightConditionValue(row,field);counts.set(name,(counts.get(name)||0)+1);}
   const ranked=[...counts].map(([name,count])=>({name,count})).sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name,'zh-CN'));
   if(ranked.length<=limit)return ranked;
   return [...ranked.slice(0,limit),{name:'其他（剩余类别）',count:ranked.slice(limit).reduce((sum,row)=>sum+row.count,0)}];
@@ -27,13 +28,6 @@ export function renderDonut(rows,field,title) {
     return `<circle cx="110" cy="110" r="${r}" fill="none" stroke="${colors[i]}" stroke-width="24" stroke-dasharray="${length} ${circumference-length}" stroke-dashoffset="${-start}" transform="rotate(-90 110 110)" tabindex="0" aria-label="${escape(detail)}"><title>${escape(detail)}</title></circle>`;
   }).join('');
   return `<div class="profile-donut"><svg viewBox="0 0 220 220" role="img" aria-label="${escape(title)}，共${total}条岗位"><title>${escape(title)}</title>${rings}<text x="110" y="107" text-anchor="middle" class="donut-total">${total.toLocaleString('zh-CN')}</text><text x="110" y="130" text-anchor="middle" class="donut-caption">岗位样本</text></svg><ul>${groups.map((row,i)=>`<li><i style="background:${colors[i]}"></i><span>${escape(row.name)}</span><b>${(row.count/total*100).toFixed(1)}%</b><small>${row.count.toLocaleString('zh-CN')} 条</small></li>`).join('')}</ul></div>`;
-}
-function experienceOrder(name) {
-  if(/在校/.test(name))return -3;
-  if(/应届/.test(name))return -2;
-  if(/无需经验/.test(name))return -1;
-  if(/年/.test(name)){const number=Number(name.match(/\d+/)?.[0]);if(Number.isFinite(number))return number+(/以下/.test(name)?-.5:0);}
-  return Infinity;
 }
 export function skillSalaryAssociations(rows) {
   const names=[...new Set(rows.flatMap(row=>row.skills||[]))].filter(Boolean);
@@ -55,8 +49,8 @@ export function renderSkillSalaryAssociations(rows) {
 }
 export function salaryExperienceGroups(rows) {
   const grouped=new Map();
-  for(const row of rows){const name=cohortConditionValue(row,'experience');if(!grouped.has(name))grouped.set(name,[]);grouped.get(name).push(row);}
-  return [...grouped].map(([name,items])=>({name,order:experienceOrder(name),...cohortSalaryStatistics(items)}))
+  for(const row of rows){const name=insightConditionValue(row,'experience');if(!grouped.has(name))grouped.set(name,[]);grouped.get(name).push(row);}
+  return [...grouped].map(([name,items])=>({name,order:experienceGroups.indexOf(name)<6?experienceGroups.indexOf(name):Infinity,...cohortSalaryStatistics(items)}))
     .sort((a,b)=>a.order-b.order||a.name.localeCompare(b.name,'zh-CN'));
 }
 export function renderSalaryExperienceLine(rows) {

@@ -1,21 +1,23 @@
-import {cohortConditionValue} from './insight-cohorts.js';
+import {createInsightSnapshotLoader} from './insight-snapshot-client.js?v=20261113-version-bound';
+import {confirmAction} from './confirmation-dialog.js?v=20261112-clear-prompts';
+import {installCollectionKeywords} from './collection-keywords.js?v=20261112-compact-copy';
+import {provinceName} from './insight-groups.js?v=20261111-province-ranking';
 import { patchHtml, updateLog } from './dom-updates.js';
-import {renderInsightWorkspace} from './insight-dashboard.js?v=20261024-concrete-skills';
+import {renderInsightWorkspace,provinceTooltipDetails} from './insight-dashboard.js?v=20261113-version-bound-top50';
 import {installWordCloudInteractions} from './insight-wordcloud.js';
-import {loadJobAssistant} from './job-assistant.js?v=20261104-intent-api';
-import {installSkillTermReview} from './skill-term-review.js';
+import {loadJobAssistant} from './job-assistant.js?v=20261112-compact-copy';
 installWordCloudInteractions();
 import {mergeLiveProgress, collectionProgress,collectionStatusLabel,collectionTaskSummary} from './collection-progress.js?v=20261026-statistics';
-import {renderCollectionDashboard} from './collection-dashboard.js?v=20261104-remove-profile-liepin';
+import {renderCollectionDashboard} from './collection-dashboard.js?v=20261112-compact-copy';
 import {formatCollectionFlowLog} from './collection-flow-log.js?v=20261026-statistics';
-import {renderInterviewPanel,installInterviewTools} from './interview-tools.js?v=20261026-statistics';
-import { fetchJsonWithTimeout } from './http-client.js';
-import {installInsightClassifier} from './insight-classifier.js?v=20261029-simple-workflow';
-import {installInsightTrainingQueue} from './insight-training-queue.js?v=20261104-training-progress';
-import {installInsightDiscovery} from './insight-discovery.js?v=20261029-simple-workflow';
-import {insightReportContext} from './insight-classifier-state.js?v=20261027-stratified';
-import {installSemanticCloud} from './insight-semantic.js?v=20261029-semantic-preview';
-import {installJobBrowserWorkspace} from './browser-workspace.js?v=20261019-interaction-fix-9';
+import {renderInterviewPanel,installInterviewTools} from './interview-tools.js?v=20261112-compact-copy';
+import { fetchJsonWithTimeout } from './http-client.js?v=20261112-status-recovery';
+import {installInsightClassifier} from './insight-classifier.js?v=20261112-compact-copy';
+import {installInsightTrainingQueue} from './insight-training-queue.js?v=20261112-compact-copy';
+import {installInsightDiscovery} from './insight-discovery.js?v=20261112-compact-copy';
+import {insightReportContext,classifierSnapshotIdentity,reportMatchesClassifier} from './insight-classifier-state.js?v=20261113-version-bound';
+import {installSemanticCloud} from './insight-semantic.js?v=20261112-remove-supplement';
+import {loadResumeMatching} from './resume-matching.js?v=20261113-requirements';
 const state = { tasks: [], tasksLoaded:false,tasksError:'',selectedId: null, insight: null, insightRenderKey: null, insightFormInitialized: false, view: 'tasks', timer: null, logTimer: null };
 const normalizedLocalPath = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
 const $ = (selector) => document.querySelector(selector);
@@ -29,6 +31,7 @@ const verificationLabels={unchecked:'未检查',waiting_human:'等待人工验�
 const pendingGets = new Map();
 async function api(url, options = {}) {
   const readOnly = !options.method || options.method === 'GET';
+  if(!readOnly)options={...options,headers:{...options.headers,'Idempotency-Key':options.headers?.['Idempotency-Key']||crypto.randomUUID()}};
   if (readOnly && pendingGets.has(url)) return pendingGets.get(url);
   const request = fetchJson(url, options);
   if (readOnly) pendingGets.set(url, request);
@@ -163,7 +166,7 @@ function syncRoute(replace = false) {
 
 function restoreRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
-  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'insights','browser'].includes(parts[0]) ? parts[0] : 'tasks';
+  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'insights','matching'].includes(parts[0]) ? parts[0] : 'tasks';
   const id = parts[1] ? decodeURIComponent(parts[1]) : null;
   if (view === 'tasks') state.selectedId = id;
   switchView(view, { history: false });
@@ -180,14 +183,15 @@ function switchView(view, options = {}) {
     if (link.dataset.view === view) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   });
-  const titles = { tasks: '采集任务', insights: '岗位洞察', assistant: '求职助手',browser:'求职浏览器' };
+  const titles = { tasks: '采集任务', insights: '岗位洞察', matching:'简历匹配', assistant: '求职助手' };
   $('#pageTitle').textContent = titles[view];
-  $('#newTaskBtn').classList.toggle('hidden', ['insights', 'assistant','browser'].includes(view));
+  $('#newTaskBtn').classList.toggle('hidden', ['insights', 'assistant','matching'].includes(view));
   $('#newTaskBtn').innerHTML = '<span>＋</span> 新建采集任务';
   if (options.history !== false) syncRoute();
   if (view === 'tasks') refresh(false);
   if (view === 'insights') { $('#insightForm input[name="inputFile"]').value='kb://all'; loadInsight(false); }
   if (view === 'assistant') loadJobAssistant();
+  if (view === 'matching') void loadResumeMatching({api,toast});
   document.dispatchEvent(new CustomEvent('job-workspace-view',{detail:{view}}));
 }
 
@@ -212,7 +216,7 @@ function renderInsightStatus() {
   const status = $('#insightStatus');
   const report = insight.report;
   const context=insightReportContext({report,inputFile:$('#insightForm input[name="inputFile"]').value,role:$('#insightRole')?.value||'',running:insight.status==='running',normalize:normalizedLocalPath});
-  const completedMessage = report && insight.status === 'completed' ? `${report.experimental?'[试分析 · 候选未达标] ':''}${report.detected_role?.name || report.role || '岗位'}分析完成：${number(report.sample_rows)}/${number(report.total_rows)} 条` : insight.message;
+  const completedMessage = report && insight.status === 'completed' ? `${report.experimental?'[试分析 · 候选未达标] ':''}${report.detected_role?.name || report.role || '岗位'}分析完成：${number(report.sample_rows)}/${number(report.total_rows)} 条${insight.snapshot?.reusable?' · 已复用快照':insight.snapshot?' · 可更新':''}` : insight.message;
   const updatedAt = report?.generated_at || insight.updatedAt;
   status.classList.toggle('insight-report-stale',context.hideReport);
   status.innerHTML = `<div class="insight-run-state ${escapeHtml(insight.status)}"><span class="pulse"></span><div><b>${escapeHtml(context.title||completedMessage)}</b><small>${context.hideReport?'上次报告与当前范围或岗位不同':insight.status === 'running' ? `已运行 ${number(insight.runningSeconds)} 秒` : updatedAt ? `最近更新 ${new Date(updatedAt).toLocaleString('zh-CN')}` : '选择目标岗位后生成分析'}</small></div></div>`;
@@ -227,7 +231,7 @@ function renderInsightStatus() {
   const button = $('#runInsight');
   if (button) {
     const ready=button.dataset.analysisReady==='true'&&button.dataset.classifierSource===$('#insightForm input[name="inputFile"]').value&&button.dataset.classifierRole===($('#insightRole')?.value||'');
-    const running=insight.status==='running'||button.dataset.submitting==='true';
+    const running=insight.status==='running'||insight.globalRunning||button.dataset.submitting==='true';
     button.disabled = running||!ready;
     button.textContent = running ? '分析中…' : button.dataset.classifierMode==='candidate-trial'?'生成试分析':'生成分析';
   }
@@ -271,34 +275,8 @@ function renderInsightDashboard() {
     return;
   }
   logInsightFilterAudit(report);
-  container.innerHTML=(report.experimental?'<p class="insight-trial-banner" role="note">试分析 · 分类器未通过验收，结果仅供探索，未发布为正式知识库分析。</p>':'')+'<div id="cohortExplorer"></div>';
-  disposeInsightWorkspace=renderInsightWorkspace($('#cohortExplorer'),report,{drawCityMap,drawCityDetail});
-}
-
-const cityMapCodes = {北京:110000,天津:120000,上海:310000,重庆:500000,广州:440100,深圳:440300,杭州:330100,成都:510100,武汉:420100,南京:320100,苏州:320500,西安:610100,长沙:430100,合肥:340100,郑州:410100,济南:370100,青岛:370200,厦门:350200,福州:350100,无锡:320200,宁波:330200,东莞:441900,佛山:440600,珠海:440400,昆明:530100,沈阳:210100,大连:210200};
-let cityDetailRevision = 0;
-async function drawCityDetail(city, rows) {
-  const revision = ++cityDetailRevision;
-  $('#cityMapDetail')?.remove();
-  const host = document.createElement('section');host.id='cityMapDetail';host.className='card insight-panel';
-  ($('#insightCityDetail')||$('#cohortExplorer')).append(host);
-  host.innerHTML = `<h3>${escapeHtml(city)}行政区分布</h3><p>正在读取市级行政区边界…</p>`;
-  try {
-    if (!cityMapCodes[city]) throw new Error('当前城市暂无已缓存的行政边界');
-    const res=await fetch(`/maps/${cityMapCodes[city]}.geojson`);if(!res.ok)throw new Error('边界暂不可用');
-    const geo=await res.json();if(revision!==cityDetailRevision || !host.isConnected || $('#cohortCity')?.value!==city)return;
-    orientMap(geo);
-    const districtRows=rows.filter(r=>r.district);
-    const districtCounts = new Map();
-    for (const feature of geo.features) districtCounts.set(feature.properties.name, rows.filter(r=>r.district===feature.properties.name).length);
-    const located=[...districtCounts.values()].reduce((a,b)=>a+b,0);
-    host.innerHTML=`<h3>${escapeHtml(city)}行政区分布</h3><p>当前 ${number(rows.length)} 条岗位；有明确且匹配的区县 ${number(located)} 条，区县未明确或未匹配 ${number(rows.length-located)} 条。${located ? '颜色深浅表示有明确区县的岗位数量。' : '仅展示行政边界，未将城市总数分摊到区县。'}</p><div class="city-map" id="cityDistrictMap"></div>`;
-    const svg=window.d3.select('#cityDistrictMap').append('svg').attr('viewBox','0 0 760 400');
-    const projection=window.d3.geoMercator().fitExtent([[20,20],[740,380]],geo);const path=window.d3.geoPath(projection);
-    const max=Math.max(1,...districtCounts.values());
-    svg.selectAll('path').data(geo.features).join('path').attr('class','map-region').attr('fill',f=>districtCounts.get(f.properties.name)?window.d3.interpolateGreens(.3+.6*districtCounts.get(f.properties.name)/max):'#edf5f3').style('fill',f=>districtCounts.get(f.properties.name)?window.d3.interpolateGreens(.3+.6*districtCounts.get(f.properties.name)/max):'#edf5f3').attr('d',path).append('title').text(f=>`${f.properties.name}：${districtCounts.get(f.properties.name)} 条明确区县岗位`);
-    svg.selectAll('text').data(geo.features).join('text').attr('transform',f=>`translate(${path.centroid(f)})`).attr('text-anchor','middle').attr('font-size',10).text(f=>f.properties.name);
-  } catch(error) { if(revision===cityDetailRevision)host.innerHTML=`<h3>${escapeHtml(city)}行政区分布</h3><p>${escapeHtml(error.message)}；城市岗位统计仍可查看。</p>`; }
+  container.innerHTML=(report.experimental?'<p class="insight-trial-banner" role="note">试分析 · 分类器未通过验收</p>':'')+'<div id="cohortExplorer"></div>';
+  disposeInsightWorkspace=renderInsightWorkspace($('#cohortExplorer'),report,{drawProvinceMap});
 }
 
 function orientMap(geo) {
@@ -317,49 +295,52 @@ function orientMap(geo) {
   for(const feature of geo.features||[])geometry(feature.geometry);
 }
 
-let cityMapRevision=0,cityMapGeometryPromise=null;
-function cityMapGeometry(){
-  if(!cityMapGeometryPromise)cityMapGeometryPromise=Promise.all(['/china-provinces.geojson','/maps/cities.geojson'].map(async url=>{const response=await fetch(url);if(!response.ok){if(url.includes('cities'))return {features:[]};throw new Error('行政区边界数据不可用');}return response.json();})).catch(error=>{cityMapGeometryPromise=null;throw error;});
-  return cityMapGeometryPromise;
+let provinceMapRevision=0,provinceGeometryPromise=null;
+async function drawProvinceMap(provinces) {
+  const revision=++provinceMapRevision,container=$('#provinceMap');if(!container)return;
+  if(!window.d3){container.textContent='地图组件未加载，请刷新页面重试。';return;}
+  try{
+    if(!provinceGeometryPromise)provinceGeometryPromise=fetch('/china-provinces.geojson').then(response=>{if(!response.ok)throw Error('省级行政边界不可用');return response.json();}).catch(error=>{provinceGeometryPromise=null;throw error;});
+    const geo=structuredClone(await provinceGeometryPromise);
+    if(revision!==provinceMapRevision||!container.isConnected)return;
+    orientMap(geo);container.replaceChildren();
+    const statistics=new Map(provinces.map(item=>[item.name,item])),counts=new Map(provinces.map(item=>[item.name,item.count])),max=Math.max(1,...counts.values());
+    const tooltip=document.createElement('div');tooltip.id='provinceMapTooltip';tooltip.className='province-map-tooltip';tooltip.setAttribute('role','tooltip');tooltip.hidden=true;container.append(tooltip);
+    const hideTooltip=()=>{tooltip.hidden=true;};
+    const showTooltip=(event,feature)=>{
+      const name=province(feature),detail=provinceTooltipDetails(statistics.get(name),feature.properties.name||name);
+      tooltip.innerHTML=detail.html;tooltip.hidden=false;
+      const bounds=container.getBoundingClientRect(),region=event.currentTarget.getBoundingClientRect();
+      const x=event.type==='focus'?region.left+region.width/2:event.clientX,y=event.type==='focus'?region.top+region.height/2:event.clientY;
+      const left=x-bounds.left+16,top=y-bounds.top+16;
+      tooltip.style.left=`${Math.max(8,Math.min(left, bounds.width-tooltip.offsetWidth-8))}px`;
+      tooltip.style.top=`${Math.max(8,Math.min(top, bounds.height-tooltip.offsetHeight-8))}px`;
+    };
+    const width=760,height=470,svg=window.d3.select(container).append('svg').attr('viewBox',`0 0 ${width} ${height}`).attr('role','group').attr('aria-label','中国省份目标岗位分布，支持键盘筛选');
+    const projection=window.d3.geoMercator().fitExtent([[18,18],[width-18,height-18]],geo),pathGenerator=window.d3.geoPath(projection);
+    const province=feature=>feature.properties.name?provinceName(feature.properties.name):'';
+    svg.selectAll('path').data(geo.features).join('path').attr('class','map-region').attr('d',pathGenerator)
+      .style('fill',feature=>counts.get(province(feature))?window.d3.interpolateGreens(.25+.6*counts.get(province(feature))/max):'#edf3f0')
+      .attr('tabindex',0).attr('role',feature=>counts.has(province(feature))?'button':'img')
+      .attr('aria-label',feature=>provinceTooltipDetails(statistics.get(province(feature)),feature.properties.name||'省级边界').label)
+      .attr('aria-describedby','provinceMapTooltip')
+      .on('pointerenter pointermove focus',showTooltip).on('pointerleave blur',hideTooltip)
+      .on('click',(_,feature)=>selectMapProvince(province(feature)))
+      .on('keydown',(event,feature)=>{if(event.key==='Escape')hideTooltip();if(event.key==='Enter'||event.key===' '){event.preventDefault();selectMapProvince(province(feature));}});
+    const legend=document.createElement('div');legend.className='province-map-legend';legend.innerHTML=`<span>岗位数</span><span>0</span><i aria-hidden="true"></i><span>${number(Math.max(0,...counts.values()))}</span>`;container.append(legend);
+    const unmapped=provinces.filter(item=>!geo.features.some(feature=>province(feature)===item.name)).reduce((sum,item)=>sum+item.count,0);
+    if(unmapped){const note=document.createElement('p');note.className='insight-card-caption';note.textContent=`另有 ${number(unmapped)} 条岗位地点未明确、为多省份或不在省级地图范围内，仍计入筛选与分析。`;container.append(note);}
+  }catch(error){if(revision===provinceMapRevision&&container.isConnected)container.textContent=`地图暂不可用：${error.message}`;}
 }
-async function drawCityMap(cities) {
-  const revision=++cityMapRevision;
-  const container = $('#cityMap');
-  if (!container) return;
-  if (!window.d3) { container.textContent = '地图组件未加载，城市排名仍可正常使用。'; return; }
-  try {
-    const geometry=await cityMapGeometry();
-    if(revision!==cityMapRevision||!container.isConnected)return;
-    const [geo,cityGeo]=structuredClone(geometry);container.replaceChildren();
-    // DataV follows the GeoJSON right-hand winding convention, while d3-geo
-    // interprets spherical polygon winding in the opposite direction.
-    orientMap(geo);
-    const width = 760; const height = 470;
-    const svg = window.d3.select(container).append('svg').attr('viewBox', `0 0 ${width} ${height}`).attr('role', 'img').attr('aria-label', '中国城市岗位样本分布');
-    const projection = window.d3.geoMercator().fitExtent([[18, 18], [width - 18, height - 18]], geo);
-    const pathGenerator = window.d3.geoPath(projection);
-    svg.selectAll('path').data(geo.features).join('path').attr('class', 'map-region').attr('d', pathGenerator);
-    orientMap(cityGeo);svg.selectAll('path.city-boundary').data(cityGeo.features.filter(f=>cities.some(c=>c.name===f.properties.name))).join('path').attr('class','map-region city-boundary').attr('d',pathGenerator).attr('tabindex',0).attr('role','button').attr('aria-label',f=>`查看${f.properties.name}岗位`).on('click',(_,f)=>selectMapCity(f.properties.name)).on('keydown',(event,f)=>{if(event.key==='Enter')selectMapCity(f.properties.name);});
-    const visible = cities.filter((item) => Number.isFinite(item.longitude) && Number.isFinite(item.latitude));
-    const radius = window.d3.scaleSqrt().domain([1, window.d3.max(visible, (item) => item.count) || 1]).range([4, 18]);
-    const marks = svg.selectAll('g.city-mark').data(visible).join('g').attr('class', 'city-mark').attr('transform', (item) => `translate(${projection([item.longitude, item.latitude]).join(',')})`);
-    marks.attr('tabindex',0).attr('role','button').attr('aria-label',item=>`查看${item.name}岗位`).on('click',(_,item)=>selectMapCity(item.name)).on('keydown',(event,item)=>{if(event.key==='Enter')selectMapCity(item.name);});
-    marks.append('circle').attr('r', (item) => radius(item.count)).append('title').text((item) => `${item.name}：${item.count} 条；薪资中位数 ${item.median_salary_k == null ? '样本不足' : `${item.median_salary_k}K/月`}`);
-    marks.filter((item, index) => index < 8).append('text').attr('x', (item) => radius(item.count) + 4).attr('y', 4).text((item) => item.name);
-  } catch (error) { if(revision===cityMapRevision&&container.isConnected)container.textContent = `地图暂不可用：${error.message}`; }
-}
-
-function selectMapCity(city) {
-  const select=$('#cohortCity');if(!select)return;
-  // Map and ranking operate inside the current linked filter scope.
-  const value=cohortConditionValue({city},'city');
-  if(![...select.options].some(option=>option.value===value))return;
-  select.value=value;select.dispatchEvent(new Event('change'));$('#insightOverviewSection')?.scrollIntoView({behavior:'smooth',block:'start'});
+function selectMapProvince(province){
+  const select=$('#cohortProvince');if(!select||![...select.options].some(option=>option.value===province))return;
+  select.value=province;select.dispatchEvent(new Event('change'));
+  $('#insightOverviewSection')?.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'start'});
 }
 
 function insightReportKey(report) {
   if (!report) return 'empty';
-  return [report.version, report.generated_at, report.topic_model?.display_model?.updated_at, report.input_file, report.sheet_name, report.analysis_mode, report.sample_rows].join('|');
+  return [report.version,report.role,report.analysis_snapshot?.contextKey,report.role_classifier?.artifact_sha256,report.generated_at, report.topic_model?.display_model?.updated_at, report.input_file, report.sheet_name, report.analysis_mode, report.sample_rows].join('|');
 }
 
 function renderInsight() {
@@ -370,23 +351,30 @@ function renderInsight() {
   renderInsightDashboard();
 }
 
+let insightClassifierIdentity=null,insightClassifierIdentityRole='';
+const currentInsightClassifier=()=>insightClassifierIdentityRole===($('#insightRole')?.value||'')?insightClassifierIdentity:null;
+const insightSnapshotLoader=createInsightSnapshotLoader({api,classifier:currentInsightClassifier,selection:()=>{
+  const button=$('#runInsight'),role=$('#insightRole')?.value||'';
+  return {inputFile:'kb://all',role,classifierMode:button?.dataset.classifierRole===role?button.dataset.classifierMode||'qualified':'qualified',...(button?.dataset.classifierRole===role&&button.dataset.classifierMode==='candidate-trial'?{classifierRunId:button.dataset.classifierRunId}:{})};
+},apply:next=>{
+  state.insight=next;
+  if(!state.insightFormInitialized&&next.report){$('#insightForm input[name="inputFile"]').value='kb://all';state.insightFormInitialized=true;}
+  renderInsight();
+}});
 async function loadInsight(silent = true) {
-  if(state.insightLoading)return;
-  state.insightLoading=true;
-  try {
-    const next=await api('/api/insights?summary=1');
-    const report=!next.reportVersion?null:next.reportVersion===state.insight?.reportVersion?state.insight.report:await api('/api/insights/report',{timeoutMs:60000});
-    state.insight = {...next,report};
-    if(!state.insightFormInitialized && state.insight.report) {
-      const report=state.insight.report;
-      // The previous report is a result, not the default source for a new analysis.
-      $('#insightForm input[name="inputFile"]').value='kb://all';
-      state.insightFormInitialized=true;
-    }
-    renderInsight();
-  } catch (error) { if (!silent) toast(error.message, true); }
-  finally{state.insightLoading=false;}
+  try{await insightSnapshotLoader.refresh();}catch(error){if(!silent)toast(error.message,true);}
 }
+$('#insightClassifier')?.addEventListener('insight-annotation-state',event=>{
+  if(event.detail.inputFile!=='kb://all')return;
+  const role=$('#insightRole')?.value||'',identity=classifierSnapshotIdentity(event.detail.state);
+  const changed=role!==insightClassifierIdentityRole||JSON.stringify(identity)!==JSON.stringify(insightClassifierIdentity);
+  insightClassifierIdentity=identity;insightClassifierIdentityRole=role;
+  if(identity&&state.insight?.report&&!reportMatchesClassifier(state.insight.report,identity)){
+    state.insight={...state.insight,report:null,reportVersion:null,snapshot:null,status:state.insight.status==='running'?'running':'empty',message:'分类器已更新，请重新生成分析'};
+    renderInsight();
+  }
+  if(changed)void loadInsight(true);
+});
 
 async function refresh(silent = true) {
   if (state.tasksLoading) return;
@@ -521,7 +509,7 @@ async function handleAction(task, action) {
       await api(`/api/tasks/${encodeURIComponent(task.id)}/open`, { method: 'POST', body: '{}' }); return;
     }
     if (action === 'archive') {
-      if (!confirm('仅从控制台列表移除该任务，采集数据不会删除。继续吗？')) return;
+      if (!await confirmAction('移除采集任务',`确定移除“${task.label}”任务吗？已采集数据保留。`)) return;
       await api(`/api/tasks/${encodeURIComponent(task.id)}/archive`, { method: 'POST', body: '{}' });
       state.selectedId = null; toast('任务已移除，文件仍保留'); return refresh();
     }
@@ -551,19 +539,23 @@ for (const eventName of ['input', 'change']) $('#insightForm').addEventListener(
   $('#insightForm input[name="inputFile"]').value='kb://all';
   renderInsightStatus();
 });
-$('#insightRole')?.addEventListener('change',()=>{state.insightHistoryVisible=false;renderInsightStatus();});
+$('#insightRole')?.addEventListener('change',()=>{state.insightHistoryVisible=false;renderInsightStatus();void loadInsight(false);});
 
 function updateCollectionMode(){
   const hybrid=$('#taskForm select[name="transportMode"]').value==='http_preferred_browser_fallback';
   for(const input of document.querySelectorAll('#platformChecks input'))if(['jobonline','job51','liepin'].includes(input.value)){input.disabled=!hybrid;if(!hybrid)input.checked=false;}
-  for(const input of document.querySelectorAll('#taskForm input[name="browserMaxPages"],#taskForm input[name="browserMaxRows"]'))input.disabled=!hybrid;
 }
 $('#taskForm select[name="transportMode"]').addEventListener('change',updateCollectionMode);
 updateCollectionMode();
+const collectionKeywords=installCollectionKeywords($('#taskForm'),{api});
 $('#taskForm').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
+  if(collectionKeywords.busy)return;
+  const taskForm=event.currentTarget;
+  const form = new FormData(taskForm);
   const body = Object.fromEntries(form.entries());
+  body.label=body.label.trim();
+  body.primaryKeyword=body.label;
   body.platforms = form.getAll('platforms');
   body.cities = form.getAll('cities');
   body.interviewEnabled = true;
@@ -573,7 +565,7 @@ $('#taskForm').addEventListener('submit', async (event) => {
     const data = await api('/api/tasks', { method: 'POST', body: JSON.stringify(body) });
     state.selectedId = data.task.id;
     $('#taskDialog').close();
-    event.currentTarget.reset();
+    taskForm.reset();
     document.querySelectorAll('#platformChecks input').forEach((input) => { input.checked = ['shixiseng','iguopin','mohrss','zhaopin'].includes(input.value); });
     updateCollectionMode();
     document.querySelectorAll('#cityChecks input').forEach((input) => { input.checked = !['天津', '重庆', '苏州'].includes(input.value); });
@@ -584,7 +576,7 @@ $('#taskForm').addEventListener('submit', async (event) => {
 
 $('#insightForm').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const button=$('#runInsight');if(button.dataset.submitting==='true'||state.insight?.status==='running')return;
+  const button=$('#runInsight');if(button.dataset.submitting==='true'||state.insight?.status==='running'||state.insight?.globalRunning)return;
   const body = Object.fromEntries(new FormData(event.currentTarget).entries());
   body.inputFile = 'kb://all';
   body.analysisMode = 'full';
@@ -595,18 +587,16 @@ $('#insightForm').addEventListener('submit', async (event) => {
     if(body.classifierMode==='candidate-trial')body.classifierRunId=button.dataset.classifierRunId;
     button.dataset.submitting='true';renderInsightStatus();
     if (!(await api('/api/state')).capabilities?.insightSourceRole) throw new Error('岗位来源自动识别需要重启更新后的服务；本轮尚未启动分析');
-    const data = await api('/api/insights/run', { method: 'POST', body: JSON.stringify(body) });
+    const data = await api('/api/insights/run', { method: 'POST', body: JSON.stringify(body), timeoutMs:120000 });
     toast(data.message || '岗位分析已启动');
     await loadInsight(false);
   } catch (error) { toast(error.message, true); }
   finally{delete button.dataset.submitting;renderInsightStatus();}
 });
 
-installSkillTermReview({api,toast});
 installInsightClassifier({api,toast});
 installInsightTrainingQueue({api,toast});
 installInsightDiscovery({api,toast});
-installJobBrowserWorkspace({api,toast});
 installSemanticCloud({api,toast});
 restoreRoute();
 state.timer = setInterval(() => {

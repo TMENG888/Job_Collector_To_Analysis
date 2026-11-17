@@ -4,7 +4,7 @@
 .classifier-controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap}.classifier-controls label{display:grid;gap:5px;font-size:12px;max-width:220px}.classifier-controls input{width:140px}.classifier-controls button{min-height:40px}
 .classifier-progress{display:grid;gap:10px;font-size:13px;line-height:1.6;margin-top:16px}.classifier-progress progress{width:100%;height:6px;accent-color:#247d66}
 .classifier-counters,.classifier-evaluation dl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:18px 0}.classifier-counters>div{padding:12px;background:#f4f8f7;border-radius:9px}.classifier-counters dt,.classifier-evaluation dt{font-size:12px;color:#647976}.classifier-counters dd,.classifier-evaluation dd{margin:7px 0 0;font-size:18px;font-weight:600;overflow-wrap:anywhere}
-.classifier-evaluations{display:grid;grid-template-columns:1fr 1fr;gap:14px}.classifier-evaluation{padding:16px;border:1px solid #deebe6;border-radius:10px}.classifier-evaluation h4{margin:0;font-size:13px}.classifier-evaluation dl{grid-template-columns:repeat(5,minmax(0,1fr))}.classifier-evaluation dd{font-size:16px}.classifier-evaluation small{color:#647976}
+.classifier-evaluations{display:grid;grid-template-columns:1fr 1fr;gap:14px}.classifier-evaluation{padding:16px;border:1px solid #deebe6;border-radius:10px}.classifier-evaluation h4{margin:0;font-size:13px}.classifier-evaluation dl{grid-template-columns:repeat(4,minmax(0,1fr))}.classifier-evaluation dd{font-size:16px}.classifier-evaluation small{color:#647976}
 .classifier-active{font-size:13px;color:#247d66}[data-ml-review-wrap] summary{cursor:pointer;font-size:13px}
 .classifier-review-item{padding:16px 0;border-bottom:1px solid #deebe6}.classifier-review-item h4{margin:0 0 8px;font-size:14px}.classifier-review-item p{max-height:220px;overflow:auto;white-space:pre-wrap;font-size:13px;line-height:1.7}.classifier-review-item label{display:flex;gap:12px;align-items:center;font-size:12px;margin-top:8px}.classifier-review-item select{max-width:240px}.classifier-review-pages{display:flex;gap:16px;justify-content:center;align-items:center;margin-top:12px}
 .classifier-joint-controls{padding:0}
@@ -79,7 +79,7 @@
 .supervised-screening .classifier-counters dd{font-size:16px;font-variant-numeric:tabular-nums}
 .supervised-screening [hidden]{display:none!important}
 .supervised-screening :is(button,input,summary,textarea):focus-visible{outline:2px solid var(--teal,#247d66);outline-offset:3px}
-@media(max-width:600px){.supervised-screening{padding:14px}.supervised-screening .classifier-controls label{min-width:90px;flex:1}.supervised-screening .classifier-controls input{width:100%}.supervised-screening .classifier-counters{grid-template-columns:repeat(2,minmax(0,1fr))}.supervised-screening .classifier-header{align-items:start}.supervised-screening .classifier-evaluation dl{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:600px){.supervised-screening{padding:14px}.supervised-screening .classifier-controls label{min-width:90px;flex:1}.supervised-screening .classifier-controls input{width:100%}.supervised-screening .classifier-counters{grid-template-columns:repeat(2,minmax(0,1fr))}.supervised-screening .classifier-header{align-items:start}.supervised-screening .classifier-evaluation dl{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .supervised-screening{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:8px 24px;align-items:start;padding:16px 20px}
 .supervised-screening .classifier-header{grid-column:1;grid-row:1;margin:0;display:contents}
 .supervised-screening .classifier-header>div{grid-column:1;grid-row:1;min-width:0}
@@ -95,12 +95,12 @@
 .supervised-screening .classifier-joint-controls input{width:100%;min-width:0;height:36px;padding:6px 10px}
 .supervised-screening .classifier-joint-controls button{white-space:nowrap;font-size:13px;padding-inline:12px}
 .supervised-screening [data-ml-notice]{grid-column:1/-1;margin:0;color:var(--red)}
-.supervised-screening .classifier-workspace{grid-column:1/-1;margin:4px 0 0;padding-top:12px;display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:4px 16px}
+.supervised-screening .classifier-workspace{grid-column:1/-1;margin:4px 0 0;padding-top:12px;display:block}
 .supervised-screening :is(.classifier-training-results,[data-ml-results],[data-semantic-slot],.classifier-semantic-results,[data-sem-labels]){display:contents}
 .supervised-screening .classifier-progress{grid-column:1;grid-row:1}
 .supervised-screening .classifier-counters{grid-column:1;grid-row:2}
 .supervised-screening .classifier-metric-details{grid-column:1/-1;grid-row:3}
-.supervised-screening [data-sem-status]{grid-column:2;grid-row:1/span 2;align-self:start;padding-left:16px;border-left:1px solid var(--line);min-width:0}
+.supervised-screening [data-sem-status]{margin-top:10px;min-width:0}
 .supervised-screening .classifier-label-preview{grid-column:1/-1;grid-row:4}
 .supervised-screening #semanticCloudControls>button{grid-column:1/-1;justify-self:start}
 .supervised-screening .classifier-workspace:has(#semanticCloudControls[hidden]) .classifier-counters{grid-column:1/-1}
@@ -122,9 +122,9 @@
 .supervised-screening .classifier-evaluation dd{margin-top:4px}
 .classifier-gate{display:grid;gap:4px;padding:10px 12px;border-left:3px solid var(--amber);background:var(--soft);font-size:12px;line-height:1.7;color:var(--ink)}
 .supervised-screening .classifier-semantic-results{margin:0;padding:0 0 0 16px;border-top:0;border-left:1px solid var(--line)}
-.supervised-screening .classifier-label-preview{margin:0}
+.supervised-screening .classifier-label-preview{margin:10px 0 0}
 .supervised-screening .classifier-metric-details[open],.supervised-screening .classifier-label-preview[open]{padding-bottom:8px}
-.supervised-screening .classifier-label-fields{grid-template-columns:repeat(4,minmax(0,1fr));align-items:start;gap:12px;margin:12px 0}
+.supervised-screening .classifier-label-fields{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:12px;margin:12px 0}
 .supervised-screening .classifier-label-fields section{padding:12px;min-width:0;border-radius:8px;background:var(--soft)}
 .supervised-screening .classifier-label-fields h3{display:grid;gap:4px;font-size:14px;margin:0 0 8px;color:var(--ink);line-height:1.5}
 .supervised-screening .classifier-label-fields h3 small{font-size:12px;font-weight:400;color:var(--muted)}
@@ -152,18 +152,6 @@
 @media(prefers-reduced-motion:reduce){.supervised-screening *{scroll-behavior:auto;transition:none}}
 @media(max-width:600px){.supervised-screening .classifier-label-fields{grid-template-columns:minmax(0,1fr)}}
 .supervised-screening .classifier-schema,.supervised-screening .classifier-labeling{grid-column:1/-1;display:grid;grid-template-columns:220px minmax(0,1fr);align-items:center;gap:4px 20px;min-width:0;border-top:1px solid var(--line);padding:10px 0 0;margin:0;background:transparent;border-radius:0}
-.supervised-screening .classifier-supplement-details{grid-column:1/-1;grid-row:6;min-width:0;margin-top:4px;padding-top:8px;border-top:1px solid var(--line)}
-.classifier-supplement-details>summary{cursor:pointer;font-size:12px}
-.classifier-supplement-details>summary small{margin-left:12px;font-weight:400}
-.supervised-screening .classifier-extract-controls{display:flex;align-items:end;flex-wrap:wrap;gap:8px 12px;padding-top:12px;min-width:0}
-.classifier-extract-controls>div{flex:1;min-width:200px;align-self:center}
-.classifier-extract-controls strong{font-size:13px;color:var(--ink)}
-.classifier-extract-controls small{display:block;color:var(--muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
-.classifier-extract-controls label{display:grid;gap:4px;width:92px;font-size:12px;color:var(--muted)}
-.classifier-extract-controls input{width:100%;min-width:0;height:36px;padding:6px 8px;font-variant-numeric:tabular-nums}
-.classifier-extract-controls button{min-height:36px;font-size:13px;white-space:normal}
-.classifier-extract-controls [data-sem-hint]{flex-basis:100%}
-@media(max-width:600px){.supervised-screening .classifier-extract-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.classifier-extract-controls>div,.classifier-extract-controls button,.classifier-extract-controls [data-sem-hint]{grid-column:1/-1;min-width:0}.classifier-extract-controls label{width:auto}.classifier-extract-controls input,.classifier-extract-controls button{min-height:44px}}
 .supervised-screening .classifier-schema{grid-row:2}
 .supervised-screening .classifier-labeling{grid-row:3}
 .supervised-screening .classifier-step-heading{display:flex;align-items:baseline;gap:6px 12px;flex-wrap:wrap;min-width:0}
@@ -210,17 +198,11 @@
 #insightTrainingQueue #insightClassifier .classifier-header h2{font-size:14px}
 #insightTrainingQueue #insightClassifier .classifier-current{display:flex;margin:0;gap:4px 12px}
 #insightTrainingQueue .classifier-workspace:not(:has(.classifier-semantic-results:not([hidden]))){grid-template-columns:minmax(0,1fr)}
-.discovery-controls{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:8px 0}
-.discovery-controls label{display:grid;gap:5px;font-size:12px}.discovery-controls input{width:100px;min-height:40px}.discovery-controls button{min-height:40px}
-.discovered-roles{list-style:none;margin:12px 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}
-.discovered-roles>li{min-width:0;padding:14px 0;border-top:1px solid var(--line)}
+.discovered-roles{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}
+.discovered-roles>li{display:flex;flex-direction:column;min-width:0;padding:16px 0;border-top:1px solid var(--line)}
 .discovery-role-heading,.discovery-role-footer{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:13px}
 .discovery-role-heading>span{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
-.discovery-share{height:3px;margin:8px 0;background:var(--soft);border-radius:2px}.discovery-share span{display:block;height:100%;background:var(--teal)}
-.discovered-roles p{font-size:13px;line-height:1.6;overflow-wrap:anywhere;max-width:75ch;margin:8px 0}
-.discovered-roles summary,.discovery-state{font-size:12px;color:var(--muted)}
-.discovered-roles details{margin-top:8px}.discovered-roles details>p{max-height:190px;overflow:auto}
-.discovery-directions>strong{font-size:13px}.discovery-directions>div{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.discovery-directions button{text-align:left;display:grid;gap:4px;min-height:44px}.discovery-directions small{color:var(--muted);font-weight:400;font-size:12px}
+.discovery-state{font-size:12px;color:var(--muted)}
 #insightTrainingQueue :is(button,input,summary):focus-visible{outline:2px solid var(--teal);outline-offset:3px}
 @media(max-width:800px){.training-job{grid-template-columns:minmax(0,1fr)}.training-job-actions{justify-content:start}.discovered-roles{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:600px){#insightTrainingQueue{padding:16px}.training-entry{flex-direction:column;align-items:stretch}.training-entry button{width:100%}.training-entry input{font-size:16px}.training-settings>summary span,.training-discovery>summary span{display:block;margin-left:16px}.discovery-controls label{flex:1}.discovery-controls input{width:100%;box-sizing:border-box}.discovery-controls button{min-height:44px}}
@@ -268,7 +250,7 @@
 .workflow-secondary-tools{display:flex;align-items:start;gap:0 28px;flex-wrap:wrap;border-top:1px solid var(--line)}
 .workflow-secondary-tools>[data-discovery-slot]{flex:1 1 280px;min-width:0}
 .workflow-secondary-tools>.training-history{flex:0 1 auto}
-.workflow-secondary-tools>.training-history[open],.workflow-secondary-tools>[data-discovery-slot]:has(.training-discovery[open]){flex-basis:100%}
+.workflow-secondary-tools>.training-history[open]{flex-basis:100%}
 #insightWorkflow .training-discovery,#insightWorkflow .training-history{border:0;padding:0;margin:0}
 #insightWorkflow .training-history>summary,#insightWorkflow .training-discovery>summary{font-weight:400;padding:10px 0}
 .workflow-service-warning{margin:0 0 12px;padding:8px 12px;border-left:3px solid var(--amber);background:var(--soft);color:var(--amber);font-size:13px;line-height:1.7}
@@ -285,9 +267,30 @@
 .training-job-menu>summary{cursor:pointer;font-size:12px;line-height:36px;color:var(--muted)}
 .training-job-menu>div{display:grid;gap:4px;min-width:120px}
 .training-job-menu button{text-align:left}
-.discovery-local-settings{margin:10px 0;font-size:12px;color:var(--muted)}
-.discovery-local-settings>summary,.discovery-evidence>summary{cursor:pointer;line-height:2}
-.discovery-evidence>summary{font-size:12px;color:var(--muted)}
+.discovery-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 0}
+.discovery-toolbar>strong{font-size:13px;font-weight:500;margin-right:8px;white-space:nowrap}
+.discovery-toolbar .discovery-budget{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);white-space:nowrap;margin-right:4px}
+.discovery-budget input{width:80px;min-width:0;min-height:44px;box-sizing:border-box;margin:0;padding:8px 10px;font-size:13px}
+.discovery-toolbar button{min-height:44px;padding:8px 14px;white-space:nowrap;font-size:13px}
+#insightTrainingQueue .training-discovery>[data-discovery-status]{margin:0 0 10px}
+.discovery-dialog{box-sizing:border-box;inset:0;margin:auto;width:min(860px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 48px);padding:0;border:1px solid var(--line);border-radius:14px;background:var(--paper);color:var(--ink);box-shadow:0 18px 60px #173b3026;overflow:hidden}
+.discovery-dialog[open]{display:flex;flex-direction:column}
+.discovery-dialog::backdrop{background:#183c3040;backdrop-filter:none}
+.discovery-dialog-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 24px 14px;flex-shrink:0}
+.discovery-dialog-head h2{margin:0 0 5px;font-size:18px;font-weight:600}
+.discovery-dialog-head span{font-size:12px;color:var(--muted)}
+.discovery-dialog button{min-height:44px;font-size:13px;padding:8px 14px}
+.discovery-dialog-filter{padding:0 24px 16px;flex-shrink:0}
+.discovery-dialog-filter input{box-sizing:border-box;display:block;width:100%;min-height:44px;margin:0;font-size:14px}
+.discovery-dialog-progress{flex-shrink:0;margin:0;padding:0 24px 14px;color:var(--muted);font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.discovery-dialog-actions{display:flex;justify-content:center;padding:0 24px 24px;flex-shrink:0}
+.discovery-dialog [hidden]{display:none}
+.discovery-dialog-results{padding:0 24px 8px;overflow:auto;overscroll-behavior:contain;min-height:0;scrollbar-gutter:stable}
+.discovery-role-titles{list-style:none;padding:0;margin:12px 0 16px;font-size:13px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere}
+.discovery-role-footer{margin-top:auto;align-items:center}
+.discovery-dialog :is(button,input):focus-visible{outline:2px solid var(--teal);outline-offset:3px}
+.discovery-empty{margin:20px 0 32px;font-size:14px;color:var(--muted);text-align:center}
+@media(max-width:600px){.discovery-toolbar{gap:8px}.discovery-toolbar>strong{flex-basis:100%}.discovery-toolbar .discovery-budget{flex:0 0 auto}.discovery-toolbar button{padding-inline:12px}.discovery-dialog{max-height:calc(100dvh - 24px);width:calc(100vw - 24px)}.discovery-dialog-head{padding:16px}.discovery-dialog-filter{padding:0 16px 12px}.discovery-dialog-progress{padding:0 16px 12px}.discovery-dialog-results{padding:0 16px 8px}.discovery-dialog-filter input{font-size:16px}}
 #insightWorkflow :is(button,input,select,summary):focus-visible{outline:2px solid var(--teal);outline-offset:3px}
 #insightWorkflow [hidden]{display:none}
 @media(max-width:600px){

@@ -15,9 +15,8 @@ export function createLiveAssistantRun(item,{labels={},renderMarkdown,onUpdate=(
   panel.className='assistant-live-run';panel.open=true;panel.dataset.state='running';
   const summary=document.createElement('summary'),title=document.createElement('span'),clock=document.createElement('small');
   title.textContent='正在开始本轮任务';title.setAttribute('role','status');clock.setAttribute('aria-hidden','true');summary.append(title,clock);
-  const note=document.createElement('p');note.className='assistant-live-note';note.textContent='实时执行摘要 · 不展示模型内部思维链';
   const plan=document.createElement('p');plan.className='assistant-live-plan';plan.hidden=true;
-  const list=document.createElement('ol');list.className='assistant-live-tools';panel.append(summary,note,plan,list);text.before(panel);text.textContent='';item.setAttribute('aria-busy','true');
+  const list=document.createElement('ol');list.className='assistant-live-tools';panel.append(summary,plan,list);text.before(panel);text.textContent='';item.setAttribute('aria-busy','true');
   const entries=new Map(),began=Date.now();let buffer='',shown=0,timer=null,started=0,ended=false;
   const tick=setInterval(()=>{clock.textContent=`${Math.floor((Date.now()-began)/1000)} 秒`;},1000);
   function draw(){

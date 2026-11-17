@@ -7,20 +7,19 @@ const run={role:'数据分析',targeted:true,labeled:400,sampled:400,budget:.5,
   evaluation:{test:metrics,counts:{train:{n:420},validation:{n:120},test:{n:80}},excluded_rows:70,
     comparison:[{name:'旧候选',metrics},{name:'新候选',metrics}]}};
 
-test('targeted evaluation identifies fresh holdout, reused labels and excluded old test',()=>{
+test('result retains the F1 summary without detailed evaluation and usage panels',()=>{
   const html=renderClassifierMetrics(run);
-  assert.match(html,/新留出测试/);
-  assert.match(html,/本轮新增 400 条/);
-  assert.match(html,/旧测试 70 条不参与训练或调参/);
-  assert.match(html,/同一批新测试样本对照/);
-  assert.match(html,/非人工准确率/);
+  assert.match(html,/测试 F1 · 对 Qwen 标签/);
+  assert.match(html,/90\.0%/);
+  assert.doesNotMatch(html,/评测与用量|留出测试|验证集|classifier-metric-details|classifier-comparison|Token/);
+  assert.equal(run.evaluation.test,metrics);
 });
 
 test('comparison labels are escaped and metrics render without adding analysis controls',()=>{
   const data=structuredClone(run);data.evaluation.comparison[0].name='<script>injection</script>';
   const html=renderClassifierMetrics(data);
   assert.doesNotMatch(html,/<script>/);
-  assert.match(html,/&lt;script&gt;/);
+  assert.doesNotMatch(html,/injection/);
   assert.doesNotMatch(html,/<button/);
 });
 

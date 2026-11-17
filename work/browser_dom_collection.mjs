@@ -60,6 +60,10 @@ export async function clickNextBrowserPage(page){
   if(await next.isDisabled()||await next.getAttribute('aria-disabled')==='true'||/disabled/.test(await next.getAttribute('class')||''))return false;
   await next.click({timeout:15000});return true;
 }
+export async function browserLastPageConfirmed(page){
+  const next=page.getByRole('button',{name:/^(下一页|下页|Next)$/i}).or(page.getByRole('link',{name:/^(下一页|下页|Next)$/i})).first();
+  return await next.count()>0&&await next.isVisible()&&(await next.isDisabled()||await next.getAttribute('aria-disabled')==='true'||/disabled/.test(await next.getAttribute('class')||''));
+}
 const readJSON=file=>fs.readFile(file,'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
 async function openDomContext(platform){
   assertBrowserPlatform(platform);await assertCollectorResources();
@@ -69,8 +73,8 @@ async function openDomContext(platform){
   // Do not import personal profiles, proxies, cookies or stealth extensions.
   return chromium.launchPersistentContext(profile,{headless:false,chromiumSandbox:true,viewport:null,locale:'zh-CN',executablePath:await resolveBrowserExecutable('standard')});
 }
-export async function collectBrowserDom({platform,taskId,outputDir,combinations,maxPages=3,maxRows=200,taskTargetRows=0,stateDir,request={},contextFactory=openDomContext,resourceGuard=assertCollectorResources,step,spec=browserDomSpecs[platform],log=console.log}={}){
-  if(!spec||!Number.isSafeInteger(maxPages)||maxPages<1||maxPages>50||!Number.isSafeInteger(maxRows)||maxRows<1||maxRows>10000)throw new ChannelError('浏览器分页/条数预算无效','invalid_config');
+export async function collectBrowserDom({platform,taskId,outputDir,combinations,maxPages=Infinity,maxRows=Infinity,taskTargetRows=0,stateDir,request={},contextFactory=openDomContext,resourceGuard=assertCollectorResources,step,spec=browserDomSpecs[platform],log=console.log}={}){
+  if(!spec||![maxPages,maxRows].every(value=>value===Infinity||Number.isSafeInteger(value)&&value>0))throw new ChannelError('浏览器采集参数无效','invalid_config');
   await assertTaskOutputOwnership({id:taskId,outputDir});await resourceGuard();
   if(!step)await assertBrowserAccess(platform,stateDir);
   const rate=step||((action)=>withBrowserStep(platform,stateDir,action,request));
@@ -106,7 +110,7 @@ export async function collectBrowserDom({platform,taskId,outputDir,combinations,
       const file=browserCheckpointPath(outputDir,platform,keyword,city),saved=await readJSON(file);
       await fs.mkdir(path.dirname(file),{recursive:true});
       if(saved&&saved.task_id!==taskId)throw new ChannelError('RPA 断点任务归属不匹配','TASK_OUTPUT_OWNERSHIP');
-      if(saved?.completed||saved?.budget_finished)continue;
+      if(saved?.completed||saved?.budget_finished&&Number.isFinite(maxPages)&&Number.isFinite(maxRows))continue;
       let lastSignature='',completed=false,budgetFinished=false,pageNo=1,stopReason=null;
       const records=new Map((saved?.records||[]).map(r=>[String(r.job_id),r]));
       const save=()=>writeJsonAtomic(file,{task_id:taskId,platform,keyword,city,records:[...records.values()],lastPage:pageNo,completed,budget_finished:budgetFinished,stop_reason:stopReason,acquisition_mode:'browser_dom',updatedAt:new Date().toISOString()});
@@ -137,9 +141,12 @@ export async function collectBrowserDom({platform,taskId,outputDir,combinations,
           if(enough()||pageNo===maxPages){budgetFinished=true;await save();break;}
           const next=await rate(async()=>{await check(listPage);const clicked=await clickNextBrowserPage(listPage);if(clicked)await listPage.waitForTimeout(800);await check(listPage);return clicked;});
           // Absence of an adapted next button is not proof of source exhaustion.
-          if(!next){budgetFinished=true;await save();break;}await save();
+          if(!next){
+            if(await browserLastPageConfirmed(listPage)){completed=true;stopReason='source_finished';await save();break;}
+            throw new ChannelError('当前页面未识别到下一页，保留已采数据；尚未确认平台结果全部取完','pagination_end_unverified');
+          }await save();
         }
-      }catch(error){stopReason=error.code||'navigation_error';await save();const scoped=['pagination_stalled','empty_unverified'].includes(error.code);errors.push({keyword,city,code:stopReason,stopChannel:!scoped});if(!scoped)throw error;}
+      }catch(error){stopReason=error.code||'navigation_error';await save();const scoped=['pagination_stalled','empty_unverified','pagination_end_unverified'].includes(error.code);errors.push({keyword,city,code:stopReason,stopChannel:!scoped});if(!scoped)throw error;}
     }
   }catch(error){if(!step)await recordBrowserDenial(platform,stateDir,error.code);if(!errors.some(e=>e.code===error.code))errors.push({code:error.code||'navigation_error',stopChannel:true});}
   finally{await listPage?.close().catch(()=>{});await detailPage?.close().catch(()=>{});await context?.close().catch(()=>{});}

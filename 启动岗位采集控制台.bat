@@ -1,37 +1,19 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-
-set "JOB_UI_PORT=8765"
-set "JOB_UI_OPEN_BROWSER=1"
-set "JOB_NODE="
-
-if defined JOB_UI_NODE set "JOB_NODE=%JOB_UI_NODE%"
-if not defined JOB_NODE if exist "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" set "JOB_NODE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
-if not defined JOB_NODE for /f "delims=" %%I in ('where node.exe 2^>nul') do if not defined JOB_NODE set "JOB_NODE=%%I"
-
-if not defined JOB_NODE (
-  echo [ERROR] Node.js runtime was not found.
-  echo Install Node.js or set JOB_UI_NODE to node.exe.
+set "JOB_UI_PORT=8788"
+if not exist "E:\Codex\work\job-fastapi\venv\Scripts\python.exe" (
+  echo [ERROR] FastAPI runtime is not installed.
+  echo Run: powershell -ExecutionPolicy Bypass -File job_collector_ui\backend\start.ps1 -Install
   pause
   exit /b 1
 )
-
-if not exist "%JOB_NODE%" (
-  echo [ERROR] Node.js runtime does not exist:
-  echo %JOB_NODE%
-  pause
-  exit /b 1
-)
-
-echo Starting Job Collector Console...
-"%JOB_NODE%" "job_collector_ui\server.mjs" %JOB_UI_PORT%
+set "PYTHONDONTWRITEBYTECODE=1"
+set "JOB_API_RUNTIME=E:\Codex\work\job-fastapi\runtime"
+set "TEMP=E:\Codex\work\job-fastapi\temp"
+set "TMP=%TEMP%"
+if not exist "%TEMP%" mkdir "%TEMP%"
+"E:\Codex\work\job-fastapi\venv\Scripts\python.exe" -B "job_collector_ui\backend\run.py" --port %JOB_UI_PORT%
 set "JOB_EXIT_CODE=%ERRORLEVEL%"
-
-if not "%JOB_EXIT_CODE%"=="0" (
-  echo.
-  echo The console exited with code %JOB_EXIT_CODE%. See the error above.
-  pause
-)
-
+if not "%JOB_EXIT_CODE%"=="0" pause
 exit /b %JOB_EXIT_CODE%

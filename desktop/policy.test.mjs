@@ -15,7 +15,9 @@ test('local workspace only; no credentials or external origin',()=>{
 });
 test('desktop active tab follows local route including SPA and task detail',()=>{
   const base='http://127.0.0.1:8788';
-  for(const [url,expected] of [['/tasks','tasks'],['/tasks/123','tasks'],['/insights','insights'],['/browser','browser'],['/?view=assistant','assistant'],['/unknown',null]])assert.equal(workspaceViewForURL(base+url,base),expected);
+  assert.equal(workspaceURL(base,'matching'),base+'/matching');
+  assert.equal(workspaceViewForURL(base+'/matching',base),'matching');
+  for(const [url,expected] of [['/tasks','tasks'],['/tasks/123','tasks'],['/insights','insights'],['/browser','tasks'],['/?view=assistant','assistant'],['/unknown',null]])assert.equal(workspaceViewForURL(base+url,base),expected);
   assert.equal(workspaceViewForURL('https://www.zhipin.com/browser',base),null);
 });
 test('recruiting navigation exact domains and HTTPS; blank is never fallback',()=>{
@@ -29,5 +31,5 @@ test('website resources cannot reach localhost/private IP or files',()=>{
 test('native viewport leaves trusted toolbar/panel unobscured',()=>{
   assert.deepEqual(viewBounds(1440,900,'browser'),{x:0,y:152,width:1100,height:722});
   assert.deepEqual(viewBounds(1440,900,'workspace'),{x:0,y:56,width:1440,height:818});
-  assert.equal(COMMANDS.has('executeJavaScript'),false);assert.equal(COMMANDS.has('send'),false);assert.equal(COMMANDS.has('classify'),true);
+  assert.equal(COMMANDS.has('executeJavaScript'),false);assert.equal(COMMANDS.has('send'),false);assert.deepEqual([...COMMANDS],['state','workspace']);
 });

@@ -25,6 +25,7 @@ export async function prepareStructuredCollection(task){
   }
   config.request={...request,concurrency:1,platformConcurrency:2,minimumIntervalMs:Math.max(policy.minimumIntervalMs,Number(request.minimumIntervalMs)||0),attempts:Math.min(2,Math.max(1,Number(request.attempts)||2))};
   config.acquisitionMode=policy.mode;config.transportMode=collectionMode(task);config.collectionTransportPolicy=policy;
+  if(policy.mode===HYBRID_MODE&&JSON.stringify(config.browser)!==JSON.stringify({limitMode:'source_or_target'})){config.browser={limitMode:'source_or_target'};changes.push('浏览器改为按任务目标或平台可访问分页边界采集，移除旧单轮页数与条数限制');}
   config.taskTargetRows=task.collectUntilExhausted?0:task.targetRows;config.collectUntilExhausted=!!task.collectUntilExhausted;config.apiExecutionVersion=3;
   if(before!==JSON.stringify(config)){await writeJsonAtomic(task.publicConfigPath,config);changes.push(policy.mode===HYBRID_MODE?'接口优先；已适配渠道可回退可见页面 RPA；验证/拒绝访问不自动回退，浏览器串行':'HTTP 核验数据为主；就业在线使用官网登录会话，共享限速、验证即停');}
   return {changes,policy,channels:(task.platforms||[]).filter(key=>channelAcquisition[key]&&collectionChannelAvailable(key,task)).map(key=>({key,...channelAcquisition[key],maxPages:config.platforms?.[key]?.maxPages??null,maxRows:config.platforms?.[key]?.maxRows??null}))};

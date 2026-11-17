@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
-import {classifierCredentials,QWEN_ENDPOINT,QWEN_MODEL} from './insight-supervised.mjs';
+import {managedComputeEnabled,startManagedCompute} from './managed-compute.mjs';
+import {classifierCredentials,QWEN_ENDPOINT,QWEN_MODEL,QWEN_PRICING} from './insight-supervised.mjs';
 import {renameWithSharingRetry} from './collector_storage.mjs';
 import {interviewAnnotationPrompt,interviewAnnotationSample,interviewSourceHash,validateInterviewAnnotations} from './interview-qwen-annotation.mjs';
 import {loadInterviewRoleClassifier,prepareInterviewClassifierInput} from './interview-role-classifier.mjs';
@@ -37,7 +38,7 @@ export function createInterviewSupervised(dataDir,{directory=interviewClassifier
     const python=path.join(root,'work/role_screening_env/Scripts/python.exe');
     await fs.access(python);
     await new Promise((resolve,reject)=>{
-      const child=spawn(python,['-B',path.join(root,'work/train_interview_qwen.py'),stage,folder],{cwd:root,windowsHide:true,env:{...process.env,TEMP:directory,TMP:directory,PYTHONUTF8:'1',PYTHONDONTWRITEBYTECODE:'1'},stdio:['ignore','pipe','pipe']});
+      const child=managedComputeEnabled()?startManagedCompute('interview_'+stage,{folder}):spawn(python,['-B',path.join(root,'work/train_interview_qwen.py'),stage,folder],{cwd:root,windowsHide:true,env:{...process.env,TEMP:directory,TMP:directory,PYTHONUTF8:'1',PYTHONDONTWRITEBYTECODE:'1'},stdio:['ignore','pipe','pipe']});
       active.child=child;let error='';child.stdout.resume();child.stderr.on('data',b=>{error=(error+b.toString()).slice(-2000);});
       const stop=()=>child.kill('SIGTERM');signal.addEventListener('abort',stop,{once:true});
       child.once('error',()=>{signal.removeEventListener('abort',stop);reject(Error('面经训练进程无法启动'));});
@@ -68,7 +69,7 @@ export function createInterviewSupervised(dataDir,{directory=interviewClassifier
     const history=await Promise.all(index.filter(r=>!taskId||r.taskId===taskId).slice(0,1000).map(r=>read(path.join(runPath(r.id),'state.json'),null)));
     const totals=history.filter(Boolean).reduce((a,r)=>({runs:a.runs+1,promptTokens:a.promptTokens+r.promptTokens,completionTokens:a.completionTokens+r.completionTokens,costEstimate:a.costEstimate+r.costEstimate,unknownUsageRequests:a.unknownUsageRequests+r.unknownUsageRequests+(r.inFlight?1:0)}),{runs:0,promptTokens:0,completionTokens:0,costEstimate:0,unknownUsageRequests:0});
     const enabled=await read(activeFile,null),published=await read(publishedFile,null);
-    return {role,model:QWEN_MODEL,credentials:await credentials.status(),run:await publicRun(run),busy,busyTaskId:active?.taskId||index.find(r=>r.id===lock?.id)?.taskId||null,totals,benchmark,activeModel:enabled?{id:enabled.id,version:enabled.version,role:enabled.role}:null,publishedRun:published?.id||null,limits:{minSamples:60,maxSamples:1000,maxBudget:20},pricing:{input_per_million:.2,output_per_million:.8,basis:'配置单价估算，非实际账单；不扣缓存折扣'},workflow:'Qwen标注→自动证据校验→训练→Codex参考标签离线回归；无Codex复核环节'};
+    return {role,model:QWEN_MODEL,credentials:await credentials.status(),run:await publicRun(run),busy,busyTaskId:active?.taskId||index.find(r=>r.id===lock?.id)?.taskId||null,totals,benchmark,activeModel:enabled?{id:enabled.id,version:enabled.version,role:enabled.role}:null,publishedRun:published?.id||null,limits:{minSamples:60,maxSamples:1000,maxBudget:20},pricing:{...QWEN_PRICING,basis:'配置单价估算，非实际账单；不扣缓存折扣'},workflow:'Qwen标注→自动证据校验→训练→Codex参考标签离线回归；无Codex复核环节'};
   }
   async function execute(run,ref,signal){
     let key='';
@@ -97,7 +98,7 @@ export function createInterviewSupervised(dataDir,{directory=interviewClassifier
         await update(run,{requestsStarted:run.requestsStarted+1,inFlight:true,inFlightReservation:reserved});
         let payload;
         try{
-          const response=await fetcher(QWEN_ENDPOINT,{method:'POST',redirect:'error',headers:{authorization:'Bearer '+key,'content-type':'application/json'},signal:AbortSignal.any([signal,AbortSignal.timeout(90000)]),body:JSON.stringify({model:QWEN_MODEL,messages,temperature:0,enable_thinking:false,max_tokens:maxTokens,response_format:{type:'json_object'}})});
+          const response=await fetcher(QWEN_ENDPOINT,{method:'POST',redirect:'error',headers:{authorization:'Bearer '+key,'content-type':'application/json'},signal:AbortSignal.any([signal,AbortSignal.timeout(90000)]),body:JSON.stringify({model:run.model,messages,temperature:0,enable_thinking:false,max_tokens:maxTokens,response_format:{type:'json_object'}})});
           if(!response.ok)throw Error('Qwen返回HTTP '+response.status);
           payload=await response.json();
           const usage=payload.usage;
@@ -117,7 +118,7 @@ export function createInterviewSupervised(dataDir,{directory=interviewClassifier
         if(payload.choices?.[0]?.finish_reason!=='stop')throw Error('Qwen响应被截断，用量已记录，不采用标签');
         let parsed;try{parsed=JSON.parse(payload.choices[0].message.content);}catch{throw Error('Qwen未返回合法JSON，用量已记录，不自动重试');}
         labeled.push(...validateInterviewAnnotations(parsed,batch));
-        await save(path.join(folder,'samples.json'),{id:run.id,role,referenceSha256:ref.sha256,annotation:'Qwen3.7-Flash only; Codex labels are reference-only',samples:labeled});
+        await save(path.join(folder,'samples.json'),{id:run.id,role,referenceSha256:ref.sha256,model:run.model,annotation:run.model+' only; Codex labels are reference-only',samples:labeled});
         await update(run,{labeled:labeled.length,positive:labeled.filter(r=>r.label==='include').length,negative:labeled.filter(r=>r.label==='exclude').length,review:labeled.filter(r=>r.label==='review').length,materialCounts:Object.fromEntries(['single_interview','interview_collection','reference_guide','promotion','uncertain'].map(type=>[type,labeled.filter(r=>r.material_type===type).length])),tagCount:labeled.reduce((n,r)=>n+r.tags.length,0)});
         if(labeled.length>=20&&run.positive+run.negative<labeled.length*.25)throw Error('有效标签不足25%，停止后续付费请求');
       }
@@ -135,7 +136,7 @@ export function createInterviewSupervised(dataDir,{directory=interviewClassifier
   return {
     directory,credentials,status,
     async dispose(){if(active){active.controller.abort();active.child?.kill('SIGTERM');}},
-    async start({taskId,sampleCount=200,budget=.5,inputPrice=.2,outputPrice=.8,confirmed=false}={}){
+    async start({taskId,sampleCount=200,budget=.5,inputPrice=QWEN_PRICING.input_per_million,outputPrice=QWEN_PRICING.output_per_million,confirmed=false}={}){
       if(confirmed!==true)throw Error('需要明确同意向Qwen发送脱敏公开面经及本轮预算');
       if(active)throw Error('已有面经模型任务运行中');
       if(typeof taskId!=='string'||!taskId||taskId.length>250||!Number.isSafeInteger(sampleCount)||sampleCount<60||sampleCount>1000||!Number.isFinite(budget)||budget<=0||budget>20||![inputPrice,outputPrice].every(p=>Number.isFinite(p)&&p>0&&p<=100))throw Error('请选择任务；样本60–1000，预算0–20元，单价须有效');

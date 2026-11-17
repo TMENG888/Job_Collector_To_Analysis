@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {spawn} from 'node:child_process';
+import {managedComputeEnabled,startManagedCompute} from './managed-compute.mjs';
 import {randomUUID} from 'node:crypto';
 import {writeJsonAtomic} from './collector_storage.mjs';
 import {knowledgeDatabasePath} from './knowledge_storage.mjs';
@@ -56,7 +57,7 @@ export function createRoleDiscovery(dataDir,{directory=process.env.JOB_ROLE_DISC
     if(os.freemem()<1024**3)throw Error('可用内存不足1GB，未启动全库聚类');
     const root=path.resolve(import.meta.dirname,'..'),python=path.join(root,'work/role_screening_env/Scripts/python.exe');await fs.access(python);
     await new Promise((resolve,reject)=>{
-      const child=spawn(python,['-B',path.join(root,'work/discover_job_clusters.py'),knowledgeDatabasePath(dataDir),output],{windowsHide:true,cwd:root,env:{...process.env,TEMP:directory,TMP:directory,PYTHONDONTWRITEBYTECODE:'1',PYTHONUTF8:'1',OMP_NUM_THREADS:'2',OPENBLAS_NUM_THREADS:'2'},stdio:['ignore','pipe','pipe']});active.child=child;
+      const child=managedComputeEnabled()?startManagedCompute('cluster',{outputFile:output}):spawn(python,['-B',path.join(root,'work/discover_job_clusters.py'),knowledgeDatabasePath(dataDir),output],{windowsHide:true,cwd:root,env:{...process.env,TEMP:directory,TMP:directory,PYTHONDONTWRITEBYTECODE:'1',PYTHONUTF8:'1',OMP_NUM_THREADS:'2',OPENBLAS_NUM_THREADS:'2'},stdio:['ignore','pipe','pipe']});active.child=child;
       let errors='';child.stdout.resume();child.stderr.on('data',b=>{errors=(errors+b.toString()).slice(-1000);});
       const abort=()=>child.kill(),timer=setTimeout(()=>child.kill(),15*60*1000);signal.addEventListener('abort',abort,{once:true});
       child.once('error',reject);child.once('close',code=>{clearTimeout(timer);signal.removeEventListener('abort',abort);code===0?resolve():reject(Error(signal.aborted?'聚类已停止':'聚类未完成或超过15分钟：'+errors));});

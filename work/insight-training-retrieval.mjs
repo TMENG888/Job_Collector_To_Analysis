@@ -1,14 +1,14 @@
 import {DatabaseSync} from 'node:sqlite';
 import {setImmediate as yieldToLoop} from 'node:timers/promises';
 import {knowledgeDatabasePath} from './knowledge_storage.mjs';
-import {samplingRetrieval,retrievalMatch} from './insight-sampling.mjs';
+import {samplingRetrieval,retrievalMatch,CLASSIFIER_SAMPLE_COUNT} from './insight-sampling.mjs';
 
 function reservoir(capacity,seed){
   let count=0,state=seed;const rows=[];
   return {rows,add(row){count++;if(rows.length<capacity){rows.push(row);return;}state=(Math.imul(state,1664525)+1013904223)>>>0;const at=Math.floor(state/4294967296*count);if(at<capacity)rows[at]=row;}};
 }
 
-export async function readLibraryTrainingPool(dataDir,{schema,role,keywords='',sampleCount=400,signal,onProgress,database}={}){
+export async function readLibraryTrainingPool(dataDir,{schema,role,keywords='',sampleCount=CLASSIFIER_SAMPLE_COUNT,signal,onProgress,database}={}){
   if(!Number.isInteger(sampleCount)||sampleCount<120||sampleCount>2000)throw Error('全库训练抽样须为120–2000条');
   const db=new DatabaseSync(database||knowledgeDatabasePath(dataDir),{readOnly:true});
   const retrieval=samplingRetrieval(schema,role,keywords),capacity=sampleCount*4;

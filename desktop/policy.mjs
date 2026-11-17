@@ -6,7 +6,7 @@ export const BROWSER_HEIGHT = 152;
 export const FOOTER_HEIGHT = 26;
 export const PANEL_WIDTH = 340;
 export const MAX_TABS = 8;
-export const COMMANDS = new Set(['state','workspace','browser','open','select','close','navigate','back','forward','reload','stop','read','models','classify','recruiter-state','recruiter-upload','recruiter-preview','recruiter-ack','recruiter-plan','recruiter-start','recruiter-cancel','recruiter-clear']);
+export const COMMANDS = new Set(['state','workspace']);
 
 export function checkedBaseURL(value = 'http://127.0.0.1:8788') {
   const u = new URL(value);
@@ -14,7 +14,7 @@ export function checkedBaseURL(value = 'http://127.0.0.1:8788') {
   return u.origin;
 }
 export function workspaceURL(base, route) {
-  const routes = {tasks:'/tasks', insights:'/insights', assistant:'/?view=assistant'};
+  const routes = {tasks:'/tasks', insights:'/insights', matching:'/matching', assistant:'/?view=assistant'};
   if (!Object.hasOwn(routes, route)) throw Error('未知工作台页面');
   return checkedBaseURL(base) + routes[route];
 }
@@ -26,7 +26,8 @@ export function workspaceViewForURL(value, base) {
   const u = new URL(value);
   if (u.searchParams.get('view') === 'assistant') return 'assistant';
   const first = u.pathname.split('/').filter(Boolean)[0];
-  if (['tasks','insights','browser'].includes(first)) return first;
+  if (['tasks','insights','matching'].includes(first)) return first;
+  if(first==='browser')return 'tasks';
   return u.pathname === '/' ? 'tasks' : null;
 }
 export function recruitingURL(value) {return safeBrowserURL(value);}
@@ -37,9 +38,9 @@ export function allowRecruitingResource(value) {
   // Do not expose the local control API, files or internal-network addresses to websites.
   return publicResourceURL(value) && new URL(value).protocol === 'https:';
 }
-export function viewBounds(width, height, mode) {
-  const top = mode === 'browser' ? BROWSER_HEIGHT : SHELL_HEIGHT;
-  return {x:0, y:top, width:Math.max(0, width - (mode === 'browser' ? PANEL_WIDTH : 0)), height:Math.max(0, height-top-FOOTER_HEIGHT)};
+export function viewBounds(width, height, mode, zoomFactor=1) {
+  const top = Math.round((mode === 'browser' ? BROWSER_HEIGHT : SHELL_HEIGHT)*zoomFactor);
+  return {x:0, y:top, width:Math.max(0, width - (mode === 'browser' ? Math.round(PANEL_WIDTH*zoomFactor) : 0)), height:Math.max(0, height-top-Math.round(FOOTER_HEIGHT*zoomFactor))};
 }
 export function navigationDecision(value) {
   // about:blank is never used as recovery navigation: leave the current page intact.

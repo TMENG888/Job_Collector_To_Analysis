@@ -9,7 +9,7 @@ import {updateCareerGoal,hiringCohorts,cohortNeedsReview,matchesCareerGoal} from
 
 assert.equal(normalizeSalary('7千-1.4万').midpoint,10500);
 assert.equal(normalizeSalary('9.9-9.9千').midpoint,9900);
-assert.equal(normalizeSalary('200元/天'),null);assert.equal(normalizeSalary('35万元/年'),null);
+assert.equal(normalizeSalary('200元/天').midpoint,4350);assert.equal(normalizeSalary('35万元/年'),null);
 assert.equal(updateCareerGoal('找2027届秋招，不要使用实习岗位填充').stage,'campus');
 assert.equal(updateCareerGoal('找秋招，不要用实习岗位填充').stage,'campus');
 assert.deepEqual(hiringCohorts({job_name:'AI算法工程师【2026年应届毕业生】'}),[2026]);

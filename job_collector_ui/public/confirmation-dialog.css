@@ -1,0 +1,7 @@
+.action-confirm-dialog { box-sizing:border-box; inset:0; margin:auto; width:244px; min-width:0; max-width:calc(100vw - 32px); height:fit-content; padding:16px; border:1px solid var(--line); border-radius:10px; background:var(--paper); color:var(--ink); box-shadow:0 12px 36px #173b3026; }
+.action-confirm-dialog::backdrop { background:#183c302b; backdrop-filter:none; }
+.action-confirm-dialog.has-message { width:340px; padding:20px; }
+.action-confirm-dialog p { margin:0 0 20px; font-size:14px; line-height:1.6; overflow-wrap:anywhere; }
+.action-confirm-dialog form { display:flex; align-items:center; gap:12px; margin:0; padding:0; }
+.action-confirm-dialog button { flex:1; min-width:0; min-height:44px; padding:9px 14px; font-size:14px; }
+.action-confirm-dialog button:focus-visible { outline:2px solid var(--teal); outline-offset:3px; }

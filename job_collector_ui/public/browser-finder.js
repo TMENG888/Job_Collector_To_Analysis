@@ -1,7 +1,8 @@
+import {confirmAction} from './confirmation-dialog.js?v=20261112-clear-prompts';
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function confirmDeliveryPreview(root,preview,summary){
   const dialog=document.createElement('dialog');dialog.className='jb-confirm jb-batch-confirm';dialog.dataset.jbfAuthorize='';dialog.dataset.resumeRevision=preview.revision;
-  dialog.innerHTML='<h2>核对原版式简历与本批发送范围</h2><p data-summary></p><div class="jb-batch-pages" data-pages tabindex="0"></div><label><input type="checkbox" data-consent disabled> 我已核对全部页面，同意将含原始个人信息的简历截图发送给本批匹配岗位的招聘方。</label><p data-preview-note>请滚动核对全部页面后勾选授权。</p><div class="jb-row"><button type="button" data-cancel>取消</button><button type="button" class="primary" data-confirm disabled>授权本批发送</button></div>';
+  dialog.innerHTML='<h2>核对原版式简历与本批发送范围</h2><p data-summary></p><div class="jb-batch-pages" data-pages tabindex="0"></div><label><input type="checkbox" data-consent disabled> 我已核对全部页面，同意将含原始个人信息的简历截图发送给本批匹配岗位的招聘方。</label><p data-preview-note>请滚动核对全部页面后勾选授权。</p><div class="jb-row"><button type="button" data-cancel>取消</button><button type="button" class="primary" data-confirm disabled>确认</button></div>';
   dialog.querySelector('[data-summary]').textContent=summary;
   const pages=dialog.querySelector('[data-pages]'),consent=dialog.querySelector('[data-consent]'),confirm=dialog.querySelector('[data-confirm]');
   for(const p of preview.pages){const label=document.createElement('p');label.textContent=`原始PDF第${p.page}页 / 共${preview.pages.length}页`;const image=document.createElement('img');image.src='data:'+p.mime+';base64,'+p.base64;image.alt=label.textContent;pages.append(label,image);}
@@ -32,7 +33,7 @@ export function installBrowserFinder({root,post,refresh,note}){
     if(html!==resultsHTML){resultsHTML=html;$('[data-jbf-results]').innerHTML=html;}
   }
   async function generate(){
-    if(!confirm('将脱敏简历发送给Qwen生成最多3组搜索词，会产生少量Token费用。不会搜索或发送招呼。继续？'))return;
+    if(!await confirmAction('从简历生成搜索词'))return;
     models=(await post('finder-models')).models;await post('finder-plan');note('搜索方案已生成，请核对岗位方向、搜索词和预算');
   }
   $('[data-jbf-plan]').onclick=guard(generate);
@@ -48,7 +49,7 @@ export function installBrowserFinder({root,post,refresh,note}){
       const max=Number($('[data-jbf-recipients]').value),interval=Number($('[data-jbf-interval]').value);
       if(!await confirmDeliveryPreview(root,preview,'搜索词：'+queries.map(q=>q.keyword).join('、')+'。最多尝试'+max+'个新岗位，间隔至少'+interval+'秒。先通过监督分类和证据覆盖门槛，再发送AI选取简历证据组成的招呼及全部原版式截图。网站“立即沟通”可能先发默认招呼。模型读取脱敏简历/JD并计费；结果不明即停，不自动重发。授权20分钟有效，可随时停止。'))return;
       delivery={enabled:true,confirmed:true,planId,resumeRevision:preview.revision,documentHash:preview.documentHash,maxRecipients:max,intervalSeconds:interval};
-    }else if(!confirm('将在普通浏览器BOSS中自动搜索、读取本批JD，先监督分类、再付费匹配并生成草稿。不自动发送、投递或处理验证。继续？'))return;
+    }else if(!await confirmAction('搜索并匹配岗位'))return;
     await post('finder-start',{planId,queries,delivery,maxCandidates:Number($('[data-jbf-count]').value),minCoverage:Number($('[data-jbf-coverage]').value)/100,city:$('[data-jbf-city]').value,budget:Number($('[data-jbf-budget]').value)});note('本批已启动；可停止，遇到验证或页面切换会停止');
   });
   $('[data-jbf-cancel]').onclick=async()=>{try{await post('finder-cancel');await refresh();}catch(e){note(e.message,true);}};

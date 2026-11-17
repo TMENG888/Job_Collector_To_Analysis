@@ -9,6 +9,7 @@ for(const [raw,period,min,max,pay] of [
   ['15-25K·14薪','month',15000,25000,14],['1.5万-2万/月·14薪','month',15000,20000,14],
   ['20-30万元/年','year',200000,300000,null],['10000-15000元/月','month',10000,15000,null],
   ['15-20K·13-16薪','month',15000,20000,13],
+  ['1-1.5万','month',10000,15000,null],['1万-1.5万','month',10000,15000,null],
 ]){const s=parseOriginalSalary(raw);assert.equal(s.period,period,raw);assert.equal(s.min,min,raw);assert.equal(s.max,max,raw);assert.equal(s.pay_months?.min??null,pay,raw);}
 for(const raw of ['35万','面议','13薪',''])assert.equal(parseOriginalSalary(raw),null,raw);
 assert.equal(parseOriginalSalary('15-25K').annual_nominal,null);

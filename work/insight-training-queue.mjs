@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {writeJsonAtomic} from './collector_storage.mjs';
-import {trainingKeywords} from './insight-sampling.mjs';
+import {trainingKeywords,CLASSIFIER_SAMPLE_COUNT} from './insight-sampling.mjs';
 
 const running=new Set(['drafting','retrieving','labeling','training','cancelling']);
 const finished=new Set(['completed','rejected','needs_samples','failed','cancelled','interrupted']);
@@ -19,11 +19,14 @@ export function createInsightTrainingQueue({directory,service,pollMs=1000,now=()
   const mutate=fn=>{const op=serial.then(async()=>{await ready();const result=await fn();await persist();return structuredClone(result);});serial=op.catch(()=>{});return op;};
   const find=id=>{const job=state.jobs.find(j=>j.id===id);if(!job)throw Error('训练任务不存在');return job;};
   const update=(id,patch)=>mutate(()=>Object.assign(find(id),patch,{updatedAt:now()}));
-  async function execute(id){
+  async function execute(id,resuming=false){
     try{
       let job=find(id);
       const check=()=>{if(find(id).cancelRequested)throw Error('queue_cancelled');};
       if(!(await service.credentials.status()).configured)throw Error('请先配置Qwen标注密钥');
+      let run;
+      if(resuming){check();run=await service.resume(job.runId,{confirmed:true});}
+      else{
       const scope={inputFile:job.inputFile,role:job.role},schemaState=await service.schemas.status(scope.inputFile,scope.role);
       check();
       const notes=job.keywords?'用户输入的岗位检索关键词：'+job.keywords:'';
@@ -39,9 +42,10 @@ export function createInsightTrainingQueue({directory,service,pollMs=1000,now=()
       await update(id,{status:'retrieving',message:'按扩展检索词扫描全岗位库，保留目标、相近和随机候选'});
       const preview=await service.previewSampling(scope.inputFile,scope.role,job.sampleCount,{trainingScope:'all',keywords:job.keywords||''});
       await update(id,{retrieval:preview.sampling?.retrieval,library:preview.sampling?.library,sampling:preview.sampling});
-      if(!preview.canStart){await update(id,{status:'needs_samples',message:'可用去重样本不足120条，保留任务和已起草规范，不继续付费'});return;}
+      if(!preview.canStart){await update(id,{status:'needs_samples',message:'可用去重样本不足500条，保留任务和已起草规范，不继续付费'});return;}
       check();
-      const run=await service.start({...scope,sampleCount:job.sampleCount,budget:job.labelBudget,jointAnnotations:true,trainingScope:'all',trainingKeywords:job.keywords||''});
+      run=await service.start({...scope,sampleCount:job.sampleCount,budget:job.labelBudget,jointAnnotations:true,trainingScope:'all',trainingKeywords:job.keywords||''});
+      }
       await update(id,{status:'labeling',runId:run.id,message:'Qwen联合标注，随后训练与隔离评测'});
       const deadline=Date.now()+2*60*60*1000;
       while(Date.now()<deadline){
@@ -60,20 +64,31 @@ export function createInsightTrainingQueue({directory,service,pollMs=1000,now=()
     finally{active=null;}
   }
   return {
-    async list(){await serial;await ready();return {workflow:'keyword-training-v1',trainingScope:'all',autoCreate:true,autoExecute:false,busy:!!active,jobs:structuredClone(state.jobs.filter(job=>!isRetired(job.role,job.createdAt))),defaults:{sampleCount:400,schemaBudget:.1,labelBudget:1.9}};},
+    async list(){await serial;await ready();return {workflow:'keyword-training-v1',trainingScope:'all',autoCreate:true,autoExecute:false,resume:true,busy:!!active,jobs:structuredClone(state.jobs.filter(job=>!isRetired(job.role,job.createdAt))),defaults:{sampleCount:CLASSIFIER_SAMPLE_COUNT,schemaBudget:.1,labelBudget:1.9}};},
     async enqueue({taskId,label,inputFile,role,rows,keywords=''}){
       const seeds=trainingKeywords(keywords);keywords=seeds.join('，');
       const global=inputFile==='kb://all'&&taskId==='all'&&seeds.length>0;
       if(!taskId||!role||!global&&(!String(inputFile).startsWith('kb://task/')||decodeURIComponent(new URL(inputFile).pathname.slice(1))!==taskId)||!Number.isSafeInteger(rows)||rows<=0)throw Error('请选择有岗位数据的数据源，全库训练须输入明确岗位检索词');
       return mutate(()=>{const key=createHash('sha256').update(JSON.stringify([taskId,inputFile,role,rows,...(keywords?[keywords]:[])])).digest('hex');const existing=state.jobs.find(j=>j.key===key&&!isRetired(j.role,j.createdAt)&&(!keywords||!finished.has(j.status)));if(existing)return existing;
-        const job={id:randomUUID(),key,taskId,label,inputFile,role,keywords,sourceRows:rows,status:'queued',sampleCount:400,schemaBudget:.1,labelBudget:1.9,message:'待启动：扩展检索词 → 全库选样 → Qwen标注 → 训练评测',createdAt:now(),updatedAt:now()};state.jobs.unshift(job);return job;});
+        const job={id:randomUUID(),key,taskId,label,inputFile,role,keywords,sourceRows:rows,status:'queued',sampleCount:CLASSIFIER_SAMPLE_COUNT,schemaBudget:.1,labelBudget:1.9,message:'待启动：扩展检索词 → 全库选样 → Qwen标注 → 训练评测',createdAt:now(),updatedAt:now()};state.jobs.unshift(job);return job;});
     },
-    async start(id,{confirmed,sampleCount=400,schemaBudget=.1,labelBudget=1.9}={}){
+    async start(id,{confirmed,sampleCount=CLASSIFIER_SAMPLE_COUNT,schemaBudget=.1,labelBudget=1.9}={}){
       if(confirmed!==true)throw Error('需明确确认本次模型处理和预算');
+      if(sampleCount!==CLASSIFIER_SAMPLE_COUNT)throw Error('岗位分类器标注量固定为500条，请刷新界面后重试');
       await ready();const selected=find(id);if(isRetired(selected.role,selected.createdAt))throw Error('该分类器训练记录已删除，请创建新任务');
       if(!Number.isInteger(sampleCount)||sampleCount<120||sampleCount>2000||!Number.isFinite(schemaBudget)||schemaBudget<.05||schemaBudget>.5||!Number.isFinite(labelBudget)||labelBudget<=0||labelBudget>20)throw Error('请填写有效抽样条数与起草/标注预算');
       const job=await mutate(async()=>{const job=find(id);if(active||running.has(job.status))throw Error('已有队列任务运行中');if(job.status!=='queued')throw Error('此任务已执行，不自动付费重试；请查看原训练记录');const status=await service.status('');if(status.busy)throw Error('已有规范、标注或训练任务运行中');if(!status.credentials?.configured)throw Error('请先配置Qwen标注密钥');const schema=await service.schemas.status(job.inputFile,job.role);const notes=job.keywords?'用户输入的岗位检索关键词：'+job.keywords:'';if((!schema.approved?.schema?.retrieval||notes&&schema.approved.notes!==notes)&&!schema.model?.configured)throw Error('请先配置DeepSeek检索词扩展模型');Object.assign(job,{status:'drafting',sampleCount,schemaBudget,labelBudget,confirmedAt:now(),cancelRequested:false,updatedAt:now()});active=id;return job;});
       void execute(id);return job;
+    },
+    async resume(id,{confirmed}={}){
+      if(confirmed!==true)throw Error('请确认在原预算内继续本轮');
+      const job=await mutate(async()=>{
+        const job=find(id);if(active)throw Error('已有训练任务运行中');
+        if(!['failed','interrupted','cancelled'].includes(job.status)||!job.runId||isRetired(job.role,job.createdAt))throw Error('该训练任务不可继续');
+        if((await service.status('')).busy)throw Error('已有规范、标注或训练任务运行中');
+        Object.assign(job,{status:'labeling',cancelRequested:false,message:'恢复原轮次、固定样本与剩余预算',updatedAt:now()});active=id;return job;
+      });
+      void execute(id,true);return job;
     },
     async cancel(id){return mutate(()=>{const job=find(id);if(finished.has(job.status))return job;return Object.assign(job,{cancelRequested:true,updatedAt:now()},job.status==='queued'?{status:'cancelled',message:'已取消待执行任务，未调用模型'}:{});});},
   };
@@ -81,7 +96,7 @@ export function createInsightTrainingQueue({directory,service,pollMs=1000,now=()
 
 export function createInsightTrainingHandler({queue,catalog,enqueueTask,removeRole}){
   return async(req,res,pathname)=>{
-    if(!['/api/insights/classifiers','/api/insights/classifiers/delete','/api/insights/training','/api/insights/training/create','/api/insights/training/start','/api/insights/training/cancel'].includes(pathname))return false;
+    if(!['/api/insights/classifiers','/api/insights/classifiers/delete','/api/insights/training','/api/insights/training/create','/api/insights/training/start','/api/insights/training/cancel','/api/insights/training/resume'].includes(pathname))return false;
     const json=(code,value)=>{res.writeHead(code,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));};
     try{
       const host=new URL('http://'+req.headers.host);
@@ -95,11 +110,12 @@ export function createInsightTrainingHandler({queue,catalog,enqueueTask,removeRo
         if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))throw Error('请使用JSON请求');
         let bytes=0;const chunks=[];for await(const chunk of req){bytes+=chunk.length;if(bytes>32768)throw Error('请求体过大');chunks.push(chunk);}
         const body=JSON.parse(Buffer.concat(chunks).toString('utf8')),action=pathname.split('/').at(-1);
-        const allowed={create:['taskId','keywords'],start:['id','confirmed','sampleCount','schemaBudget','labelBudget'],cancel:['id'],delete:['role','confirmed']}[action];
+        const allowed={create:['taskId','keywords'],start:['id','confirmed','sampleCount','schemaBudget','labelBudget'],cancel:['id'],resume:['id','confirmed'],delete:['role','confirmed']}[action];
         if(!body||Array.isArray(body)||Object.keys(body).some(k=>!allowed.includes(k)))throw Error('不支持的请求参数');
         if(action==='create')json(200,{job:await enqueueTask(body.taskId,{keywords:body.keywords})});
         if(action==='start')json(202,{job:await queue.start(body.id,body)});
         if(action==='cancel')json(200,{job:await queue.cancel(body.id)});
+        if(action==='resume')json(202,{job:await queue.resume(body.id,body)});
         if(action==='delete'){
           if(!removeRole)throw Error('后台尚未加载分类器删除接口，请重启');
           if((await queue.list()).busy)throw Error('训练队列正在运行，请结束后删除');

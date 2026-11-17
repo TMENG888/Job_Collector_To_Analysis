@@ -1,6 +1,7 @@
 // Retrieval is a deterministic sampling aid, NEVER a class decision. It is
 // neither sent as a teacher hint nor used by TF-IDF/LR or bulk inference.
 export const INSIGHT_SAMPLING_VERSION='schema-stratified-v1';
+export const CLASSIFIER_SAMPLE_COUNT=500;
 const normalized=value=>String(value??'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ');
 const evenly=(rows,n)=>n>=rows.length?rows.slice():Array.from({length:n},(_,i)=>rows[Math.floor(i*rows.length/n)]);
 

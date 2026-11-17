@@ -5,6 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {acquireBackendOwner,authorizeWorker} from './worker-bridge.mjs';
+import {managedComputeEnabled,startManagedCompute} from '../work/managed-compute.mjs';
+import {createResumeMatching,createResumeMatchingHandler} from '../work/resume_matching.mjs';
 import { taskInsightSource } from '../work/task-insight-source.mjs';
 import { resolveInsightSourceRole } from '../work/insight-source-role.mjs';
 import { bossCities } from '../work/boss_page_adapter.mjs';
@@ -28,6 +31,7 @@ import {createKnowledgeHandler} from '../work/job_knowledge_http.mjs';
 import {readTaskCollectionMetrics} from '../work/task_collection_metrics.mjs';
 import {deriveChannelHeartbeats} from '../work/collector_channel_heartbeat.mjs';
 import {createAssistantHandler} from '../work/job_assistant_http.mjs';
+import {createCollectionKeywordExpansion,createCollectionKeywordHandler} from '../work/collection-keyword-expansion.mjs';
 import {createAssistantCredentialStore} from '../work/job_assistant_credentials.mjs';
 import {createAssistantSessionStore} from '../work/job_assistant_sessions.mjs';
 import {assistantSessionDirectory} from '../work/job_assistant_storage.mjs';
@@ -53,10 +57,10 @@ import {createRoleDiscovery,createRoleDiscoveryHandler} from '../work/insight-ro
 import {selectManualRole} from '../work/insight-role-selection.mjs';
 import {roleFamilies} from '../work/job_knowledge_schema.mjs';
 import {roleClassifier} from '../work/role-classifier-registry.mjs';
-import {createBrowserWorkspace} from '../work/job-browser-workspace.mjs';
-import {createBrowserScreening} from '../work/job-browser-screening.mjs';
 import {createSemanticCloud,createSemanticCloudHandler} from '../work/insight-semantic-cloud.mjs';
 import {createInsightReportCache} from '../work/insight-report-cache.mjs';
+import {createKnowledgeSnapshot} from '../work/knowledge-snapshot-worker.mjs';
+import {createInsightReportSnapshots,insightSnapshotContext} from '../work/insight-report-snapshots.mjs';
 import {interviewSettings,readInterviewSnapshot,interviewPaths} from '../work/nowcoder_interviews.mjs';
 import {createInterviewKnowledgeStore} from '../work/job_assistant_interviews.mjs';
 import {createInterviewSupervised,createInterviewSupervisedHandler} from '../work/interview-supervised.mjs';
@@ -65,6 +69,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const publicDir = path.join(here, 'public');
 const dataDir = process.env.JOB_UI_DATA_DIR ? path.resolve(process.env.JOB_UI_DATA_DIR) : path.join(root, 'ui_data');
+await acquireBackendOwner(dataDir);
 const taskDataDir = path.join(dataDir, 'tasks');
 const logDir = path.join(dataDir, 'logs');
 const tasksPath = path.join(dataDir, 'tasks.json');
@@ -76,9 +81,11 @@ const insightDataDir = path.join(dataDir, 'insights');
 const insightStatePath = path.join(insightDataDir, 'state.json');
 const insightConfigPath = path.join(insightDataDir, 'config.json');
 const insightReportPath = path.join(insightDataDir, '岗位市场洞察.json');
-const insightReportCache=createInsightReportCache(insightReportPath);
+const insightReportCache=createInsightReportCache(insightReportPath,{knowledgeFilename:knowledgeStore(dataDir).filename});
 const insightLogPath = path.join(insightDataDir, 'analysis.log');
 const knowledge=knowledgeStore(dataDir);
+const insightSnapshots=createInsightReportSnapshots(knowledge.filename,{legacyFile:insightReportPath});
+const handleCollectionKeywords=createCollectionKeywordHandler(createCollectionKeywordExpansion(dataDir));
 let semanticCloud;
 const insightSupervised=createInsightSupervised(dataDir,{
   beforeStart:async()=>{if((await semanticCloud?.status(''))?.busy)throw Error('已有词云标注任务运行中，请先等待或停止');},
@@ -108,7 +115,6 @@ const handleKnowledge=createKnowledgeHandler(dataDir);
 const insightDatasetRoot = path.join(os.homedir(), 'Desktop', '陈晓锋', '测试采集数据集');
 const host = '127.0.0.1';
 const port = Number(process.env.JOB_UI_PORT || process.argv[2] || 8765);
-const browserWorkspace=createBrowserWorkspace(dataDir,{screening:createBrowserScreening({supervised:insightSupervised})});
 const interviewKnowledge=createInterviewKnowledgeStore(dataDir,{enrich:(posts,roles)=>interviewSupervised.enrich(posts,roles)});
 const interviewSupervised=createInterviewSupervised(dataDir,{readPosts:scope=>interviewKnowledge.trainingCorpus(scope)});
 const handleInterviewClassifier=createInterviewSupervisedHandler(interviewSupervised,{taskExists:async id=>tasks.some(task=>task.id===id&&!task.archived)});
@@ -117,7 +123,9 @@ const assistantStore=createKnowledgeAssistantStore(dataDir,{readOnly:true,getRol
   if((await insightTrainingQueue.list()).busy||(await semanticCloud.status('')).busy||(await insightSupervised.status('')).busy)return false;
   return true;
 }});
-const handleJobAssistant = createAssistantHandler(assistantStore,createAssistantCredentialStore(path.join(dataDir,'assistant_private','model.json')),{intentRecognition:true,interviewStore:interviewKnowledge,repository:createAssistantSessionStore(await assistantSessionDirectory(dataDir)),collectionControl:createCollectionControl({baseUrl:`http://${host}:${port}`,storageDir:dataDir,dataDiskDir:path.dirname(knowledge.filename),getCities:()=>Object.keys(zhaopinCities)})});
+const handleJobAssistant = createAssistantHandler(assistantStore,createAssistantCredentialStore(path.join(dataDir,'assistant_private','model.json')),{intentRecognition:true,interviewStore:interviewKnowledge,repository:createAssistantSessionStore(await assistantSessionDirectory(dataDir)),collectionControl:createCollectionControl({baseUrl:process.env.JOB_PUBLIC_ORIGIN||`http://${host}:${port}`,storageDir:dataDir,dataDiskDir:path.dirname(knowledge.filename),getCities:()=>Object.keys(zhaopinCities)})});
+const resumeMatching=createResumeMatching({dataDir,store:assistantStore,catalog:()=>insightSupervised.catalog()});
+const handleResumeMatching=createResumeMatchingHandler(resumeMatching);
 const latestExports=new Map();
 const active = new Map();
 const channelVerification=createChannelVerification({beforeRecheck:async platform=>{
@@ -134,7 +142,7 @@ let activeInsight = null;
 const rowCountCache = new Map();
 const startingStages = new Set();
 
-function consoleUrl() { return `http://${host}:${port}`; }
+function consoleUrl() { return process.env.JOB_PUBLIC_ORIGIN||`http://${host}:${port}`; }
 
 function openBrowser() {
   if (process.platform === 'win32') {
@@ -245,7 +253,35 @@ async function discoverInsightDatasets() {
   return knowledge.catalog({synchronize:false});
 }
 
-async function startInsight(body) {
+let insightStarting=false;
+async function reportSnapshotSelection(body){
+  const inputFile=String(body.inputFile||'kb://all'),role=(await classifierScope(inputFile,body.role)).role;
+  const model=await insightSupervised.resolveAnalysis(inputFile,role,{mode:body.classifierMode||'qualified',runId:body.classifierRunId});
+  const classifier=model?{...model,artifact_sha256:model.sha256}:roleClassifier(role)?.metadata;
+  if(!classifier)throw Error('该岗位尚无可用分类器');
+  const semantics=model?.experimental?await insightSupervised.trialSemantics(model):await semanticCloud.resolve(inputFile,role,model);
+  const context=inputFile==='kb://all'&&body.analysisMode==='full'?insightSnapshotContext({inputFile,role,classifier,semanticCloud:semantics,analysisMode:'full',sheetName:String(body.sheetName||'岗位数据').trim()||'岗位数据'}):null;
+  const currentRows=context?(await knowledge.status({synchronize:false})).rows:null;
+  const legacySemanticModifiedAt=context&&semantics?.file?(await fs.stat(semantics.file)).mtimeMs:0;
+  return {role,model,semantics,context,currentRows,snapshot:context?insightSnapshots.find(context,currentRows,{legacySemanticModifiedAt}):null};
+}
+async function selectedInsightSnapshot(body){
+  if(body.inputFile&&body.inputFile!=='kb://all')throw Error('快照读取仅支持全岗位知识库');
+  const selected=await reportSnapshotSelection({...body,analysisMode:'full'}),snapshot=selected.snapshot;
+  const running=insightState.status==='running'&&insightState.role===selected.role;
+  const failed=insightState.status==='failed'&&insightState.role===selected.role;
+  return {snapshot,state:{...(running||failed?publicInsightState():{}),role:selected.role,inputFile:'kb://all',analysisMode:'full',status:running?'running':failed?'failed':snapshot?'completed':'empty',
+    message:running||failed?insightState.message:snapshot?snapshot.reusable?'已读取岗位分析快照':'已有报告，可更新分析':'当前岗位尚未生成分析',
+    updatedAt:running?insightState.updatedAt:snapshot?.generatedAt||null,reportSnapshotKey:snapshot?.snapshotKey||null,snapshot,
+    globalRunning:!!activeInsight||insightStarting}};
+}
+async function startInsight(body){
+  if(insightStarting||activeInsight)throw new Error('岗位洞察分析正在运行');
+  insightStarting=true;
+  try{return await prepareInsight(body);}finally{insightStarting=false;}
+}
+
+async function prepareInsight(body) {
   if (activeInsight) throw new Error('岗位洞察分析正在运行');
   const requestedInput=String(body.inputFile||'').trim(),nativeInput=requestedInput.startsWith('kb://');
   const sourceRole=resolveInsightSourceRole(body,tasks);
@@ -253,9 +289,16 @@ async function startInsight(body) {
   const inputFile = nativeInput?requestedInput:path.resolve(requestedInput);
   if (!nativeInput&&(!requestedInput || !fsSync.existsSync(inputFile))) throw new Error('找不到输入数据');
   if (!nativeInput&&!['.xlsx', '.csv'].includes(path.extname(inputFile).toLowerCase())) throw new Error('请选择知识库岗位范围，或手工导入 XLSX/CSV');
-  const classifierRole=(await classifierScope(requestedInput,body.role)).role;
-  const insightClassifier=await insightSupervised.resolveAnalysis(inputFile,classifierRole,{mode:body.classifierMode||'qualified',runId:body.classifierRunId});
+  const selected=await reportSnapshotSelection({...body,inputFile}),classifierRole=selected.role,insightClassifier=selected.model;
   if(!insightClassifier&&!roleClassifier(classifierRole))throw new Error('该岗位尚无通过验收的专用监督分类器，请先联合标注并训练；不回退规则或语义参照');
+  if(selected.snapshot?.reusable&&body.forceRefresh!==true&&!body.sourceTaskId){
+    const report=insightSnapshots.read(selected.snapshot.snapshotKey);
+    if(!report)throw Error('报告快照不存在，未生成替代结果');
+    if(insightState.reportSnapshotKey!==selected.snapshot.snapshotKey||!fsSync.existsSync(insightReportPath))await writeJsonAtomic(insightReportPath,report);
+    await saveInsightState({status:'completed',message:'已复用岗位分析快照',role:classifierRole,inputFile,analysisMode:report.analysis_mode,
+      insightClassifier,experimental:report.experimental,error:'',reportSnapshotKey:selected.snapshot.snapshotKey,snapshot:selected.snapshot,startedAt:null});
+    return {...publicInsightState(),reused:true};
+  }
   let transferSource = null;
   if (body.sourceTaskId) {
     const task = tasks.find((item) => item.id === String(body.sourceTaskId) && !item.archived);
@@ -264,7 +307,7 @@ async function startInsight(body) {
     if (transferSource.dataset.path.toLowerCase() !== inputFile.toLowerCase()) throw new Error('洞察文件不是该任务的当前交付文件，请重新点击“用于岗位洞察”');
   }
   let analysisInputFile=inputFile;
-  if(nativeInput){const snapshot=await knowledge.snapshot(inputFile);analysisInputFile=snapshot.uri;if(transferSource)transferSource.dataset.expectedRows=snapshot.rows;}
+  if(nativeInput){const snapshot=await createKnowledgeSnapshot(dataDir,inputFile);analysisInputFile=snapshot.uri;if(transferSource)transferSource.dataset.expectedRows=snapshot.rows;}
   if(transferSource?.dataset.resolution==='latest_snapshot'){
     const sourceTask=tasks.find(item=>item.id===transferSource.taskId);
     const refreshed=await updateUnifiedDataset(sourceTask,{publishCsv:true});
@@ -291,12 +334,14 @@ async function startInsight(body) {
     insightClassifier,
     experimental:insightClassifier?.experimental===true,
     screeningPolicy: 'supervised-only',
-    semanticCloud: insightClassifier?.experimental?await insightSupervised.trialSemantics(insightClassifier):await semanticCloud.resolve(inputFile,classifierRole,insightClassifier),
+    semanticCloud:selected.semantics,
+    reportSnapshotContext:selected.context,
+    reportSnapshotBaselineRows:selected.currentRows,
   };
   await fs.writeFile(insightConfigPath, JSON.stringify(config, null, 2), 'utf8');
   await fs.writeFile(insightLogPath, `[${new Date().toLocaleString('zh-CN')}] 开始分析\n输入：${inputFile}\n模式：${config.analysisMode === 'full' ? '全量逐条匹配' : `抽样 ${config.sampleSize} 条`}\n`, 'utf8');
-  await saveInsightState({ status: 'running', message: config.experimental?'试分析 · 候选未达标，正在计算全量岗位洞察':'正在读取样本并计算岗位洞察', ...config, startedAt: now(), error: '' });
-  const child = spawn(process.execPath, [path.join(root, 'work', 'analyze_job_market_sample.mjs'), insightConfigPath, insightReportPath], {
+  await saveInsightState({ status: 'running', message: config.experimental?'试分析 · 候选未达标，正在计算全量岗位洞察':'正在读取样本并计算岗位洞察', ...config, startedAt: now(), error: '',reportSnapshotKey:null,snapshot:null });
+  const child = managedComputeEnabled()?startManagedCompute('analysis',{inputFile:insightConfigPath,outputFile:insightReportPath}):spawn(process.execPath, [path.join(root, 'work', 'analyze_job_market_sample.mjs'), insightConfigPath, insightReportPath], {
     cwd: root, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   });
   activeInsight = { child, startedAt: Date.now() };
@@ -311,11 +356,12 @@ async function startInsight(body) {
     await saveInsightState({ status: 'failed', message: '岗位洞察启动失败', error: error.message });
   });
   child.once('close', async (code, signal) => {
-    activeInsight = null;
+    try{
     if (code === 0) {
       try {
         const report = JSON.parse(await fs.readFile(insightReportPath, 'utf8'));
-        await saveInsightState({ status: 'completed', message: `${report.experimental?'[试分析 · 候选未达标] ':''}${report.detected_role?.name || report.role}分析完成：${report.sample_rows}/${report.total_rows} 条`, error: '' });
+        const snapshot=config.reportSnapshotContext?insightSnapshots.save(config.reportSnapshotContext,report,report.total_rows):null;
+        await saveInsightState({ status: 'completed', message: `${report.experimental?'[试分析 · 候选未达标] ':''}${report.detected_role?.name || report.role}分析完成：${report.sample_rows}/${report.total_rows} 条`, error: '',reportSnapshotKey:snapshot?.snapshotKey||null,snapshot });
         await fs.appendFile(insightLogPath, '\n[完成] 岗位市场洞察已生成。\n', 'utf8').catch(() => {});
       } catch (error) {
         await saveInsightState({ status: 'failed', message: '分析程序结束但报告读取失败', error: error.message });
@@ -324,6 +370,7 @@ async function startInsight(body) {
       const failure = analysisError.match(/^Error:\s*(.+)$/m)?.[1] || `子进程退出：${code ?? signal}`;
       await saveInsightState({ status: 'failed', message: `岗位洞察分析失败：${failure}`, error: failure });
     }
+    }finally{if(activeInsight?.child===child)activeInsight=null;}
   });
   return insightState;
 }
@@ -659,12 +706,10 @@ async function createTask(body) {
   const label = String(body.label || '').trim();
   const primaryKeyword = String(body.primaryKeyword || label).trim();
   const keywords = splitTerms(body.keywords);
-  if (!label || !primaryKeyword) throw new Error('请填写岗位名称和主关键词');
+  if (!label || !primaryKeyword) throw new Error('请填写岗位名称');
   if (!keywords.includes(primaryKeyword)) keywords.unshift(primaryKeyword);
   const goal=collectionGoal(body),{targetRows,candidateTarget,collectUntilExhausted}=goal;
   const transportMode=collectionMode({transportMode:body.transportMode||collectionTransportPolicy.mode});
-  const browserMaxPages=Number(body.browserMaxPages||3),browserMaxRows=Number(body.browserMaxRows||200);
-  if(!Number.isSafeInteger(browserMaxPages)||browserMaxPages<1||browserMaxPages>50||!Number.isSafeInteger(browserMaxRows)||browserMaxRows<1||browserMaxRows>10000)throw Error('浏览器预算须为1–50页、1–10000条');
   const cityNames = splitTerms(body.cities).filter((name) => zhaopinCities[name]);
   if (!cityNames.length) cityNames.push('北京', '上海', '广州', '深圳', '杭州', '成都');
   const allowedPlatforms = ['shixiseng', 'iguopin', 'mohrss', 'jobonline', 'job51', 'zhaopin', 'liepin', 'boss'].filter(key=>collectionChannelAvailable(key,{transportMode}));
@@ -690,7 +735,7 @@ async function createTask(body) {
   const publicConfig = {
     task_id:id,
     interviews:interviewSettings({enabled:body.interviewEnabled,keywords:body.interviewKeywords||keywords,roleKey:label,maxPosts:body.interviewMaxPosts,halfLifeDays:body.interviewHalfLifeDays}),
-    transportMode,browser:{maxPages:browserMaxPages,maxRows:browserMaxRows},
+    transportMode,browser:{limitMode:'source_or_target'},
     apiExecutionVersion:2,
     taskTargetRows:targetRows||0,collectUntilExhausted,
     acquisitionMode:'structured_data_requests',
@@ -894,9 +939,15 @@ async function serveStatic(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if(!authorizeWorker(req,res))return;
   const requestUrl = new URL(req.url, `http://${host}:${port}`);
   const pathname = decodeURIComponent(requestUrl.pathname);
   try {
+    if(process.env.JOB_WORKER_TOKEN&&req.method==='GET'&&pathname==='/_worker/health')return json(res,200,{worker:true,pid:process.pid});
+    if(process.env.JOB_WORKER_TOKEN&&req.method==='POST'&&pathname==='/_worker/shutdown'){json(res,200,{ok:true});setImmediate(()=>process.emit('SIGTERM'));return;}
+    if(await handleCollectionKeywords(req,res,pathname))return;
+    if(/^\/api\/browser(?:\/|$)/.test(pathname))return json(res,410,{error:'求职浏览器功能已移除',code:'FEATURE_REMOVED'});
+    if(req.method==='GET'&&/^\/browser(?:\/|$)/.test(pathname)){res.writeHead(302,{location:'/tasks','cache-control':'no-store'});res.end();return;}
     if (/^\/api\/personal-wiki(?:\/|$)/.test(pathname)) return json(res,410,{error:'个人资料功能已移除',code:'FEATURE_REMOVED'});
     if (/^\/api\/tasks\/[^/]+\/channels\/liepin(?:\/|$)/.test(pathname)) return json(res,410,{error:'猎聘采集渠道已移除，历史岗位数据保留',code:'CHANNEL_RETIRED'});
     if (req.method === 'GET' && pathname === '/api/state') {
@@ -912,11 +963,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && /^\/(?:platforms|labels)(?:\/|$)/.test(pathname)) {
       res.writeHead(302, { location: '/tasks', 'cache-control': 'no-store' });res.end();return;
     }
-    if (await handleRoleDiscovery(req,res,pathname)||await handleInsightTraining(req,res,pathname)||await browserWorkspace.handler(req,res,pathname)||await handleSemanticCloud(req,res,pathname)||await handleInsightClassifier(req,res,pathname)||await handleInterviewClassifier(req,res,pathname)||await handleKnowledge(req,res,pathname)||await handleJobAssistant(req, res, pathname)) return;
+    if (await handleResumeMatching(req,res,pathname)||await handleRoleDiscovery(req,res,pathname)||await handleInsightTraining(req,res,pathname)||await handleSemanticCloud(req,res,pathname)||await handleInsightClassifier(req,res,pathname)||await handleInterviewClassifier(req,res,pathname)||await handleKnowledge(req,res,pathname)||await handleJobAssistant(req, res, pathname)) return;
     if (req.method === 'GET' && pathname === '/api/insights/datasets') {
       return json(res, 200, { root: knowledge.filename, catalog: 'knowledge-v1', datasets: await discoverInsightDatasets() });
     }
+    if(req.method==='GET'&&pathname==='/api/insights/snapshot')return json(res,200,await selectedInsightSnapshot(Object.fromEntries(requestUrl.searchParams)));
     if (req.method === 'GET' && pathname === '/api/insights') {
+      if(requestUrl.searchParams.get('summary')==='1'){
+        const stat=await fs.stat(insightReportPath).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+        return json(res,200,{...publicInsightState(),reportVersion:stat?`province-company-v1-${stat.size}-${stat.mtimeMs}`:null});
+      }
       const report=await insightReportCache.load();
       const state={...publicInsightState(),reportVersion:report?.version||null};
       if(requestUrl.searchParams.get('summary')==='1')return json(res,200,state);
@@ -926,7 +982,7 @@ const server = http.createServer(async (req, res) => {
       res.write(report?.raw||'null');res.end('}');return;
     }
     if(req.method==='GET'&&pathname==='/api/insights/report'){
-      const report=await insightReportCache.load();
+      const report=await insightReportCache.load(requestUrl.searchParams.get('snapshotKey')||null);
       if(!report)return json(res,404,{error:'尚无岗位洞察报告'});
       const etag='"'+report.version+'"';
       if(req.headers['if-none-match']===etag){res.writeHead(304,{etag});res.end();return;}
@@ -939,7 +995,8 @@ const server = http.createServer(async (req, res) => {
       if (body.labelJobId && body.labelJobId !== 'auto' || body.reviewedLabelDir || body.prelabelDir || body.reviewedLabelJobId || body.consensusLabelDirs?.length || body.consensusLabelJobIds?.length) {
         return json(res, 410, { error: 'AI打标任务接入已移除，请直接选择岗位数据集生成洞察', code: 'FEATURE_REMOVED' });
       }
-      return json(res, 202, { ok: true, state: await startInsight(body), message: String(body.analysisMode || '') === 'full' ? '全量岗位匹配分析已启动' : '抽样分析已启动' });
+      const state=await startInsight(body);
+      return json(res,state.reused?200:202,{ok:true,state,reused:state.reused===true,message:state.reused?'已复用岗位分析快照':String(body.analysisMode||'')==='full'?'全量岗位匹配分析已启动':'抽样分析已启动'});
     }
     if (req.method === 'GET' && pathname === '/api/insights/logs') {
       let content = '';
@@ -1269,7 +1326,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname.startsWith('/api/')) return json(res, 404, { error: '接口不存在' });
     if (req.method === 'GET' && /^\/profile\/?$/.test(pathname)) {res.writeHead(302,{location:'/tasks','cache-control':'no-store'});return res.end();}
-    if (req.method === 'GET' && /^\/tasks(?:\/[^/]+)?\/?$|^\/(?:insights|browser)\/?$/.test(pathname)) return await serveStatic(req, res, '/');
+    if (req.method === 'GET' && /^\/tasks(?:\/[^/]+)?\/?$|^\/(?:insights|matching)\/?$/.test(pathname)) return await serveStatic(req, res, '/');
     return await serveStatic(req, res, pathname);
   } catch (error) {
     console.error(error);
@@ -1301,10 +1358,10 @@ server.on('error', async (error) => {
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     assistantStore.close();
+    void resumeMatching.close();
     void insightSupervised.cancel();
     void semanticCloud.cancel();
     void interviewSupervised.dispose();
-    void browserWorkspace.dispose();
     for (const { child } of active.values()) child.kill('SIGTERM');
     if (activeInsight?.child) activeInsight.child.kill('SIGTERM');
     server.close(() => process.exit(0));

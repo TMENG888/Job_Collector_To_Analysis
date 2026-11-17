@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import {randomUUID} from 'node:crypto';
-import {candidateRows,sampleClassifierRows,createInsightSupervised,createInsightSupervisedHandler} from './insight-supervised.mjs';
+import {candidateRows,sampleClassifierRows,createInsightSupervised,createInsightSupervisedHandler,QWEN_MODEL,QWEN_PRICING} from './insight-supervised.mjs';
 import {ANNOTATION_SCHEMA_VERSION,validateAnnotationSchema,compileAnnotationSchema,schemaHash,createAnnotationSchemas,annotationSchemaDraftPrompt} from './insight-annotation-schema.mjs';
 import {assessTrainingLabels,sampleInsightCandidates} from './insight-sampling.mjs';
 import {renderClassifierMetrics} from '../job_collector_ui/public/insight-classifier.js';
@@ -71,7 +71,7 @@ test('sample readiness does not fabricate positives or relax split gates',()=>{
  const r=assessTrainingLabels(rows,400);assert.equal(r.ready,false);assert.equal(r.positive,6);assert.equal(r.deficits.positive,18);assert.equal(r.recommendedPositive,100);
  assert.equal(assessTrainingLabels(Array.from({length:60},(_,i)=>({label:i<30?'include':'exclude'}))).ready,true);
  const html=renderClassifierMetrics({status:'needs_samples',message:'标签已保留',sampling:{targetCandidates:50,allocations:{target_candidate:40,random_source:80},warnings:['<script>']},trainingReadiness:r});
- assert.match(html,/候选不等于正例/);assert.match(html,/正例 18/);assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/<script>/);
+ assert.match(html,/标签已保留/);assert.doesNotMatch(html,/classifier-metric-details|<script>/);
  const legacy=renderClassifierMetrics({status:'failed',positive:6,negative:382,message:'训练未完成：{"error":"按公司与近重复隔离后正负样本不足"}'});assert.match(legacy,/正例 6/);assert.doesNotMatch(legacy,/\{&quot;error/);
  assert.match(classifierAnalysisState({run:{status:'needs_samples'},screening:{role,ready:false}}).title,/待补样/);
  assert.equal(classifierAnalysisState({run:{status:'needs_samples'},screening:{role,ready:true}}).kind,'ready');
@@ -88,13 +88,16 @@ test('draft produces and freezes retrieval, old approval can still be resolved w
 
 test('preview is read-only/no model call; HTTP validates scope and bounds',async()=>{
  const dir=await temporary(),doc=frozen();let paid=0;
- const s=createInsightSupervised(dir,{directory:path.join(dir,'classifier'),schemas:{resolve:async()=>doc},credentials,readRows:async()=>({rows:Array.from({length:180},(_,i)=>raw(i)),total:180}),fetcher:async()=>paid++});
- const preview=await s.previewSampling(uri,role,120);assert.equal(preview.readOnly,true);assert.equal(preview.paidRequests,0);assert.equal(preview.canStart,true);assert.equal(paid,0);
+ let size=520;
+ const s=createInsightSupervised(dir,{directory:path.join(dir,'classifier'),schemas:{resolve:async()=>doc},credentials,readRows:async()=>({rows:Array.from({length:size},(_,i)=>raw(i)),total:size}),fetcher:async()=>paid++});
+ const preview=await s.previewSampling(uri,role);assert.equal(preview.sampled,500);assert.equal(preview.readOnly,true);assert.equal(preview.paidRequests,0);assert.equal(preview.canStart,true);assert.equal(paid,0);
+ for(const sampleCount of [400,600,'500',true]){await assert.rejects(s.previewSampling(uri,role,sampleCount),/固定为500/);await assert.rejects(s.start({inputFile:uri,role,sampleCount}),/固定为500/);}
+ size=499;assert.equal((await s.previewSampling(uri,role)).canStart,false);size=520;
  assert.deepEqual(await fs.readdir(dir),[]);
  const handler=createInsightSupervisedHandler(s,async input=>({inputFile:input,role}));
  const server=http.createServer((req,res)=>void handler(req,res,new URL(req.url,'http://localhost').pathname));await new Promise(r=>server.listen(0,'127.0.0.1',r));
  try{const base='http://127.0.0.1:'+server.address().port+'/api/insights/classifier/sampling-preview?inputFile='+encodeURIComponent(uri);
-  const response=await fetch(base+'&sampleCount=120');assert.equal(response.status,200);assert.equal((await response.json()).sampled,120);
+  const response=await fetch(base+'&sampleCount=500');assert.equal(response.status,200);assert.equal((await response.json()).sampled,500);
   assert.equal((await fetch(base+'&sampleCount=20')).status,400);assert.equal((await fetch(base,{headers:{origin:'https://evil.example'}})).status,403);assert.equal(paid,0);
  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 });
@@ -105,6 +108,7 @@ async function runMock(labelsForTitle,{groupShortage=false}={}){
  const schemas={resolve:async()=>doc,status:async()=>({approved:doc})};
  const service=createInsightSupervised(dir,{directory:path.join(dir,'classifier'),schemas,credentials,experiment:true,readRows:async()=>({rows,total:120}),
   fetcher:async(_url,options)=>{requests++;const req=JSON.parse(options.body);assert.doesNotMatch(JSON.stringify(req.messages),/sampling-only-canary|sampling|target_candidate/);
+   assert.equal(req.model,'qwen3.8-flash');assert.equal(req.enable_thinking,false);
    const jobs=JSON.parse(req.messages[1].content).jobs,labels=jobs.map(j=>({id:j.id,label:labelsForTitle(j.title),evidence_id:j.evidence_options[0].id}));
    return {ok:true,json:async()=>({usage:{prompt_tokens:100,completion_tokens:20,total_tokens:120},choices:[{finish_reason:'stop',message:{content:JSON.stringify({labels})}}]})};},
   trainRunner:async output=>{trained++;const data=JSON.parse(await fs.readFile(path.join(output,'samples.json'),'utf8'));assert.equal(data.sampling.version,'schema-stratified-v1');assert.ok(data.samples.every(s=>s.training_text_v2));
@@ -113,6 +117,11 @@ async function runMock(labelsForTitle,{groupShortage=false}={}){
  const run=await service.start({inputFile:uri,role,sampleCount:120,budget:2});
  let state;for(let i=0;i<800;i++){state=await service.status(uri,role);if(!state.busy)break;await new Promise(r=>setTimeout(r,30));}
  assert.equal(state.busy,false);assert.equal(requests,24);assert.equal(state.run.requestsCompleted,24);assert.equal(state.activeModel,null);
+ assert.equal(QWEN_MODEL,'qwen3.8-flash');assert.equal(state.run.model,QWEN_MODEL);
+ assert.equal(state.run.inputPrice,.8);assert.equal(state.run.outputPrice,2.7);assert.equal(state.pricing.input_per_million,QWEN_PRICING.input_per_million);
+ assert.ok(Math.abs(state.run.costEstimate-24*(100*.8+20*2.7)/1e6)<1e-10);
+ const response=JSON.parse(await fs.readFile(path.join(dir,'classifier',run.id,'responses','1.json'),'utf8'));
+ assert.equal(response.finishReason,'stop');assert.equal(response.requestedModel,'qwen3.8-flash');
  const saved=JSON.parse(await fs.readFile(path.join(dir,'classifier',run.id,'samples.json'),'utf8'));assert.equal(saved.samples.length,120);
  return {state,trained};
 }

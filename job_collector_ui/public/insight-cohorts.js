@@ -70,11 +70,11 @@ export function cohortFilterOptions(rows, profile, field) {
   return [...counts].map(([value, count]) => ({ value, count })).sort((a,b) => a.value.localeCompare(b.value,'zh-CN'));
 }
 export function cohortSalaryStatistics(rows) {
-  // Same 3K–200K/month quality range as the report's salary-model preparation.
-  // Salary is a subset of the selected jobs, not a second condition/sample pool.
-  const values = rows.map(row => row.salary_midpoint_k).filter(value =>
-    typeof value === 'number' && Number.isFinite(value) && value >= 3 && value <= 200);
+  const usable=rows.filter(row=>typeof row.salary_midpoint_k==='number'&&Number.isFinite(row.salary_midpoint_k)&&
+    row.salary_midpoint_k>=(row.salary_period==='day'?Number.MIN_VALUE:3)&&row.salary_midpoint_k<=200);
+  const values = usable.map(row=>row.salary_midpoint_k);
   return { count: values.length, excluded: rows.length - values.length,
+    converted_daily_count:usable.filter(row=>row.salary_period==='day').length,
     median: quantile(values,.5), p25: quantile(values,.25), p75: quantile(values,.75),
     mean: values.length ? values.reduce((a,b)=>a+b,0)/values.length : null };
 }

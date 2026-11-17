@@ -2,9 +2,10 @@ import {parseOriginalSalary} from './job_salary_parser.mjs';
 const text=value=>String(value??'').trim();
 const pattern=parts=>new RegExp(parts.join('|'),'i');
 export function normalizeSalary(rawValue) {
-  const parsed=parseOriginalSalary(rawValue);if(!parsed||parsed.period!=='month')return null;
-  const {min,max,midpoint,raw}=parsed;
-  return {min,max,midpoint,raw};
+  const parsed=parseOriginalSalary(rawValue);if(!parsed||!['month','day'].includes(parsed.period))return null;
+  const {min,max,midpoint,raw}=parsed,converted=parsed.period==='day',days=converted?21.75:1;
+  return {min:min*days,max:max*days,midpoint:midpoint*days,raw,original_period:parsed.period,converted,
+    conversion_days:converted?days:null,basis:converted?'日薪区间中点 × 21.75天/月（折算）':'招聘月薪区间中点'};
 }
 
 export const roleFamilies = [

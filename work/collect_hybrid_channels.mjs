@@ -54,8 +54,8 @@ export async function runHybridCollection(settings,{runHttp,runBrowser,resourceG
       if(!pc||!Array.isArray(pc.cities)||!pc.cities.length)throw Object.assign(Error('缺少浏览器采集城市配置'),{code:'invalid_config'});
       const combinations=filterCollectionCombinations(readCollectionRound(taskId),platform,(config.keywords||[]).flatMap(keyword=>pc.cities.map(city=>({keyword,city}))));
       if(!combinations.length)continue;
-      const browser=config.browser||{},maxPages=Number(browser.maxPages||3),maxRows=Number(browser.maxRows||200);
-      console.log(`[混合采集] ${platform} 使用可见页面 RPA；最多${maxPages}页/${maxRows}条；不执行旧会话接口代码`);
+      const maxPages=Infinity,maxRows=Infinity;
+      console.log(`[混合采集] ${platform} 按任务目标或平台可访问分页边界采集；无单轮页数/条数限制`);
       const execute=runBrowser|| (async options=>{
         // 前程无忧/就业在线：优先监听网站自身接口（签名/cookie 由本地会话生成，
         // 不重放静态签名）；失败再回退可见页面 DOM。

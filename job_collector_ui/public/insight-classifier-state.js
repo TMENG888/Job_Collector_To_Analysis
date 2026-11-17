@@ -1,4 +1,17 @@
 const percent=value=>value==null?'未提供':(value*100).toFixed(1)+'%';
+export function classifierSnapshotIdentity(state){
+  if(state?.analysis?.mode==='candidate-trial'&&state.analysis.ready&&state.analysis.runId)return {runId:state.analysis.runId,experimental:true};
+  const model=state?.screeningModel||state?.activeModel;
+  if(!state?.screening?.ready||!model?.version)return null;
+  return {version:model.version,sha256:model.sha256||model.artifact_sha256,threshold:model.threshold,runId:model.id||'',experimental:false};
+}
+export function reportMatchesClassifier(report,classifier){
+  if(!report||!classifier)return false;
+  return (!classifier.version||report.role_classifier?.version===classifier.version)&&
+    (!classifier.sha256||report.role_classifier?.artifact_sha256===classifier.sha256)&&
+    (classifier.threshold==null||report.role_classifier?.threshold===classifier.threshold)&&
+    (report.qwen_classification?.run_id||'')===(classifier.runId||'')&&!!report.experimental===!!classifier.experimental;
+}
 export function classifierAcceptanceIssues(evaluation){
   if(!evaluation||evaluation.eligible===true)return [];
   const issues=[],test=evaluation.test,validation=evaluation.validation;

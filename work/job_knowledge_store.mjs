@@ -54,7 +54,7 @@ export function classifyKnowledgeRow(row,{classifiers=[]}={}){
   const salary=normalizeSalary(row.salary);
   return {role_families:[...new Set(families)],decision:body.length>=16&&families.length?'include':'review',
     skills,tasks:[],domains:[],salary_midpoint_k:salary?salary.midpoint/1000:null,
-    salary_basis:/天|日|小时/.test(String(row.salary))?'日/时薪折算（比较默认排除）':'招聘月薪中点',
+    salary_basis:salary?.basis||'无有效月薪',salary_period:salary?.original_period||'',salary_conversion_days:salary?.conversion_days??null,
     city:cityName(row.city),experience:String(row.experience||'未明确'),education:String(row.education||'未明确'),
     company_size:row.company_size||'未明确',employment_type:normalizeEmploymentType(row.employment_type),
     industry:row.industry||'未明确',label_source:'岗位专用TF-IDF＋逻辑回归（非人工复核）',
@@ -198,7 +198,7 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
   return {filename,sync,termReview:createTermReviewMethods({open,openReadOnly,ensure,bump}),
     async status(options){await ensureMetadata(options);const db=new DatabaseSync(filename,{readOnly:true});try{return {...status(db),sync_warning:lastSyncWarning||null};}finally{db.close();}},
     async catalog(options){await ensureMetadata(options);const db=new DatabaseSync(filename,{readOnly:true});try{return db.prepare('SELECT t.task_id,t.label,COUNT(m.job_key) AS n FROM tasks t JOIN memberships m ON m.task_id=t.task_id WHERE t.archived=0 GROUP BY t.task_id ORDER BY t.label').all().map(t=>({path:`kb://task/${encodeURIComponent(t.task_id)}`,taskId:t.task_id,role:t.label,name:`${t.label} · 知识库 ${t.n} 条`,expectedRows:Number(t.n),size:0,format:'sqlite',resolution:'knowledge',canonical:true,syncWarning:lastSyncWarning||null}));}finally{db.close();}},
-    async read(uri='kb://all'){await ensure();const db=new DatabaseSync(filename,{readOnly:true});try{
+    async read(uri='kb://all',{synchronize=true}={}){await ensureMetadata({synchronize});const db=new DatabaseSync(filename,{readOnly:true});try{
       db.exec('BEGIN');
       const url=new URL(uri);if(url.protocol!=='kb:')throw new Error('无效知识库数据源');
       if(url.hostname==='snapshot'){const saved=db.prepare('SELECT * FROM snapshots WHERE snapshot_id=?').get(decodeURIComponent(url.pathname.slice(1)));if(!saved)throw new Error('知识库分析快照不存在');return {rows:JSON.parse(saved.rows_json),revision:saved.revision,snapshot:uri};}
@@ -207,7 +207,7 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
       if(url.hostname==='task'&&!taskId)throw new Error('缺少知识库任务 ID');
       return {...status(db),rows:selected(db,taskId).map(j=>{const labels=approvedLabels(db,j);return {...JSON.parse(j.raw),knowledge_key:j.job_key,knowledge_hash:j.content_hash,knowledge_approved_skills:labels.skills,knowledge_approved_term_skills:labels.reviewed_terms,knowledge_approved_tasks:labels.tasks,knowledge_approved_domains:labels.domains};})};
     }finally{db.close();}},
-    async snapshot(uri){const data=await this.read(uri);const db=await open();try{const id=randomUUID();db.prepare('INSERT INTO snapshots VALUES(?,?,?,?,?)').run(id,data.revision,uri,JSON.stringify(data.rows),new Date().toISOString());return {uri:`kb://snapshot/${id}`,revision:data.revision,rows:data.rows.length};}finally{db.close();}},
+    async snapshot(uri,{synchronize=true}={}){const data=await this.read(uri,{synchronize});const db=await open();try{const id=randomUUID();db.prepare('INSERT INTO snapshots VALUES(?,?,?,?,?)').run(id,data.revision,uri,JSON.stringify(data.rows),new Date().toISOString());return {uri:`kb://snapshot/${id}`,revision:data.revision,rows:data.rows.length};}finally{db.close();}},
     async publishAnalysis(report){const db=await open();try{const id=hash([report.role,report.generated_at,report.input_file]);db.prepare('INSERT OR REPLACE INTO analyses VALUES(?,?,?,?,?,?)').run(id,report.role,report.knowledge_revision??null,report.knowledge_snapshot||'',JSON.stringify(report),report.generated_at||new Date().toISOString());bump(db);return id;}finally{db.close();}},
     async assistantData({readOnly=false,classificationCache,classifiers=[],onProgress,signal}={}){if(!readOnly)await ensure();const db=readOnly?new DatabaseSync(filename,{readOnly:true}):await open();try{
       signal?.throwIfAborted();onProgress?.({phase:'index_reading',message:'正在读取岗位库快照'});

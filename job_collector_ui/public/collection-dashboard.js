@@ -47,7 +47,6 @@ export function renderCollectionDashboard(task, {number, escapeHtml}) {
         <div><dt>资料完整</dt><dd>${complete==null?'—':number(complete)}<small>条</small></dd></div>
         <div><dt>待补全</dt><dd class="${missing?'is-incomplete':''}">${missing==null?'—':number(missing)}<small>条</small></dd></div>
       </dl>${goal}
-      <p class="job-statistics-note">按平台岗位 ID 去重，不含面经；资料完整不等于岗位匹配。</p>
       ${metrics.jobStatsError?'<p class="job-statistics-error" role="alert">资料完整统计暂不可用，请刷新重试。</p>':''}
       <details class="collection-channel-details" id="collection-channels-${escapeHtml(task.id||'current')}"><summary>岗位渠道明细<span>${platforms.length} 个渠道</span></summary>
         <div class="table-scroll"><table class="insight-table job-channel-table"><thead><tr><th scope="col">平台</th><th scope="col">已入库</th><th scope="col">资料完整</th><th scope="col">采集状态</th><th scope="col">处理操作</th></tr></thead><tbody>${platformRows}</tbody>${stats?`<tfoot><tr><th scope="row">合计</th><td>${number(stats.rows)} 条</td><td>${number(stats.completeRows)}</td><td colspan="2"></td></tr></tfoot>`:''}</table></div>

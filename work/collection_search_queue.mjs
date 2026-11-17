@@ -27,7 +27,7 @@ export function relatedCollectionKeywords(task){
 
 export function checkpointSearchState(platform,saved,settings={}){
   if(!saved)return 'pending';
-  if(saved.acquisition_mode==='browser_dom')return saved.completed?(saved.records?.length?'query_finished':'empty_unverified'):saved.budget_finished?'browser_budget_limit':saved.stop_reason||'pending';
+  if(saved.acquisition_mode==='browser_dom')return saved.completed?(saved.records?.length?'query_finished':'empty_unverified'):saved.budget_finished?(settings.browserLimitMode==='source_or_target'?'pending':'browser_budget_limit'):saved.stop_reason||'pending';
   if(isConditionScopedStop({code:saved.stop_reason}))return saved.stop_reason;
   if(platform==='jobonline'&&unverifiedLegacyCompletion(saved))return 'legacy_pagination_unverified';
   if(platform==='jobonline'&&saved.direct_search_verified&&!jobonlineCheckpointCurrent(saved))return 'pending';
@@ -104,7 +104,7 @@ export async function readCollectionSearchQueue(task,{channelAvailable=key=>coll
       if(platform==='mohrss'&&saved&&(saved.keyword!=null&&saved.keyword!==keyword||saved.city?.name&&saved.city.name!==city.name))throw Error('公共招聘网采集调度断点查询条件不匹配');
       // Some legacy checkpoints have no task id. Never silently adopt one here.
       const conditionError=manifest?.platforms?.[platform]?.errors?.some(error=>!error.resolved_at&&error.keyword===keyword&&error.city?.name===city.name&&!isConditionScopedStop(error));
-      let state=blocked?'channel_blocked':totalLimited?'total_limit':conditionError?'condition_error':checkpointSearchState(platform,saved,settings);
+      let state=blocked?'channel_blocked':totalLimited?'total_limit':conditionError?'condition_error':checkpointSearchState(platform,saved,saved?.acquisition_mode==='browser_dom'&&task.transportMode==='http_preferred_browser_fallback'?{...settings,browserLimitMode:'source_or_target'}:settings);
       // A finished query is finished even while the origin is cooling. Every
       // unfinished condition waits on the same source instead of being retired.
       if(platform==='zhaopin'&&state==='pending'&&Number(rate?.cooldownUntil)>now())state='origin_cooldown';

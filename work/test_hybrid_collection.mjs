@@ -33,7 +33,7 @@ try{
   assert.equal(deniedCode,44);
   const resource=await setup('resource',['iguopin','jobonline']);
   assert.equal(await runHybridCollection(resource,{resourceGuard:async()=>{},runHttp:async()=>43,runBrowser:async()=>{throw Error('must not start browser');}}),43);
-  const output=await setup('output-failure',['jobonline','liepin']);let unsafeCalls=0;
+  const output=await setup('output-failure',['jobonline','job51']);let unsafeCalls=0;
   assert.equal(await runHybridCollection(output,{resourceGuard:async()=>{},runBrowser:async()=>{unsafeCalls++;return {rows:0,errors:[{code:'ENOENT',stopChannel:true}]};}}),42);assert.equal(unsafeCalls,1,'output failure stops later browser channels');
   const paused=await setup('prior-stop',['jobonline']);await writeJsonAtomic(path.join(paused.outputDir,'RPA_jobonline_状态.json'),{task_id:paused.taskId,errors:[{code:'layout_changed',stopChannel:true}]});
   assert.equal(await runHybridCollection(paused,{resourceGuard:async()=>{},runBrowser:async()=>{throw Error('must not retry stopped channel');}}),44);
@@ -45,7 +45,7 @@ try{
   await fs.mkdir(path.dirname(checkpoint),{recursive:true});
   await writeJsonAtomic(checkpoint,{task_id:settings.taskId,acquisition_mode:'browser_dom',budget_finished:true,records:[row]});
   const queue=await readCollectionSearchQueue({id:settings.taskId,transportMode:HYBRID_MODE,platforms:['jobonline'],primaryKeyword:'销售工程师',keywords:['销售工程师'],outputDir:settings.outputDir,publicConfigPath:settings.publicConfigPath});
-  assert.equal(queue[0].state,'browser_budget_limit');
+  assert.equal(queue[0].state,'pending');
   assert.equal(checkpointSearchState('jobonline',{acquisition_mode:'browser_dom',completed:true,records:[]}),'empty_unverified');
   assert.equal((await fs.readdir(settings.outputDir)).some(f=>f.endsWith('.csv')),false);
   console.log('PASS hybrid orchestrator (injected workers/resource probe): HTTP-first routing, no denied fallback, resource stop, legacy opt-in, sticky failures, global single worker, native SQLite, independent RPA queue budget.');
