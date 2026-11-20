@@ -1,4 +1,8 @@
-# 岗位采集与分析系统 · 本机开发源码
+# 岗位采集与分析系统 · Hadoop 开发版
+
+**当前分支：`version/hadoop`。状态：仅建立独立开发分支并保存技术方案，Hadoop 存储和处理尚未实现。**
+
+当前可运行的 SQLite 本地版维护在 [`version/local`](https://github.com/TMENG888/Job_Collector_To_Analysis/tree/version/local)。本分支从同一源码基线派生；下方既有功能说明描述继承的本地能力，不代表已迁移到 Hadoop。建设范围、批次协议、验收与后续步骤见 [Hadoop 建设方案](docs/HADOOP_PLAN.md)；两版对照见[技术路线图](docs/双版本管理与技术路线.md)。
 
 2026-11-20：通过 `version/local` 和 `version/hadoop` 分支管理本地版与 Hadoop 开发版，保留共同源码历史。当前运行版本继续使用 SQLite 与本地计算；Hadoop 分支目前为技术方案与建设计划，尚未部署 HDFS、Spark 或 YARN。两版技术路线、分支用途及开发约束见[双版本管理与技术路线](docs/双版本管理与技术路线.md)。
 
