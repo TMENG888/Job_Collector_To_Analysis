@@ -16,7 +16,10 @@ import {fetchShixisengList,fetchShixisengDetail,fetchMohrssList} from './public_
 import {collectionChannelAvailable,collectionChannelPauseReason,assertDirectHttpCollection} from './channel_availability.mjs';
 import {createPoliteHttpClient} from './polite_http_client.mjs';
 import {retainedChannelErrors,isConditionScopedStop,readCollectionRound,filterCollectionCombinations} from './task_collection_config.mjs';
-import {runChannels,loadShixiDetailCache,reuseShixiDetails} from './collection_concurrency.mjs';
+import {loadShixiDetailCache,reuseShixiDetails} from './collection_concurrency.mjs';
+import {createChannelScheduler,exposeChannelScheduler} from './collection_channel_scheduler.mjs';
+import {updateChannelManifest} from './channel_manifest_store.mjs';
+import {consumeChannelVerificationRetry} from './channel_verification_state.mjs';
 import {YieldWindow,yieldNote} from './collection_yield.mjs';
 import {assertTaskOutputOwnership} from './task_dataset_scope.mjs';
 import {collectNowcoderInterviews,taskInterviewSettings} from './nowcoder_interviews.mjs';
@@ -216,6 +219,9 @@ async function collectShixiseng(keyword, city) {
   const reused=reuseShixiDetails(unique,details,shixiDetailCache);
   if(reused){await save();console.log(`shixiseng cache ${keyword}/${city.name}: 复用 ${reused} 条成功详情，不重复请求`);}
   const pending = unique.filter((record) => !details[record.uuid]?.ok || !Object.keys(details[record.uuid].data||{}).length);
+  const progress=createCollectorProgressSink({enabled:process.env.JOB_COLLECTOR_NATIVE_STORE==='1',write:rows=>writeNativeChannelRows(outputDir,currentTaskId,rows)});
+  await progress.append(normalizeShixi(unique.map(record=>({list:record,detail:details[record.uuid]?.data||{},detail_status:details[record.uuid]?.ok?'成功':'详情待续采'})),keyword,city,total));
+  try{
   await mapLimit(pending, config.request.concurrency || 3, async (record, index) => {
     try {
       const {data}=await fetchShixisengDetail({request,uuid:record.uuid});
@@ -227,10 +233,12 @@ async function collectShixiseng(keyword, city) {
       details[record.uuid] = { ok: false, data: {}, error: String(error.message || error) };
     }
     await save();
+    await progress.append(normalizeShixi([{list:record,detail:details[record.uuid]?.data||{},detail_status:details[record.uuid]?.ok?'成功':'详情待续采'}],keyword,city,total));
     if ((index + 1) % 25 === 0 || index + 1 === pending.length) {
       console.log(`shixiseng details ${keyword}/${city.name}: ${Object.keys(details).length}/${unique.length}`);
     }
   });
+  }finally{await progress.flush();}
   const raw = unique.map((record) => ({ list: record, detail_status: details[record.uuid]?.ok ? '成功' : `失败：${details[record.uuid]?.error || ''}`, detail: details[record.uuid]?.data || {} }));
   await writeJsonAtomic(comboFile('实习僧', keyword, city.name),{task_id:config.task_id, keyword, city, total, records: raw});
   return normalizeShixi(raw,keyword,city,total);
@@ -501,7 +509,7 @@ async function collectLiepinLimited(keyword,city) {
 const collectors = { shixiseng: collectShixiseng, zhaopin: collectZhaopin, job51: collect51job, jobonline: collectJobonlineHttp, iguopin: collectIguopin, mohrss: collectMohrss, liepin:collectLiepinLimited };
 const allRows = [];
 const manifest = { task_id:config.task_id||process.env.JOB_COLLECTOR_TASK_ID||null,collected_at: collectedAt, config, platforms: {}, note: 'HTTP 核验数据为主；猎聘与就业在线通过本人官网页面会话读取搜索响应。同站共享限速，登录失效、验证或访问受限即停，原数据与断点保留。' };
-const previousManifest = await fs.readFile(path.join(outputDir,'采集清单.json'),'utf8').then(JSON.parse).catch(()=>null);
+const previousManifest = await fs.readFile(path.join(outputDir,'采集清单.json'),'utf8').then(JSON.parse).catch(error=>{if(error.code==='ENOENT')return {task_id:currentTaskId,platforms:{}};throw error;});
 if(previousManifest&&previousManifest.task_id!==currentTaskId)throw Error('采集清单任务 ID 不匹配');
 if(requestedRound||process.env.JOB_STRUCTURED_ROUND_ONLY==='jobonline')manifest.platforms={...previousManifest?.platforms};
 // 牛客岗位不受本轮坐标轴限制，重跑时必须延续上一轮的渠道记录，否则会在清单里被抹掉。
@@ -528,11 +536,30 @@ const nowcoderJobRun=config.nowcoder?.enabled
     return {status:'blocked',reason:error.message,errorCode:channelErrorDiagnostic([error]).code};
   }):Promise.resolve(null);
 
-const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,Number(config.request?.platformConcurrency)||2)),async platform=>{
+const enabledPlatforms=Object.keys(collectors).filter(platform=>config.platforms?.[platform]?.enabled);
+const initialPlatforms=enabledPlatforms.filter(platform=>(!requestedRound||requestedRound.combinations.some(combo=>combo.platform===platform))&&(process.env.JOB_STRUCTURED_ROUND_ONLY!=='jobonline'||platform==='jobonline'));
+const attemptedPlatforms=new Set();
+const scheduler=createChannelScheduler({platforms:enabledPlatforms,initial:initialPlatforms,limit:enabledPlatforms.length,
+  shouldStop:()=>resourcePaused||outputPaused,
+  onState:(platform,entry)=>{if(process.connected)process.send({type:'channel-state',platform,entry},()=>{});},
+  run:async (platform,{restart=false}={})=>{
+  restart=restart||process.env.JOB_COLLECTION_RESUME_PLATFORM===platform;
+  attemptedPlatforms.add(platform);
   const settings = config.platforms[platform];
-  if(requestedRound&&!requestedRound.combinations.some(combo=>combo.platform===platform))return;
-  if(process.env.JOB_STRUCTURED_ROUND_ONLY==='jobonline'&&platform!=='jobonline')return;
+  if(restart){
+    const latest=JSON.parse(await fs.readFile(path.join(outputDir,'采集清单.json'),'utf8'));
+    if(latest.task_id!==currentTaskId)throw Error('恢复渠道清单任务归属不匹配');
+    previousManifest.platforms[platform]=latest.platforms?.[platform]||{errors:[]};
+    console.log(`[单渠道恢复] ${platform}：复用本渠道断点，其他渠道继续运行`);
+  }
   if(!settings?.enabled)return;
+  if(['job51','liepin'].includes(platform)){
+    const retried=await consumeChannelVerificationRetry({id:currentTaskId,outputDir,platforms:enabledPlatforms},platform);
+    if(retried){
+      previousManifest.platforms[platform]=retried.platforms[platform];
+      console.log(`[人工处理续采] ${platform}：已消费本次确认，实际采集仍以官网响应为准`);
+    }
+  }
   return withChannelHeartbeat({outputDir,taskId:currentTaskId,platform,summary:()=>({...manifest.platforms[platform],paused:resourcePaused||outputPaused})},async()=>{
   if(!collectionChannelAvailable(platform)){
     if(!settings?.enabled)return;
@@ -567,17 +594,18 @@ const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,N
     }
     console.log(`[就业在线轮次预算] 已保存${jobonlineBudget.start}条；本轮最多新增${jobonlineBudget.maxNewRows}条；每轮上限${jobonlineBudget.perRound}条`);
   }
-  const blockingErrors = retainedChannelErrors(previousManifest,manifest.task_id,platform,process.env.JOB_COLLECTOR_BLOCKED_POLICY);
+  const blockingErrors = restart&&['shixiseng','iguopin','mohrss'].includes(platform)?[]:retainedChannelErrors(previousManifest,manifest.task_id,platform,process.env.JOB_COLLECTOR_BLOCKED_POLICY);
   if (blockingErrors.length) console.error(`${platform} 本轮跳过：上轮渠道受阻，保留 ${rows.length} 条已采集数据和断点；不自动重试受阻页面，人工处理后可单独续采`);
   const configuredCombinations=config.keywords.flatMap(keyword=>settings.cities.map(city=>({keyword,city})));
-  const combinations=blockingErrors.length?[]:filterCollectionCombinations(requestedRound,platform,configuredCombinations);
+  const combinations=blockingErrors.length?[]:filterCollectionCombinations(restart?null:requestedRound,platform,configuredCombinations);
   const selectedKeys=new Set(combinations.map(combo=>comboKey(platform,combo.keyword,combo.city.name)));
   // Selective rounds must retain another condition's failure without treating
   // it as a platform-wide login failure or forgetting it on the next round.
   // 渠道级阻塞（无关键词/城市、stopChannel=true）在选择性轮次里不参与判定，因此不得跨轮继承：
   // 否则上一轮写下的整渠道阻塞会永久留在清单里，每轮都以「上轮渠道受阻」开始，退出码长期停在 44。
   const inheritedErrors=requestedRound&&roundCoversPlatform(platform)?(previousManifest?.platforms?.[platform]?.errors||[]).filter(error=>!blockingErrors.includes(error)&&!selectedKeys.has(comboKey(platform,error.keyword,error.city?.name))&&!(error.stopChannel===true&&!error.conditionScoped&&!error.keyword)):[];
-  const errors=[...blockingErrors,...inheritedErrors];
+  const retryHistory=(previousManifest.platforms?.[platform]?.errors||[]).filter(error=>error.resolution==='manual_retry_requested'&&error.resolved_at);
+  const errors=[...new Set([...retryHistory,...blockingErrors,...inheritedErrors])];
   const previousRemaining=previousManifest?.task_id===manifest.task_id ? previousManifest.platforms?.[platform]?.scheduling?.remaining||[] : [];
   const priority=new Set(previousRemaining.map(row=>comboKey(platform,row.keyword,row.city.name)));
   combinations.sort((a,b)=>Number(priority.has(comboKey(platform,b.keyword,b.city.name)))-Number(priority.has(comboKey(platform,a.keyword,a.city.name))));
@@ -628,10 +656,14 @@ const outcomes=await runChannels(Object.keys(collectors),Math.max(1,Math.min(2,N
     manifest.platforms[platform].continuation=jobonlineContinuation({budget:jobonlineBudget,size:discoveredIds.jobonline.size,checkpoints,errors,deferred:Boolean(scheduling),maxPages:settings.maxPages||500});
   }
   await writeCsv(path.join(outputDir, `${platform}_标准化数据.csv`), deduped);
+  await updateChannelManifest({id:currentTaskId,outputDir},latest=>{latest.platforms[platform]=manifest.platforms[platform];});
   console.log(`${platform} complete: ${deduped.length}`);
   if(pendingOutputs.length)outputPaused=true;
   });
-},()=>resourcePaused||outputPaused);
+}});
+const detachControl=exposeChannelScheduler(scheduler);
+console.log(`[渠道调度] ${initialPlatforms.length} 个平台独立并行；同站限速保留，异常只暂停对应渠道`);
+const outcomes=await scheduler.start();detachControl();
 const interviewOutcome=await interviewRun;
 if(interviewOutcome?.status==='blocked')console.log('[面经流程] 牛客通道已停止；不阻断其他岗位渠道，详情见面经进度');
 const nowcoderJobOutcome=await nowcoderJobRun;
@@ -647,11 +679,12 @@ if(config.nowcoder?.enabled){
   manifest.platforms.nowcoder={rows:retained.length,errors:nowcoderTerminal?[{keyword:null,city:null,error:nowcoderJobOutcome.reason,code:nowcoderJobOutcome.errorCode||'collection_error',stopChannel:true}]:[],acquisition:channelAcquisition.nowcoder||null,status:nowcoderJobOutcome?.status||'skipped',phase:nowcoderJobOutcome?.phase||null,records_file:path.relative(outputDir,paths.records).replace(/\\/g,'/')};
   if(nowcoderTerminal)console.log('[牛客岗位] 通道已停止；不阻断其他岗位渠道，详情见牛客岗位数据/status.json');
 }
-for(const outcome of outcomes)if(outcome.error){
+for(const outcome of new Map(outcomes.map(outcome=>[outcome.item,outcome])).values())if(outcome.error){
   const error=outcome.error;
   if(error.code==='RESOURCE_PRESSURE')resourcePaused=true;
   if(collectionExitCode(error)===42)outputPaused=true;
   manifest.platforms[outcome.item]={rows:manifest.platforms[outcome.item]?.rows||0,errors:[{error:String(error.stack||error),code:error.code||'collection_error',stopChannel:true}]};
+  await updateChannelManifest({id:currentTaskId,outputDir},latest=>{latest.platforms[outcome.item]=manifest.platforms[outcome.item];});
   console.error(`${outcome.item} 独立渠道异常，其他平台继续：${error.message}`);
 }
 
@@ -664,6 +697,7 @@ if(pausedThisRun){
 {
 // A selective round must not discard other channels from the aggregate export.
 if(requestedRound||process.env.JOB_STRUCTURED_ROUND_ONLY==='jobonline')for(const platform of Object.keys(manifest.platforms)){
+  if(attemptedPlatforms.has(platform))continue;
   if(requestedRound?requestedRound.combinations.some(combo=>combo.platform===platform):platform==='jobonline')continue;
   if(process.env.JOB_COLLECTOR_NATIVE_STORE==='1'){
     const {readNativeTaskRows}=await import('./collector_native_sink.mjs');
@@ -675,10 +709,15 @@ if(requestedRound||process.env.JOB_STRUCTURED_ROUND_ONLY==='jobonline')for(const
 }
 const allDeduped = [...new Map(allRows.map((row) => [`${row.platform}:${row.job_id}`, row])).values()];
 const totalRows = await deliveryTotalRows(allDeduped.length, config.task_id || currentTaskId);
-await writeJsonAtomic(path.join(outputDir, '采集清单.json'), { ...manifest, total_rows: totalRows });
+const mergedManifest=await updateChannelManifest({id:currentTaskId,outputDir},latest=>{
+  for(const [key,value]of Object.entries(manifest))if(key!=='platforms')latest[key]=value;
+  if(manifest.platforms.nowcoder)latest.platforms.nowcoder=manifest.platforms.nowcoder;
+  latest.total_rows=totalRows;
+});
+manifest.platforms=mergedManifest.platforms;
 await fs.copyFile(configPath, path.join(outputDir, '采集配置.json'));
 await writeCsv(path.join(outputDir, '多平台岗位标准化汇总.csv'), allDeduped);
-if(pendingOutputs.length)await writeJsonAtomic(path.join(outputDir,'采集清单.json'),{...manifest,total_rows:totalRows,pending_outputs:pendingOutputs});
+if(pendingOutputs.length)await updateChannelManifest({id:currentTaskId,outputDir},latest=>{latest.total_rows=totalRows;latest.pending_outputs=pendingOutputs;});
 console.log(JSON.stringify({ outputDir, total: totalRows, exported: allDeduped.length, platforms: manifest.platforms }));
 if(pausedThisRun)process.exitCode=resourcePaused?43:42;
 else if(pendingOutputs.length)process.exitCode=42;

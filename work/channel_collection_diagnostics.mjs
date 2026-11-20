@@ -10,6 +10,7 @@ const policies = {
   dependency_missing: ['failed','缺少运行依赖','请修复本机运行依赖后再续采'],
   verification_required: ['manual','待人工验证','请在官网核对会话或验证状态'],
   session_required: ['manual','待更新会话','请在官网完成登录并保存有效会话'],
+  browser_start_failed: ['manual','浏览器未启动','请先关闭该渠道的普通登录窗口，再继续采集；仍失败时检查本机浏览器日志'],
   navigation_error: ['manual','待检查官网','官网页面未返回可核验搜索响应'],
   origin_cooldown: ['paused','渠道冷却中','请稍后人工检查登录、验证或限流状态'],
   access_blocked: ['manual','访问受限','已停止请求，请人工核对'],
@@ -42,6 +43,7 @@ function normalizedErrorCode(error) {
   if(codes.includes('ENOSPC'))return 'disk_full';
   if(codes.some(code=>['OUTPUT_LOCKED','EACCES','EPERM','EBUSY','EROFS','SQLITE_BUSY','SQLITE_LOCKED'].includes(code)))return 'output_locked';
   if(codes.some(code=>['EIO','ENOENT','SQLITE_IOERR','SQLITE_CORRUPT'].includes(code)))return 'output_error';
+  if(error?.code==='browser_start_failed'||/浏览器启动失败；请检查配置目录是否被旧窗口占用/.test(message))return 'browser_start_failed';
   if(['cookie_expired','invalid_cookie','COOKIE_EXPIRED'].includes(error?.code))return 'cookie_expired';
   if(['session_expired','SESSION_EXPIRED','invalid_session'].includes(error?.code))return 'session_expired';
   if(['client_unavailable','session_missing'].includes(error?.code))return 'session_required';

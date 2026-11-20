@@ -21,10 +21,11 @@ export function createCollectionKeywordExpansion(dataDir,{model=createRecruiterM
     const role=body.role.trim();if(role.length<2||role.length>120||/[\r\n]/.test(role))throw Error('岗位名称须为2–120字');
     if(busy)throw Error('关键词正在生成，请稍候');
     busy=true;
-    try{
-      const result=await model.request(collectionKeywordPrompt,{role},{budget:{limit:.02,spent:0},maxTokens:500});
+    let requestUsage=null;try{
+      const result=await model.request(collectionKeywordPrompt,{role},{maxTokens:500});
+      requestUsage=result._usage;
       return {role,keywords:validateCollectionKeywords(result,role),model:result._model||'DeepSeek',usage:result._usage||null};
-    }finally{busy=false;}
+    }catch(error){error.usage||=requestUsage;throw error;}finally{busy=false;}
   }};
 }
 
@@ -40,7 +41,7 @@ export function createCollectionKeywordHandler(service){
       const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>2000)throw Error('请求体过大');chunks.push(chunk);}
       let body;try{body=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw Error('请求内容不是有效JSON');}
       json(res,200,await service.generate(body));
-    }catch(error){json(res,400,{error:error.message});}
+    }catch(error){json(res,400,{error:error.message,usage:error.usage||null});}
     return true;
   };
 }

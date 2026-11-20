@@ -5,7 +5,7 @@ export async function fetchJsonWithTimeout(url,options={},timeoutMs=15000){
  try{
   const response=await fetch(url,{...options,headers:{'content-type':'application/json',...options.headers},signal:controller.signal});
   const data=await response.json();
-  if(!response.ok){const error=new Error(data.error||'操作失败');error.status=response.status;throw error;}
+  if(!response.ok){const error=new Error(data.error||'操作失败');error.status=response.status;error.usage=data.usage;throw error;}
   return data;
  }catch(error){
   if(controller.signal.aborted){const timeout=new Error('请求超时；后台任务可能仍在执行，请刷新状态确认');timeout.code='REQUEST_TIMEOUT';throw timeout;}

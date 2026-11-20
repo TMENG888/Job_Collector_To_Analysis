@@ -69,10 +69,10 @@ export function createRoleDiscovery(dataDir,{directory=process.env.JOB_ROLE_DISC
       await acquire();const run={id:randomUUID(),status:'clustering',message:'本机扫描全库并聚类，不调用模型',createdAt:new Date().toISOString()};
       try{await save(run);}catch(e){await finish();throw e;}
       const signal=active.controller.signal;
-      void(async()=>{try{const report=await runCluster(path.join(directory,run.id+'.json'),signal);signal.throwIfAborted();if(!report?.clusters?.length)throw Error('聚类未返回有效结果');await save({...run,...report,status:'clustered',message:'本地聚类完成；可按预算让DeepSeek识别各簇岗位方向'});}catch(e){await save({...run,status:signal.aborted?'cancelled':'failed',message:String(e.message).slice(0,500)});}finally{await finish();}})();return run;
+      void(async()=>{try{const report=await runCluster(path.join(directory,run.id+'.json'),signal);signal.throwIfAborted();if(!report?.clusters?.length)throw Error('聚类未返回有效结果');await save({...run,...report,status:'clustered',message:'本地聚类完成；可由DeepSeek识别各簇岗位方向'});}catch(e){await save({...run,status:signal.aborted?'cancelled':'failed',message:String(e.message).slice(0,500)});}finally{await finish();}})();return run;
     },
-    async name({confirmed,budget=.5}={}){
-      if(confirmed!==true||!Number.isFinite(budget)||budget<.05||budget>.5)throw Error('请确认公开JD发送，预算须为0.05–0.50元');
+    async name({confirmed,budget=null}={}){
+      if(confirmed!==true)throw Error('请确认发送脱敏公开JD');
       await acquire();let run;
       try{run=await read(stateFile,null);if(run?.status==='naming'&&run.clusters?.some(c=>c.interpretation))run.status='partial';if(!run||!['clustered','partial'].includes(run.status))throw Error('请先完成本地聚类；已执行命名不自动付费重试');if(!(await model.status()).configured)throw Error('请先配置DeepSeek');await save({...run,status:'naming',budget,message:'DeepSeek读取代表与边界JD，判断主导岗位或混杂簇'});}catch(e){await finish();throw e;}
       const signal=active.controller.signal;
@@ -83,11 +83,11 @@ export function createRoleDiscovery(dataDir,{directory=process.env.JOB_ROLE_DISC
           for(let i=0;i<remaining.length;i+=3){
             signal.throwIfAborted();const batch=remaining.slice(i,i+3),safe=batch.map(c=>({id:c.id,terms:c.terms,representatives:c.representatives.map(r=>({...r,body:redactClassifierText(r.body),title:redactClassifierText(r.title)})),boundary:c.boundary.map(r=>({...r,body:redactClassifierText(r.body),title:redactClassifierText(r.title)}))}));
             const result=await model.request(namingPrompt,{clusters:safe},{signal,budget:usageBudget,maxTokens:1600});
-            usage={input:usage.input+(result._usage?.input||0),output:usage.output+(result._usage?.output||0),estimate:usage.estimate+(result._usage?.estimate||0)};
+            usage={...usage,input:usage.input+(result._usage?.input||0),output:usage.output+(result._usage?.output||0),estimate:usage.estimate+(result._usage?.estimate||0)};
             labels.push(...validateClusterNames(result,batch));const namedMap=new Map(labels.map(r=>[r.id,r])),clusters=run.clusters.map(c=>({...c,interpretation:namedMap.get(c.id)}));await save({...run,status:'naming',budget,usage,named:labels.length,draftNames:labels,clusters,suggestions:discoveredRoleSuggestions(clusters),message:'已识别 '+labels.length+'/'+run.clusters.length+' 个候选簇'});
           }
           const names=new Map(labels.map(r=>[r.id,r])),clusters=run.clusters.map(c=>({...c,interpretation:names.get(c.id)}));await save({...run,status:'completed',budget,usage,named:labels.length,clusters,suggestions:discoveredRoleSuggestions(clusters),message:'岗位方向探索完成；同名方向已汇总，混杂簇不自动训练'});
-        }catch(e){const names=new Map(labels.map(r=>[r.id,r])),clusters=run.clusters.map(c=>({...c,interpretation:names.get(c.id)}));await save({...run,status:labels.length?'partial':signal.aborted?'cancelled':'failed',budget,usage,named:labels.length,clusters,suggestions:discoveredRoleSuggestions(clusters),draftNames:labels,message:String(e.message).slice(0,500)+'；已保存有效结果，不自动付费重试。继续识别须重新确认预算'});}finally{await finish();}
+        }catch(e){if(e.usage)usage={input:usage.input+(e.usage.input||0),output:usage.output+(e.usage.output||0),estimate:usage.estimate+(e.usage.estimate||0),unknown:(usage.unknown||0)+(e.usage.unknown||0)};const names=new Map(labels.map(r=>[r.id,r])),clusters=run.clusters.map(c=>({...c,interpretation:names.get(c.id)}));await save({...run,status:labels.length?'partial':signal.aborted?'cancelled':'failed',budget,usage,named:labels.length,clusters,suggestions:discoveredRoleSuggestions(clusters),draftNames:labels,message:String(e.message).slice(0,500)+'；已保存有效结果，不自动付费重试。可从已保存结果继续识别'});}finally{await finish();}
       })();return {status:'naming'};
     },
     async cancel(){active?.controller.abort();active?.child?.kill();model.cancel?.();return {message:'已请求停止，不自动重试'};},

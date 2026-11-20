@@ -1,6 +1,7 @@
 import asyncio
 import os
 import secrets
+from pathlib import Path
 import httpx
 from .processes import available_port, creation_options, terminate
 
@@ -22,8 +23,11 @@ class Worker:
             return
         s = self.settings
         s.runtime.mkdir(parents=True, exist_ok=True)
+        temp = Path(os.environ.get("TEMP") or os.environ.get("TMP") or s.runtime / "temp").resolve()
+        temp.mkdir(parents=True, exist_ok=True)
         self.logs = [open(s.runtime / name, "ab", buffering=0) for name in ("worker.stdout.log", "worker.stderr.log")]
-        env = {**os.environ, "JOB_UI_DATA_DIR": str(s.data), "JOB_UI_PORT": self.url.rsplit(":", 1)[1],
+        env = {**os.environ, "TEMP": str(temp), "TMP": str(temp),
+               "JOB_UI_DATA_DIR": str(s.data), "JOB_UI_PORT": self.url.rsplit(":", 1)[1],
                "JOB_UI_OPEN_BROWSER": "0", "JOB_UI_START_WORKER": "0", "JOB_WORKER_TOKEN": self.token,
                "JOB_PUBLIC_ORIGIN": s.public_url, "JOB_COMPUTE_BASE_URL": s.public_url,
                "JOB_COMPUTE_TOKEN": self.token, "PYTHONDONTWRITEBYTECODE": "1"}

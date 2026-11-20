@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1930" viewBox="0 0 1600 1930" role="img">
+<title>岗位数据分析与咨询系统技术路线图 — 当前本地运行版</title><desc>六阶段业务链路、存储计算架构、增量版本约束与验证方案。</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#246b86"/></marker></defs>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+<rect x="0" y="0" width="1600" height="1930" rx="0" fill="white" stroke="none" stroke-width="1.5"/>
+<text x="62" y="76" font-size="42" fill="#203440" font-weight="700">岗位数据分析与咨询系统技术路线图</text>
+<text x="62" y="124" font-size="29" fill="#246b86" font-weight="700">版本 A｜当前本地存储与处理方案（依据现有源码）</text>
+<text x="62" y="166" font-size="23" fill="#5b7180" font-weight="400">同一业务目标：多平台岗位采集、数据质量治理、岗位洞察、简历匹配与证据咨询</text>
+<text x="62" y="207" font-size="25" fill="#246b86" font-weight="700">业务数据主链路</text>
+<text x="1090" y="207" font-size="25" fill="#246b86" font-weight="700">支撑技术与约束</text>
+<rect x="62" y="226" width="988" height="160" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="246" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="275" font-size="24" fill="white" font-weight="700">01</text>
+<text x="138" y="275" font-size="29" fill="#203440" font-weight="700">多平台岗位采集</text>
+<rect x="892" y="248" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="272" font-size="18" fill="#246b86" font-weight="500">已实现</text>
+<text x="88" y="317" font-size="22" fill="#5b7180" font-weight="400">岗位关键词／城市／平台配置 → 各渠道并行采集</text>
+<text x="88" y="346" font-size="22" fill="#5b7180" font-weight="400">HTTP 接口、会话验证、分页限速与断点续采</text>
+<text x="88" y="375" font-size="22" fill="#5b7180" font-weight="400">保留平台岗位ID、来源任务与采集过程记录</text>
+<path d="M 556 388 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="422" width="988" height="160" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="442" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="471" font-size="24" fill="white" font-weight="700">02</text>
+<text x="138" y="471" font-size="29" fill="#203440" font-weight="700">本地原始数据与中央知识库</text>
+<rect x="892" y="444" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="468" font-size="18" fill="#246b86" font-weight="500">已实现</text>
+<text x="88" y="513" font-size="22" fill="#5b7180" font-weight="400">任务采集断点与原始记录 → 中央 SQLite 知识库</text>
+<text x="88" y="542" font-size="22" fill="#5b7180" font-weight="400">jobs 当前记录＋job_versions 内容历史＋任务关联</text>
+<text x="88" y="571" font-size="22" fill="#5b7180" font-weight="400">同平台＋岗位ID去重；正文内容哈希区分版本</text>
+<path d="M 556 584 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="618" width="988" height="160" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="638" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="667" font-size="24" fill="white" font-weight="700">03</text>
+<text x="138" y="667" font-size="29" fill="#203440" font-weight="700">本地清洗处理与固定批次</text>
+<rect x="892" y="640" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="664" font-size="18" fill="#246b86" font-weight="500">已实现</text>
+<text x="88" y="709" font-size="22" fill="#5b7180" font-weight="400">Node.js 本地规则处理：薪资、地区、学历与经验分组</text>
+<text x="88" y="738" font-size="22" fill="#5b7180" font-weight="400">processing.sqlite 保存处理缓存、运行批次与明细</text>
+<text x="88" y="767" font-size="22" fill="#5b7180" font-weight="400">按岗位身份＋内容哈希＋规则版本复用；质量报告留痕</text>
+<path d="M 556 780 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="814" width="988" height="270" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="834" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="863" font-size="24" fill="white" font-weight="700">04</text>
+<text x="138" y="863" font-size="29" fill="#203440" font-weight="700">岗位洞察：已知方向与新方向发现</text>
+<rect x="892" y="836" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="860" font-size="18" fill="#246b86" font-weight="500">已实现</text>
+<rect x="82" y="886" width="456" height="145" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="556" y="886" width="474" height="145" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="98" y="919" font-size="24" fill="#246b86" font-weight="700">已知方向：分类与技术标签</text>
+<text x="98" y="954" font-size="21" fill="#5b7180" font-weight="400">TF-IDF＋逻辑回归筛选目标岗位</text>
+<text x="98" y="983" font-size="21" fill="#5b7180" font-weight="400">Qwen 3.8-Flash 标注与原文证据</text>
+<text x="98" y="1012" font-size="21" fill="#5b7180" font-weight="400">岗位ID＋正文哈希＋分类器版本</text>
+<text x="572" y="919" font-size="24" fill="#157d70" font-weight="700">探索方向：聚类与辅助命名</text>
+<text x="572" y="954" font-size="21" fill="#5b7180" font-weight="400">标题加权 TF-IDF＋MiniBatchKMeans</text>
+<text x="572" y="983" font-size="21" fill="#5b7180" font-weight="400">代表岗位 → DeepSeek 识别主导职位</text>
+<text x="572" y="1012" font-size="21" fill="#5b7180" font-weight="400">核验候选方向 → 标注训练 → 评测</text>
+<text x="88" y="1061" font-size="21" fill="#203440" font-weight="600">输入：选定数据范围；清洗批次可追溯</text>
+<path d="M 556 1086 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="1122" width="988" height="160" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="1142" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="1171" font-size="24" fill="white" font-weight="700">05</text>
+<text x="138" y="1171" font-size="29" fill="#203440" font-weight="700">本地统计汇总与报告快照</text>
+<rect x="892" y="1144" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="1168" font-size="18" fill="#246b86" font-weight="500">已实现</text>
+<text x="88" y="1213" font-size="22" fill="#5b7180" font-weight="400">本地读取目标岗位 → 薪资／省份／学历经验／技能统计</text>
+<text x="88" y="1242" font-size="22" fill="#5b7180" font-weight="400">生成图表数据与报告快照；保留来源及分类器版本</text>
+<text x="88" y="1271" font-size="22" fill="#5b7180" font-weight="400">同版本且未触发更新条件时复用；版本变化重新分析</text>
+<path d="M 556 1284 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="1318" width="988" height="172" rx="10" fill="#f0f8f5" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="1338" width="40" height="40" rx="7" fill="#157d70" stroke="#157d70" stroke-width="1.5"/>
+<text x="89" y="1367" font-size="24" fill="white" font-weight="700">06</text>
+<text x="138" y="1367" font-size="29" fill="#203440" font-weight="700">应用服务与交互</text>
+<rect x="892" y="1340" width="132" height="33" rx="6" fill="#e4f0ed" stroke="none" stroke-width="1.5"/>
+<text x="905" y="1364" font-size="18" fill="#157d70" font-weight="500">已实现</text>
+<text x="88" y="1409" font-size="22" fill="#5b7180" font-weight="400">FastAPI＋受控 Node.js 业务进程＋本地 Python 模型进程</text>
+<text x="88" y="1438" font-size="22" fill="#5b7180" font-weight="400">岗位洞察与数据质量｜对话式简历画像与匹配｜求职助手</text>
+<text x="88" y="1467" font-size="22" fill="#5b7180" font-weight="400">桌面工作台／Web 前端；检索统计结果与岗位原文可追溯</text>
+<rect x="1090" y="226" width="448" height="252" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="269" font-size="27" fill="#203440" font-weight="700">部署与组件分工</text>
+<text x="1112" y="311" font-size="22" fill="#5b7180" font-weight="400">Windows 单机运行</text>
+<text x="1112" y="344" font-size="22" fill="#5b7180" font-weight="400">SQLite：中央岗位数据与内容版本</text>
+<text x="1112" y="377" font-size="22" fill="#5b7180" font-weight="400">SQLite／文件：清洗、快照与缓存</text>
+<text x="1112" y="410" font-size="22" fill="#5b7180" font-weight="400">Node.js：规则处理和业务编排</text>
+<text x="1112" y="443" font-size="22" fill="#5b7180" font-weight="400">Python：训练、聚类与向量检索</text>
+<rect x="1090" y="502" width="448" height="218" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="545" font-size="27" fill="#203440" font-weight="700">质量与重复处理</text>
+<text x="1112" y="587" font-size="22" fill="#5b7180" font-weight="400">入库数量与异常原因留痕</text>
+<text x="1112" y="620" font-size="22" fill="#5b7180" font-weight="400">字段完整性、解析率、可用量</text>
+<text x="1112" y="653" font-size="22" fill="#5b7180" font-weight="400">不同岗位ID共用正文仅标疑似</text>
+<text x="1112" y="686" font-size="22" fill="#5b7180" font-weight="400">不把同城不同地址直接视为同岗</text>
+<rect x="1090" y="744" width="448" height="218" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="787" font-size="27" fill="#203440" font-weight="700">增量与版本约束</text>
+<text x="1112" y="829" font-size="22" fill="#5b7180" font-weight="400">同岗位＋同分类器版本复用快照</text>
+<text x="1112" y="862" font-size="22" fill="#5b7180" font-weight="400">全库增长达 20% 后排队更新</text>
+<text x="1112" y="895" font-size="22" fill="#5b7180" font-weight="400">分类器版本变化重新分析</text>
+<text x="1112" y="928" font-size="22" fill="#5b7180" font-weight="400">规则变化按版本检查缓存有效性</text>
+<rect x="1090" y="986" width="448" height="218" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="1029" font-size="27" fill="#203440" font-weight="700">简历匹配与向量复用</text>
+<text x="1112" y="1071" font-size="22" fill="#5b7180" font-weight="400">DeepSeek 解析并维护人才画像</text>
+<text x="1112" y="1104" font-size="22" fill="#5b7180" font-weight="400">BM25＋BGE 召回 → 重排</text>
+<text x="1112" y="1137" font-size="22" fill="#5b7180" font-weight="400">岗位向量按文本哈希与模型缓存</text>
+<text x="1112" y="1170" font-size="22" fill="#5b7180" font-weight="400">新增／正文变化才重新向量化</text>
+<rect x="1090" y="1228" width="448" height="262" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="1271" font-size="27" fill="#203440" font-weight="700">AI 助手与证据链</text>
+<text x="1112" y="1313" font-size="22" fill="#5b7180" font-weight="400">提问 → 意图与条件识别</text>
+<text x="1112" y="1346" font-size="22" fill="#5b7180" font-weight="400">调用受限岗位检索及统计工具</text>
+<text x="1112" y="1379" font-size="22" fill="#5b7180" font-weight="400">读取已有索引、快照与岗位原文</text>
+<text x="1112" y="1412" font-size="22" fill="#5b7180" font-weight="400">回答关联岗位与面经证据</text>
+<text x="1112" y="1445" font-size="22" fill="#5b7180" font-weight="400">接口失败须保留原因与证据边界</text>
+<text x="62" y="1541" font-size="27" fill="#246b86" font-weight="700">验证与交付</text>
+<rect x="62" y="1563" width="477" height="150" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="80" y="1598" font-size="24" fill="#246b86" font-weight="700">A｜清洗与数据质量</text>
+<text x="80" y="1635" font-size="20" fill="#5b7180" font-weight="400">检查字段、薪资与地区解析样例</text>
+<text x="80" y="1663" font-size="20" fill="#5b7180" font-weight="400">核对入库批次及分析可用范围</text>
+<text x="80" y="1691" font-size="20" fill="#5b7180" font-weight="400">历史未留痕不倒推为零</text>
+<rect x="561" y="1563" width="477" height="150" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="579" y="1598" font-size="24" fill="#246b86" font-weight="700">B｜模型与岗位发现</text>
+<text x="579" y="1635" font-size="20" fill="#5b7180" font-weight="400">公司与近重复分组隔离评测</text>
+<text x="579" y="1663" font-size="20" fill="#5b7180" font-weight="400">簇占比不等于正式类别占比</text>
+<text x="579" y="1691" font-size="20" fill="#5b7180" font-weight="400">Qwen 一致性不等于人工准确率</text>
+<rect x="1060" y="1563" width="477" height="150" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1078" y="1598" font-size="24" fill="#246b86" font-weight="700">C｜应用与报告复用</text>
+<text x="1078" y="1635" font-size="20" fill="#5b7180" font-weight="400">核对报告、原文及模型版本</text>
+<text x="1078" y="1663" font-size="20" fill="#5b7180" font-weight="400">验证快照命中与失效后的重算</text>
+<text x="1078" y="1691" font-size="20" fill="#5b7180" font-weight="400">验证简历补充后向量缓存复用</text>
+<rect x="62" y="1740" width="1476" height="102" rx="10" fill="#f0f8f5" stroke="#badcd2" stroke-width="1.5"/>
+<text x="84" y="1777" font-size="26" fill="#157d70" font-weight="700">当前特点：单机部署、SQLite 持久化、本地计算、增量缓存与版本化快照。</text>
+<text x="84" y="1815" font-size="22" fill="#5b7180" font-weight="400">主要边界：计算与存储集中在一台机器；多平台并发采集不等于跨机器分布式计算。</text>
+<line x1="62" y1="1869" x2="1538" y2="1869" stroke="#cbdbe3"/>
+<text x="62" y="1906" font-size="20" fill="#5b7180" font-weight="400">源码核对｜2026-11-20；本图描述现有实现链路，不代表本次已重新验收全部功能。</text>
+</g></svg>

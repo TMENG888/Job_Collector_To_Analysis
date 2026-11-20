@@ -17,6 +17,9 @@ test('desktop active tab follows local route including SPA and task detail',()=>
   const base='http://127.0.0.1:8788';
   assert.equal(workspaceURL(base,'matching'),base+'/matching');
   assert.equal(workspaceViewForURL(base+'/matching',base),'matching');
+  assert.equal(workspaceURL(base,'quality'),base+'/sources');
+  assert.equal(workspaceViewForURL(base+'/sources',base),'quality');
+  assert.equal(workspaceViewForURL(base+'/quality',base),'quality');
   for(const [url,expected] of [['/tasks','tasks'],['/tasks/123','tasks'],['/insights','insights'],['/browser','tasks'],['/?view=assistant','assistant'],['/unknown',null]])assert.equal(workspaceViewForURL(base+url,base),expected);
   assert.equal(workspaceViewForURL('https://www.zhipin.com/browser',base),null);
 });

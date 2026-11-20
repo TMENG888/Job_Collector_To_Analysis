@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {writeJsonAtomic} from './collector_storage.mjs';
 import {assertTaskOutputOwnership} from './task_dataset_scope.mjs';
 import {nativeTaskCounts} from './collector_native_sink.mjs';
+import {updateChannelManifest} from './channel_manifest_store.mjs';
 const queues=new Map();
 const fileFor=task=>path.join(task.outputDir,'渠道核验状态.json');
 const read=async file=>fs.readFile(file,'utf8').then(JSON.parse).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
@@ -25,13 +26,34 @@ export async function ensureChannelManifest(task,platform){
     if(manifest.platforms[platform]===undefined){manifest.platforms[platform]={errors:[]};changed=true;}
     const channel=manifest.platforms[platform];
     if(!channel||typeof channel!=='object'||Array.isArray(channel)||channel.errors!==undefined&&!Array.isArray(channel.errors))throw fail('渠道清单结构无效，请检查原文件');
-    if(changed)await writeJsonAtomic(file,manifest);
+    if(changed)manifest=await updateChannelManifest(task,latest=>{latest.platforms[platform]??=manifest.platforms[platform];});
     return manifest;
   });
   queues.set(file,operation);const clear=()=>{if(queues.get(file)===operation)queues.delete(file);};operation.then(clear,clear);
   return operation;
 }
 const fingerprint=(manifest,platform)=>createHash('sha256').update(JSON.stringify((manifest.platforms?.[platform]?.errors||[]).filter(error=>!error.resolved_at))).digest('hex');
+const retryableManualCodes=new Set(['verification_required','session_required','login_required','access_blocked','navigation_error','browser_start_failed']);
+
+// Consume the human acknowledgement before starting a new heartbeat run.
+// This releases only the acknowledged blocker, not proof of website success.
+export async function consumeChannelVerificationRetry(task,platform){
+  if(!['job51','liepin'].includes(platform)||!task.platforms?.includes(platform))return null;
+  const entry=(await readChannelVerification(task))[platform];
+  if(!['manual_checked','verified'].includes(entry?.state)||entry.interrupted||!entry.acknowledgedAt&&!entry.verifiedAt)return null;
+  let consumed=false;
+  const manifest=await updateChannelManifest(task,latest=>{
+    if(fingerprint(latest,platform)!==entry.errorFingerprint)return false;
+    const errors=latest.platforms?.[platform]?.errors||[];
+    const blockers=errors.filter(error=>!error.resolved_at&&error.stopChannel);
+    // A login action cannot repair an API contract, storage or ownership fault.
+    if(!blockers.length||blockers.some(error=>!retryableManualCodes.has(error.code)))return false;
+    consumed=true;
+    const at=new Date().toISOString();
+    latest.platforms[platform].errors=errors.map(error=>error.resolved_at||!retryableManualCodes.has(error.code)?error:{...error,resolved_at:at,resolution:'manual_retry_requested',acknowledged_at:entry.acknowledgedAt||entry.verifiedAt});
+  });
+  return consumed?manifest:null;
+}
 async function evidence(task){
   await assertTaskOutputOwnership(task);
   const manifest=await read(path.join(task.outputDir,'采集清单.json'));
@@ -58,7 +80,7 @@ export async function readChannelVerification(task){
   for(const [platform,entry]of Object.entries(state.channels||{})){
     if(entry.errorFingerprint!==fingerprint(manifest,platform)||entry.activityRunId!==(records?.[platform]?.activity?.run_id||null))continue;
     // A terminated service cannot still be carrying out an in-memory check.
-    result[platform]=entry.state==='checking'?{...entry,state:'manual_checked',reason:'上次检查已中断，请打开处理窗口核对后点击“已处理”'}:entry;
+    result[platform]=entry.state==='checking'?{...entry,state:'manual_checked',interrupted:true,reason:'上次检查已中断，请打开处理窗口核对后点击“已处理”'}:entry;
   }
   return result;
 }

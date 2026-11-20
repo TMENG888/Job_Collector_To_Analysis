@@ -21,7 +21,7 @@ export function renderClassifierMetrics(run,active){
   const legacyShortage=run.status==='failed'&&/正负样本不足|有效正负标签不足/.test(run.message||'');
   const message=active?.id&&active.id===run.id?'本轮模型已启用':busy?'联合标注与训练中':run.status==='completed'?'本轮标注完成':legacyShortage?`标签已保留：正例 ${number(run.positive)}、负例 ${number(run.negative)}；隔离后样本不足，请更新检索词或补充不同公司岗位后再标注。`:run.message||run.status;
   return `<div class="classifier-progress"><strong>${escape(message)}</strong>${busy?`<progress max="${run.sampled||run.requestedSamples||1}" value="${(run.labeled||0)+(run.skipped||0)}" aria-label="联合标注进度"></progress>`:''}</div>
-    <dl class="classifier-counters"><div><dt>已标注／抽样</dt><dd>${number(run.labeled)} / ${number(run.sampled)}</dd></div><div><dt>正例／负例／待核</dt><dd>${number(run.positive)} / ${number(run.negative)} / ${number(run.review)}</dd></div><div><dt>测试 F1 · 对 Qwen 标签</dt><dd>${pct(e?.test?.f1)}</dd></div><div><dt>估算费用／预算</dt><dd>¥${Number(run.costEstimate||0).toFixed(4)} / ¥${Number(run.budget||0)}</dd></div></dl>
+    <dl class="classifier-counters"><div><dt>已标注／抽样</dt><dd>${number(run.labeled)} / ${number(run.sampled)}</dd></div><div><dt>正例／负例／待核</dt><dd>${number(run.positive)} / ${number(run.negative)} / ${number(run.review)}</dd></div><div><dt>测试 F1 · 对 Qwen 标签</dt><dd>${pct(e?.test?.f1)}</dd></div><div><dt>Token 用量与费用</dt><dd>输入 ${number(run.promptTokens)} / 输出 ${number(run.completionTokens)} Token · 估算 ¥${Number(run.costEstimate||0).toFixed(4)}（非账单）</dd></div></dl>
     ${run.retryRequests||run.skipped?`<p class="classifier-muted">重试 ${number(run.retryRequests)} 次 · 跳过 ${number(run.skipped)} 条</p>`:''}`;
 }
 export function installInsightClassifier({api,toast}){
@@ -31,7 +31,7 @@ export function installInsightClassifier({api,toast}){
   const $=s=>root.querySelector(s),source=()=>document.querySelector('#insightForm input[name="inputFile"]')?.value||'',role=()=>document.querySelector('#insightRole')?.value||'';
   let state=null,epoch=0,loading=null,queued=false,error='',pending=false;
   function render(){
-    const chooseRole=source()==='kb://all'&&!role(),analysis=chooseRole?{kind:'choose',title:'请选择目标岗位',reason:'选择已有岗位可直接分析；新增方向请展开训练。'}:!state&&error?{kind:'error',title:'分类器状态读取失败',reason:''}:classifierAnalysisState(state),ready=!chooseRole&&state?.screening?.ready===true,run=state?.run;
+    const chooseRole=(source()==='kb://all'||source().startsWith('kb://processed/'))&&!role(),analysis=chooseRole?{kind:'choose',title:'请选择目标岗位',reason:'选择已有岗位可直接分析；新增方向请展开训练。'}:!state&&error?{kind:'error',title:'分类器状态读取失败',reason:''}:classifierAnalysisState(state),ready=!chooseRole&&state?.screening?.ready===true,run=state?.run;
     root.dataset.readiness=analysis.kind;
     $('[data-ml-current]').textContent=analysis.title;
     $('[data-ml-version]').textContent=error||['choose','loading','ready','pending'].includes(analysis.kind)?'':analysis.kind==='trial'?'试分析 · 候选未通过验收':analysis.reason;

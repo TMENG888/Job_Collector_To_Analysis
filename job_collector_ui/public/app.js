@@ -1,23 +1,24 @@
-import {createInsightSnapshotLoader} from './insight-snapshot-client.js?v=20261113-version-bound';
+import {createInsightSnapshotLoader} from './insight-snapshot-client.js?v=20261119-processing-source';
 import {confirmAction} from './confirmation-dialog.js?v=20261112-clear-prompts';
-import {installCollectionKeywords} from './collection-keywords.js?v=20261112-compact-copy';
+import {installCollectionKeywords} from './collection-keywords.js?v=20261118-usage-only';
 import {provinceName} from './insight-groups.js?v=20261111-province-ranking';
 import { patchHtml, updateLog } from './dom-updates.js';
 import {renderInsightWorkspace,provinceTooltipDetails} from './insight-dashboard.js?v=20261113-version-bound-top50';
 import {installWordCloudInteractions} from './insight-wordcloud.js';
-import {loadJobAssistant} from './job-assistant.js?v=20261112-compact-copy';
+import {loadJobAssistant} from './job-assistant.js?v=20261118-usage-only';
 installWordCloudInteractions();
 import {mergeLiveProgress, collectionProgress,collectionStatusLabel,collectionTaskSummary} from './collection-progress.js?v=20261026-statistics';
-import {renderCollectionDashboard} from './collection-dashboard.js?v=20261112-compact-copy';
+import {renderCollectionDashboard} from './collection-dashboard.js?v=20261118-login-actions';
 import {formatCollectionFlowLog} from './collection-flow-log.js?v=20261026-statistics';
-import {renderInterviewPanel,installInterviewTools} from './interview-tools.js?v=20261112-compact-copy';
-import { fetchJsonWithTimeout } from './http-client.js?v=20261112-status-recovery';
-import {installInsightClassifier} from './insight-classifier.js?v=20261112-compact-copy';
-import {installInsightTrainingQueue} from './insight-training-queue.js?v=20261112-compact-copy';
-import {installInsightDiscovery} from './insight-discovery.js?v=20261112-compact-copy';
+import {renderInterviewPanel,installInterviewTools} from './interview-tools.js?v=20261118-usage-only';
+import { fetchJsonWithTimeout } from './http-client.js?v=20261118-usage-only';
+import {installInsightClassifier} from './insight-classifier.js?v=20261118-usage-only';
+import {installInsightTrainingQueue} from './insight-training-queue.js?v=20261118-usage-only';
+import {installInsightDiscovery} from './insight-discovery.js?v=20261118-usage-only';
 import {insightReportContext,classifierSnapshotIdentity,reportMatchesClassifier} from './insight-classifier-state.js?v=20261113-version-bound';
-import {installSemanticCloud} from './insight-semantic.js?v=20261112-remove-supplement';
-import {loadResumeMatching} from './resume-matching.js?v=20261113-requirements';
+import {installSemanticCloud} from './insight-semantic.js?v=20261118-usage-only';
+import {loadResumeMatching} from './resume-matching.js?v=20261118-usage-only';
+import {loadSourceWorkflow as loadSourceData} from './source-workflow.js?v=20261119-pipeline';
 const state = { tasks: [], tasksLoaded:false,tasksError:'',selectedId: null, insight: null, insightRenderKey: null, insightFormInitialized: false, view: 'tasks', timer: null, logTimer: null };
 const normalizedLocalPath = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
 const $ = (selector) => document.querySelector(selector);
@@ -155,6 +156,7 @@ function render() { renderStats(); renderList(); renderDetail(); }
 
 function routePath(view = state.view) {
   if (view === 'assistant') return '/?view=assistant';
+  if (view === 'quality') return '/sources';
   const id = view === 'tasks' ? state.selectedId : null;
   return `/${view}${id ? `/${encodeURIComponent(id)}` : ''}`;
 }
@@ -166,7 +168,7 @@ function syncRoute(replace = false) {
 
 function restoreRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
-  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : ['tasks', 'insights','matching'].includes(parts[0]) ? parts[0] : 'tasks';
+  const view = new URLSearchParams(location.search).get('view') === 'assistant' ? 'assistant' : parts[0]==='sources'?'quality':['tasks', 'insights','matching','quality'].includes(parts[0]) ? parts[0] : 'tasks';
   const id = parts[1] ? decodeURIComponent(parts[1]) : null;
   if (view === 'tasks') state.selectedId = id;
   switchView(view, { history: false });
@@ -183,15 +185,16 @@ function switchView(view, options = {}) {
     if (link.dataset.view === view) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   });
-  const titles = { tasks: '采集任务', insights: '岗位洞察', matching:'简历匹配', assistant: '求职助手' };
+  const titles = { tasks: '采集任务', quality:'源数据', insights: '岗位洞察', matching:'简历匹配', assistant: '求职助手' };
   $('#pageTitle').textContent = titles[view];
-  $('#newTaskBtn').classList.toggle('hidden', ['insights', 'assistant','matching'].includes(view));
+  $('#newTaskBtn').classList.toggle('hidden', ['insights', 'assistant','matching','quality'].includes(view));
   $('#newTaskBtn').innerHTML = '<span>＋</span> 新建采集任务';
   if (options.history !== false) syncRoute();
   if (view === 'tasks') refresh(false);
-  if (view === 'insights') { $('#insightForm input[name="inputFile"]').value='kb://all'; loadInsight(false); }
+  if (view === 'insights') { loadInsight(false); }
   if (view === 'assistant') loadJobAssistant();
   if (view === 'matching') void loadResumeMatching({api,toast});
+  if (view === 'quality') void loadSourceData({api,toast});
   document.dispatchEvent(new CustomEvent('job-workspace-view',{detail:{view}}));
 }
 
@@ -211,7 +214,10 @@ function selectOptions(values = [], selected = '') {
 
 function renderInsightStatus() {
   $('#insightRoleSource').textContent = '';
-  $('#insightTransferSource').textContent = '';
+  const sourceInput=$('#insightForm input[name="inputFile"]').value;
+  const processedSource=state.processingSource?.inputFile===sourceInput?state.processingSource:null;
+  $('#insightTransferSource').innerHTML = processedSource?`清洗数据批次：${escapeHtml(processedSource.label)} · ${number(processedSource.rows)} 条 · ${escapeHtml(processedSource.finishedAt||'')} <button type="button" class="ghost" id="insightResetSource">切换全库</button>`:'';
+  $('#insightResetSource')?.addEventListener('click',()=>{state.processingSource=null;sessionStorage.removeItem('job-processing-input');$('#insightForm input[name="inputFile"]').value='kb://all';state.insightRenderKey=null;document.dispatchEvent(new Event('insight-workflow-refresh'));renderInsightStatus();void loadInsight(false);});
   const insight = state.insight || { status: 'empty', message: '尚未生成岗位市场洞察' };
   const status = $('#insightStatus');
   const report = insight.report;
@@ -352,20 +358,28 @@ function renderInsight() {
 }
 
 let insightClassifierIdentity=null,insightClassifierIdentityRole='';
+try{const saved=JSON.parse(sessionStorage.getItem('job-processing-input')||'null');if(/^kb:\/\/processed\/[a-f0-9-]{36}$/.test(saved?.inputFile||'')){state.processingSource=saved;$('#insightForm input[name="inputFile"]').value=saved.inputFile;}}catch{}
+document.addEventListener('source-processing-transfer',event=>{
+  const {inputFile,run}=event.detail||{};if(!/^kb:\/\/processed\/[a-f0-9-]{36}$/.test(inputFile||''))return;
+  state.processingSource={inputFile,rows:run.ready,finishedAt:new Date(run.finishedAt).toLocaleString('zh-CN'),label:[run.scope.taskId==='all'?'全部任务':state.tasks.find(t=>t.id===run.scope.taskId)?.label||run.scope.taskId,run.scope.platform==='all'?'全部平台':run.scope.platform,run.scope.q?'关键词：'+run.scope.q:''].filter(Boolean).join(' / ')};
+  sessionStorage.setItem('job-processing-input',JSON.stringify(state.processingSource));$('#insightForm input[name="inputFile"]').value=inputFile;
+  insightClassifierIdentity=null;insightClassifierIdentityRole='';state.insightRenderKey=null;state.insightHistoryVisible=false;
+  document.dispatchEvent(new Event('insight-workflow-refresh'));switchView('insights');toast('已接入清洗批次；请选择目标岗位，继续标注、筛选与分析');
+});
 const currentInsightClassifier=()=>insightClassifierIdentityRole===($('#insightRole')?.value||'')?insightClassifierIdentity:null;
 const insightSnapshotLoader=createInsightSnapshotLoader({api,classifier:currentInsightClassifier,selection:()=>{
   const button=$('#runInsight'),role=$('#insightRole')?.value||'';
-  return {inputFile:'kb://all',role,classifierMode:button?.dataset.classifierRole===role?button.dataset.classifierMode||'qualified':'qualified',...(button?.dataset.classifierRole===role&&button.dataset.classifierMode==='candidate-trial'?{classifierRunId:button.dataset.classifierRunId}:{})};
+  return {inputFile:$('#insightForm input[name="inputFile"]').value||'kb://all',role,classifierMode:button?.dataset.classifierRole===role?button.dataset.classifierMode||'qualified':'qualified',...(button?.dataset.classifierRole===role&&button.dataset.classifierMode==='candidate-trial'?{classifierRunId:button.dataset.classifierRunId}:{})};
 },apply:next=>{
   state.insight=next;
-  if(!state.insightFormInitialized&&next.report){$('#insightForm input[name="inputFile"]').value='kb://all';state.insightFormInitialized=true;}
+  if(!state.insightFormInitialized&&next.report){state.insightFormInitialized=true;}
   renderInsight();
 }});
 async function loadInsight(silent = true) {
   try{await insightSnapshotLoader.refresh();}catch(error){if(!silent)toast(error.message,true);}
 }
 $('#insightClassifier')?.addEventListener('insight-annotation-state',event=>{
-  if(event.detail.inputFile!=='kb://all')return;
+  if(event.detail.inputFile!==$('#insightForm input[name="inputFile"]').value)return;
   const role=$('#insightRole')?.value||'',identity=classifierSnapshotIdentity(event.detail.state);
   const changed=role!==insightClassifierIdentityRole||JSON.stringify(identity)!==JSON.stringify(insightClassifierIdentity);
   insightClassifierIdentity=identity;insightClassifierIdentityRole=role;
@@ -467,7 +481,7 @@ async function handleAction(task, action) {
       }finally{pendingVerifications.delete(key);controls.forEach((button,i)=>{if(button.isConnected){button.disabled=false;button.removeAttribute('aria-busy');button.textContent=labels[i];}});}
       return;
     }
-    const sessionAction=action.match(/^session-(open|login|verified|process|close|resume)-(job51|liepin|zhaopin|jobonline)$/);
+    const sessionAction=action.match(/^session-(open|login|verified|process|close|resume)-(shixiseng|iguopin|mohrss|job51|zhaopin|jobonline)$/);
     if(sessionAction){
       const [,operation,platform]=sessionAction,key=task.id+':'+platform;
       if(pendingVerifications.has(key))return;
@@ -536,7 +550,6 @@ installInterviewTools({api,toast,refresh,getTask:()=>state.tasks.find(task=>task
 // Mark edits immediately, before any delayed initial report can restore fields.
 for (const eventName of ['input', 'change']) $('#insightForm').addEventListener(eventName, () => {
   state.insightFormInitialized = true;
-  $('#insightForm input[name="inputFile"]').value='kb://all';
   renderInsightStatus();
 });
 $('#insightRole')?.addEventListener('change',()=>{state.insightHistoryVisible=false;renderInsightStatus();void loadInsight(false);});
@@ -578,7 +591,7 @@ $('#insightForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const button=$('#runInsight');if(button.dataset.submitting==='true'||state.insight?.status==='running'||state.insight?.globalRunning)return;
   const body = Object.fromEntries(new FormData(event.currentTarget).entries());
-  body.inputFile = 'kb://all';
+  body.inputFile = $('#insightForm input[name="inputFile"]').value||'kb://all';
   body.analysisMode = 'full';
   body.sheetName = '岗位数据';
   try {

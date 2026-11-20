@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1930" viewBox="0 0 1600 1930" role="img">
+<title>岗位数据分析与咨询系统技术路线图 — Hadoop 数仓规划版</title><desc>六阶段业务链路、存储计算架构、增量版本约束与验证方案。</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#246b86"/></marker></defs>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+<rect x="0" y="0" width="1600" height="1930" rx="0" fill="white" stroke="none" stroke-width="1.5"/>
+<text x="62" y="76" font-size="42" fill="#203440" font-weight="700">岗位数据分析与咨询系统技术路线图</text>
+<text x="62" y="124" font-size="29" fill="#157d70" font-weight="700">版本 B｜Hadoop＋Spark 数仓方案（规划，待实现与验证）</text>
+<text x="62" y="166" font-size="23" fill="#5b7180" font-weight="400">同一业务目标：多平台岗位采集、数据质量治理、岗位洞察、简历匹配与证据咨询</text>
+<text x="62" y="207" font-size="25" fill="#246b86" font-weight="700">业务数据主链路</text>
+<text x="1090" y="207" font-size="25" fill="#246b86" font-weight="700">支撑技术与约束</text>
+<rect x="62" y="226" width="988" height="160" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="246" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="275" font-size="24" fill="white" font-weight="700">01</text>
+<text x="138" y="275" font-size="29" fill="#203440" font-weight="700">多平台岗位采集</text>
+<rect x="892" y="248" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="272" font-size="18" fill="#246b86" font-weight="500">复用现有</text>
+<text x="88" y="317" font-size="22" fill="#5b7180" font-weight="400">岗位关键词／城市／平台配置 → 各渠道并行采集</text>
+<text x="88" y="346" font-size="22" fill="#5b7180" font-weight="400">HTTP 接口、会话验证、分页限速与断点续采</text>
+<text x="88" y="375" font-size="22" fill="#5b7180" font-weight="400">保留平台岗位ID、来源任务与采集过程记录</text>
+<path d="M 556 388 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="422" width="988" height="160" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="442" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="471" font-size="24" fill="white" font-weight="700">02</text>
+<text x="138" y="471" font-size="29" fill="#203440" font-weight="700">ODS 原始数据层</text>
+<rect x="892" y="444" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="468" font-size="18" fill="#246b86" font-weight="500">规划新增</text>
+<text x="88" y="513" font-size="22" fill="#5b7180" font-weight="400">HDFS＋JSONL：按平台／日期／批次组织原始记录</text>
+<text x="88" y="542" font-size="22" fill="#5b7180" font-weight="400">保留原始字段、来源、采集时间与输入清单</text>
+<text x="88" y="571" font-size="22" fill="#5b7180" font-weight="400">原始批次不可覆盖；历史本地数据经核验后迁入</text>
+<path d="M 556 584 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="618" width="988" height="160" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="638" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="667" font-size="24" fill="white" font-weight="700">03</text>
+<text x="138" y="667" font-size="29" fill="#203440" font-weight="700">Spark 清洗与 DWD 明细层</text>
+<rect x="892" y="640" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="664" font-size="18" fill="#246b86" font-weight="500">迁移与新增</text>
+<text x="88" y="709" font-size="22" fill="#5b7180" font-weight="400">Spark SQL：身份去重、薪资解析、地区与学历经验规范化</text>
+<text x="88" y="738" font-size="22" fill="#5b7180" font-weight="400">HDFS＋Parquet：保留岗位身份、正文哈希及清洗版本</text>
+<text x="88" y="767" font-size="22" fill="#5b7180" font-weight="400">批次清单＋异常原因＋前后对照；规则迁移须逐项核验</text>
+<path d="M 556 780 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="814" width="988" height="270" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="834" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="863" font-size="24" fill="white" font-weight="700">04</text>
+<text x="138" y="863" font-size="29" fill="#203440" font-weight="700">岗位洞察：已知方向与新方向发现</text>
+<rect x="892" y="836" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="860" font-size="18" fill="#246b86" font-weight="500">复用并对接</text>
+<rect x="82" y="886" width="456" height="145" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="556" y="886" width="474" height="145" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="98" y="919" font-size="24" fill="#246b86" font-weight="700">已知方向：分类与技术标签</text>
+<text x="98" y="954" font-size="21" fill="#5b7180" font-weight="400">TF-IDF＋逻辑回归筛选目标岗位</text>
+<text x="98" y="983" font-size="21" fill="#5b7180" font-weight="400">Qwen 3.8-Flash 标注与原文证据</text>
+<text x="98" y="1012" font-size="21" fill="#5b7180" font-weight="400">岗位ID＋正文哈希＋分类器版本</text>
+<text x="572" y="919" font-size="24" fill="#157d70" font-weight="700">探索方向：聚类与辅助命名</text>
+<text x="572" y="954" font-size="21" fill="#5b7180" font-weight="400">标题加权 TF-IDF＋MiniBatchKMeans</text>
+<text x="572" y="983" font-size="21" fill="#5b7180" font-weight="400">代表岗位 → DeepSeek 识别主导职位</text>
+<text x="572" y="1012" font-size="21" fill="#5b7180" font-weight="400">核验候选方向 → 标注训练 → 评测</text>
+<text x="88" y="1061" font-size="21" fill="#203440" font-weight="600">输入：固定 DWD 清洗批次</text>
+<path d="M 556 1086 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="1122" width="988" height="160" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="1142" width="40" height="40" rx="7" fill="#246b86" stroke="#246b86" stroke-width="1.5"/>
+<text x="89" y="1171" font-size="24" fill="white" font-weight="700">05</text>
+<text x="138" y="1171" font-size="29" fill="#203440" font-weight="700">DWS 汇总与 ADS 结果发布</text>
+<rect x="892" y="1144" width="132" height="33" rx="6" fill="#e4eef4" stroke="none" stroke-width="1.5"/>
+<text x="905" y="1168" font-size="18" fill="#246b86" font-weight="500">规划新增</text>
+<text x="88" y="1213" font-size="22" fill="#5b7180" font-weight="400">Spark SQL → DWS 维度汇总 → ADS 应用结果</text>
+<text x="88" y="1242" font-size="22" fill="#5b7180" font-weight="400">薪资分布／省份需求／学历经验／技能／公司排行</text>
+<text x="88" y="1271" font-size="22" fill="#5b7180" font-weight="400">校验通过后发布至 SQLite 服务库；按批次切换结果</text>
+<path d="M 556 1284 v 23" fill="none" stroke="#246b86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="62" y="1318" width="988" height="172" rx="10" fill="#f0f8f5" stroke="#cbdbe3" stroke-width="1.5"/>
+<rect x="82" y="1338" width="40" height="40" rx="7" fill="#157d70" stroke="#157d70" stroke-width="1.5"/>
+<text x="89" y="1367" font-size="24" fill="white" font-weight="700">06</text>
+<text x="138" y="1367" font-size="29" fill="#203440" font-weight="700">应用服务与交互</text>
+<rect x="892" y="1340" width="132" height="33" rx="6" fill="#e4f0ed" stroke="none" stroke-width="1.5"/>
+<text x="905" y="1364" font-size="18" fill="#157d70" font-weight="500">复用并对接</text>
+<text x="88" y="1409" font-size="22" fill="#5b7180" font-weight="400">FastAPI＋受控 Node.js 业务进程＋本地 Python 模型进程</text>
+<text x="88" y="1438" font-size="22" fill="#5b7180" font-weight="400">岗位洞察与数据质量｜对话式简历画像与匹配｜求职助手</text>
+<text x="88" y="1467" font-size="22" fill="#5b7180" font-weight="400">桌面工作台／Web 前端；检索统计结果与岗位原文可追溯</text>
+<rect x="1090" y="226" width="448" height="252" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="269" font-size="27" fill="#203440" font-weight="700">部署与组件分工</text>
+<text x="1112" y="311" font-size="22" fill="#5b7180" font-weight="400">HDFS：保存原始与明细文件</text>
+<text x="1112" y="344" font-size="22" fill="#5b7180" font-weight="400">YARN：分配 Spark 批处理资源</text>
+<text x="1112" y="377" font-size="22" fill="#5b7180" font-weight="400">Hive Metastore：登记表与分区</text>
+<text x="1112" y="410" font-size="22" fill="#5b7180" font-weight="400">PostgreSQL：保存 Metastore 元数据</text>
+<text x="1112" y="443" font-size="22" fill="#5b7180" font-weight="400">SQLite：面向前端的服务结果库</text>
+<rect x="1090" y="502" width="448" height="218" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="545" font-size="27" fill="#203440" font-weight="700">分布式范围</text>
+<text x="1112" y="587" font-size="22" fill="#5b7180" font-weight="400">开发：单机伪分布式验证链路</text>
+<text x="1112" y="620" font-size="22" fill="#5b7180" font-weight="400">扩展：多节点才有跨机器并行</text>
+<text x="1112" y="653" font-size="22" fill="#5b7180" font-weight="400">现有分类器、聚类与重排先复用</text>
+<text x="1112" y="686" font-size="22" fill="#5b7180" font-weight="400">接收固定批次，不默认改写为 Spark</text>
+<rect x="1090" y="744" width="448" height="218" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="787" font-size="27" fill="#203440" font-weight="700">批次与发布一致性</text>
+<text x="1112" y="829" font-size="22" fill="#5b7180" font-weight="400">输入清单、岗位ID与正文哈希固定</text>
+<text x="1112" y="862" font-size="22" fill="#5b7180" font-weight="400">清洗／分类器／标签版本一并记录</text>
+<text x="1112" y="895" font-size="22" fill="#5b7180" font-weight="400">先写新批次，校验后切换服务指针</text>
+<text x="1112" y="928" font-size="22" fill="#5b7180" font-weight="400">保留旧批次，失败可回滚和重跑</text>
+<rect x="1090" y="986" width="448" height="218" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="1029" font-size="27" fill="#203440" font-weight="700">增量处理与模型复用</text>
+<text x="1112" y="1071" font-size="22" fill="#5b7180" font-weight="400">仅处理新增或内容改变的岗位</text>
+<text x="1112" y="1104" font-size="22" fill="#5b7180" font-weight="400">规则或模型变化时按版本重算</text>
+<text x="1112" y="1137" font-size="22" fill="#5b7180" font-weight="400">复用岗位向量，仅更新变化文本</text>
+<text x="1112" y="1170" font-size="22" fill="#5b7180" font-weight="400">20% 增长触发排队更新机制迁移</text>
+<rect x="1090" y="1228" width="448" height="262" rx="10" fill="white" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1112" y="1271" font-size="27" fill="#203440" font-weight="700">应用消费边界</text>
+<text x="1112" y="1313" font-size="22" fill="#5b7180" font-weight="400">助手查询已发布的 ADS 服务结果</text>
+<text x="1112" y="1346" font-size="22" fill="#5b7180" font-weight="400">原文证据按岗位ID与内容版本关联</text>
+<text x="1112" y="1379" font-size="22" fill="#5b7180" font-weight="400">简历：BM25＋BGE 召回与重排</text>
+<text x="1112" y="1412" font-size="22" fill="#5b7180" font-weight="400">匹配度另按岗位要求逐项核对</text>
+<text x="1112" y="1445" font-size="22" fill="#5b7180" font-weight="400">检索分数不直接视为录用概率</text>
+<text x="62" y="1541" font-size="27" fill="#246b86" font-weight="700">验证与交付</text>
+<rect x="62" y="1563" width="477" height="150" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="80" y="1598" font-size="24" fill="#246b86" font-weight="700">A｜新旧口径一致性</text>
+<text x="80" y="1635" font-size="20" fill="#5b7180" font-weight="400">固定同批输入，对照新旧处理结果</text>
+<text x="80" y="1663" font-size="20" fill="#5b7180" font-weight="400">核对数量、字段与异常处理原因</text>
+<text x="80" y="1691" font-size="20" fill="#5b7180" font-weight="400">人工分层抽查，不外推全库质量</text>
+<rect x="561" y="1563" width="477" height="150" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="579" y="1598" font-size="24" fill="#246b86" font-weight="700">B｜故障恢复与完整性</text>
+<text x="579" y="1635" font-size="20" fill="#5b7180" font-weight="400">同批重复执行不重复发布</text>
+<text x="579" y="1663" font-size="20" fill="#5b7180" font-weight="400">模拟中断，验证重跑与版本回滚</text>
+<text x="579" y="1691" font-size="20" fill="#5b7180" font-weight="400">校验输入／输出／排除数量闭合</text>
+<rect x="1060" y="1563" width="477" height="150" rx="10" fill="#f4f8fb" stroke="#cbdbe3" stroke-width="1.5"/>
+<text x="1078" y="1598" font-size="24" fill="#246b86" font-weight="700">C｜真实性能与模型效果</text>
+<text x="1078" y="1635" font-size="20" fill="#5b7180" font-weight="400">同硬件同数据量记录耗时与资源</text>
+<text x="1078" y="1663" font-size="20" fill="#5b7180" font-weight="400">单独评估聚类、分类及咨询效果</text>
+<text x="1078" y="1691" font-size="20" fill="#5b7180" font-weight="400">不预设提速倍数或模型效果提升</text>
+<rect x="62" y="1740" width="1476" height="102" rx="10" fill="#f0f8f5" stroke="#badcd2" stroke-width="1.5"/>
+<text x="84" y="1777" font-size="26" fill="#157d70" font-weight="700">建设目标：替换批量存储与处理底座，保持上层业务与证据口径一致。</text>
+<text x="84" y="1815" font-size="22" fill="#5b7180" font-weight="400">建议顺序：小样本跑通 → 同批新旧对照 → 全量批处理 → 应用对接 → 恢复与性能实验。</text>
+<line x1="62" y1="1869" x2="1538" y2="1869" stroke="#cbdbe3"/>
+<text x="62" y="1906" font-size="20" fill="#5b7180" font-weight="400">规划说明｜Hadoop 环境、DWD/DWS/ADS 及批次发布仍待建设；不将方案图视为已实现成果。</text>
+</g></svg>

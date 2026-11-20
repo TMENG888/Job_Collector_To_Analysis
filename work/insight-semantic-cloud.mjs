@@ -33,7 +33,7 @@ export function mergeSemanticRows(previous,incoming){
   for(const row of incoming){const current=rows.get(row.key);if(current?.contractVersion===concreteSemanticVersion&&row.contractVersion!==concreteSemanticVersion)continue;rows.set(row.key,row);}
   return [...rows.values()];
 }
-export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,credentials=classifierCredentials(dataDir),readRows=uri=>readClassifierRows(dataDir,uri,uri==='kb://all'?null:100000),matcherFor,directory=process.env.JOB_INSIGHT_SEMANTIC_DIR||(process.env.JOB_UI_DATA_DIR?path.join(dataDir,'semantic_cloud'):'E:/Codex/work/20261018-semantic-cloud/runtime')}={}){
+export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,credentials=classifierCredentials(dataDir),readRows=uri=>readClassifierRows(dataDir,uri,uri==='kb://all'||uri.startsWith('kb://processed/')?null:100000),matcherFor,directory=process.env.JOB_INSIGHT_SEMANTIC_DIR||(process.env.JOB_UI_DATA_DIR?path.join(dataDir,'semantic_cloud'):'E:/Codex/work/20261018-semantic-cloud/runtime')}={}){
   let active=null;const summaryCache=new Map();
   const indexFile=path.join(directory,'index.json'),lockFile=path.join(directory,'run.lock');
   const runFile=id=>{if(!/^[a-f0-9-]{36}$/.test(String(id)))throw Error('无效语义任务ID');return path.join(directory,id,'state.json');};
@@ -123,7 +123,6 @@ export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,cred
         const messages=[{role:'system',content:extractionPrompt},{role:'user',content:JSON.stringify({target_role:run.role,classification_source:'supervised-classifier',jobs:batch.map(r=>({id:r.id,title:r.title,evidence_options:r.options}))})}];
         const bytes=Buffer.byteLength(JSON.stringify(messages),'utf8');if(bytes>300000)throw Error('岗位全文超过单请求安全范围，未截断原文或发送模型');
         const reserve=((bytes+1024)*run.inputPrice+6000*run.outputPrice)/1e6;
-        if(run.costEstimate+reserve>run.budget)throw Error('本轮语义抽取已达费用估算预算；保留断点，不追加付费');
         if(!key)key=await credentials.load();
         await update({requestsStarted:run.requestsStarted+1,inFlight:true});
         let response;try{response=await fetcher(QWEN_ENDPOINT,{method:'POST',redirect:'error',headers:{authorization:`Bearer ${key}`,'content-type':'application/json'},signal:AbortSignal.any([signal,AbortSignal.timeout(90000)]),body:JSON.stringify({model:run.model,messages,enable_thinking:false,temperature:0,max_tokens:6000,response_format:{type:'json_object'}})});}catch{throw Error('模型请求中断，可能已计费；未自动重试');}
@@ -167,9 +166,9 @@ export function createSemanticCloud(dataDir,{supervised,scope,fetcher=fetch,cred
     await save(runFile(id),{id,parentRunId:id,inputFile:run.inputFile,role:run.role,classifierId,status:'completed',jointAnnotations:true,message:'已绑定当前合格分类器；共享用量见联合任务',sampleCount:run.requestedSamples,sampled:rows.length,processed:rows.length,accepted:rows.filter(r=>r.fit==='include').length,excluded:rows.filter(r=>r.fit==='exclude').length,uncertain:rows.filter(r=>r.fit==='uncertain').length,promptTokens:0,completionTokens:0,costEstimate:0,budget:run.budget,usageSource:'classifier:'+id,createdAt:run.createdAt,finishedAt:now()});
     const last=await read(path.join(directory,'latest.json'),{});last[run.inputFile]=id;await save(path.join(directory,'latest.json'),last);
     return spec;
-  },async cancel(){active?.controller.abort();return {message:'已请求停止；不会自动重发付费请求'};},async start({inputFile,role:requestedRole='',sampleCount=200,budget=.5,shareConfirmed=false}){
-    if(shareConfirmed!==true)throw Error('请先确认向Qwen发送筛选后脱敏岗位及本轮预算');
-    if(inputFile!=='kb://all'&&!String(inputFile).startsWith('kb://task/')||!Number.isInteger(sampleCount)||sampleCount<1||sampleCount>1000||!Number.isFinite(budget)||budget<=0||budget>20)throw Error('请选择全岗位知识库或有效岗位范围，单批上限1–1000，预算不超过20元');
+  },async cancel(){active?.controller.abort();return {message:'已请求停止；不会自动重发付费请求'};},async start({inputFile,role:requestedRole='',sampleCount=200,budget=null,shareConfirmed=false}){
+    if(shareConfirmed!==true)throw Error('请先确认向Qwen发送筛选后脱敏岗位');
+    if(inputFile!=='kb://all'&&!String(inputFile).startsWith('kb://task/')||!Number.isInteger(sampleCount)||sampleCount<1||sampleCount>1000)throw Error('请选择全岗位知识库或有效岗位范围，单批上限1–1000');
     const {role}=await scope(inputFile,requestedRole),model=await supervised.resolve(inputFile,role),matcher=await resolveMatcher(inputFile,role,model);
     if(!matcher)throw Error('请先训练并启用岗位专用监督分类器');
     return launch({id:randomUUID(),model:QWEN_MODEL,semanticFields:semanticLabelFields,inputPrice:QWEN_PRICING.input_per_million,outputPrice:QWEN_PRICING.output_per_million,inputFile,role,classifierId:model?.id||matcher.metadata.version,scoped:!!model,contractVersion:concreteSemanticVersion,shareConfirmed:true,status:'preparing',sampleCount,budget,promptTokens:0,completionTokens:0,costEstimate:0,requestsStarted:0,requestsCompleted:0,processed:0,dropped:0,createdAt:now()},matcher);

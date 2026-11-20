@@ -17,10 +17,10 @@ from .processes import ProcessOwner
 from .reports import ReportCache
 from .worker import Worker
 from .models import CollectionKeywords
-from .models import MatchingStart, MatchingResume, MatchingAssess
+from .models import MatchingStart, MatchingResume, MatchingAssess, MatchingMessage
 
 HOP_HEADERS = {"host", "connection", "transfer-encoding", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "upgrade", "content-length"}
-PROTECTED_COMMANDS = {"/api/resume-matching/assess", "/api/resume-matching/start", "/api/resume-matching/resume", "/api/collection/keywords", "/api/insights/training/create", "/api/insights/training/start", "/api/insights/training/resume", "/api/insights/classifier/start", "/api/insights/classifier/resume", "/api/insights/classifier/schema-draft", "/api/insights/run", "/api/insights/semantic/start", "/api/insights/semantic/resume", "/api/insights/discovery/scan", "/api/insights/discovery/name"}
+PROTECTED_COMMANDS = {"/api/resume-matching/message", "/api/resume-matching/assess", "/api/resume-matching/start", "/api/resume-matching/resume", "/api/collection/keywords", "/api/insights/training/create", "/api/insights/training/start", "/api/insights/training/resume", "/api/insights/classifier/start", "/api/insights/classifier/resume", "/api/insights/classifier/schema-draft", "/api/insights/run", "/api/insights/semantic/start", "/api/insights/semantic/resume", "/api/insights/discovery/scan", "/api/insights/discovery/name"}
 
 
 def create_app(settings=None):
@@ -99,7 +99,7 @@ def create_app(settings=None):
     async def health():
         state = await app.state.worker.json("/_worker/health")
         return {"status": "ready", "framework": "FastAPI", "version": "2.0.0", "worker": state,
-                "compute": {"concurrency": 1, "active": len(app.state.compute.tasks)},
+                "compute": {"concurrency": 2, "lanes": {"training": 1, "analysis": 1}, "active": len(app.state.compute.tasks)},
                 "native": ["report", "validation", "compute-queue", "command-deduplication"],
                 "execution": "Node.js兼容执行进程；Python训练与聚类独立进程"}
 
@@ -217,23 +217,24 @@ def create_app(settings=None):
 
     for path, model, title in (
         ("/api/insights/training/create", TrainingCreate, "创建岗位训练任务"),
-        ("/api/insights/training/start", TrainingStart, "按预算启动岗位训练"),
+        ("/api/insights/training/start", TrainingStart, "启动岗位训练"),
         ("/api/insights/training/resume", ResumeRun, "继续原轮次剩余标注"),
         ("/api/insights/training/cancel", RunIdentity, "停止训练任务"),
         ("/api/insights/classifier/start", ClassifierStart, "启动分类器标注"),
         ("/api/insights/classifier/resume", ResumeRun, "恢复分类器断点"),
-        ("/api/insights/classifier/schema-draft", SchemaDraft, "按预算扩展检索词与标注规范"),
+        ("/api/insights/classifier/schema-draft", SchemaDraft, "扩展检索词与标注规范"),
         ("/api/insights/semantic/start", SemanticStart, "增量提取技能与职责标签"),
         ("/api/insights/classifiers/delete", ClassifierDelete, "移除岗位分类器"),
-        ("/api/insights/discovery/name", DiscoveryName, "按预算识别岗位聚类方向"),
+        ("/api/insights/discovery/name", DiscoveryName, "识别岗位聚类方向"),
         ("/api/insights/run", InsightRun, "生成岗位分析报告"),
     ):
         register(path, model, title, "岗位分析与训练")
 
     register("/api/collection/keywords", CollectionKeywords, "DeepSeek生成5个扩展关键词", "采集任务")
     register("/api/resume-matching/start", MatchingStart, "解析简历并检索重排目标岗位", "简历匹配")
-    register("/api/resume-matching/resume", MatchingResume, "沿用原预算继续匹配", "简历匹配")
-    register("/api/resume-matching/assess", MatchingAssess, "按原预算逐项核验本页岗位要求", "简历匹配")
+    register("/api/resume-matching/resume", MatchingResume, "从断点继续匹配", "简历匹配")
+    register("/api/resume-matching/assess", MatchingAssess, "逐项核验本页岗位要求", "简历匹配")
+    register("/api/resume-matching/message", MatchingMessage, "补充或修改会话人才画像并重新匹配", "简历匹配")
 
     def register_read(path, title, tag):
         async def endpoint(request: Request):
@@ -281,7 +282,7 @@ def create_app(settings=None):
             return RedirectResponse("/tasks", status_code=302)
         if path.rstrip("/") == "browser" or path.startswith("browser/"):
             return RedirectResponse("/tasks", status_code=302)
-        target = (settings.public_dir / ("index.html" if not path or path.rstrip("/") in ("tasks", "insights", "assistant", "matching") or path.startswith("tasks/") else path)).resolve()
+        target = (settings.public_dir / ("index.html" if not path or path.rstrip("/") in ("tasks", "insights", "assistant", "matching", "quality", "sources") or path.startswith("tasks/") else path)).resolve()
         if not target.is_relative_to(settings.public_dir.resolve()) or not target.is_file():
             return JSONResponse({"error": "未找到"}, 404)
         return FileResponse(target, headers={"cache-control": "no-cache"})

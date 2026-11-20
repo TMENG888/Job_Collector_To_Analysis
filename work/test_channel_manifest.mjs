@@ -5,11 +5,12 @@ import path from 'node:path';
 import http from 'node:http';
 import {spawn} from 'node:child_process';
 import {EventEmitter} from 'node:events';
-import {ensureChannelManifest,readChannelVerification,verificationDiagnostic} from './channel_verification_state.mjs';
+import {ensureChannelManifest,readChannelVerification,verificationDiagnostic,consumeChannelVerificationRetry,saveChannelVerification} from './channel_verification_state.mjs';
 import {markChannelReady} from './manual_channel_session.mjs';
 import {createChannelVerification} from './channel_manual_verification.mjs';
 import {writeNativeChannelRows,nativeTaskCounts} from './collector_native_sink.mjs';
 import {renderCollectionDashboard} from '../job_collector_ui/public/collection-dashboard.js';
+import {channelErrorDiagnostic} from './channel_collection_diagnostics.mjs';
 
 const root=path.resolve(import.meta.dirname,'..');
 const workspace=process.env.JOB_TEST_WORK_DIR||'E:/Codex/work/20261103-channel-manifest';
@@ -90,6 +91,55 @@ test('ordinary browser acknowledgment remains unverified and exposes manual cont
   assert.equal(verificationDiagnostic(null,state.job51).label,'已处理，待采集验证');
   const html=renderCollectionDashboard({...f.task,status:'paused',metrics:{knowledgeRows:3,channelVerification:state}},{number:String,escapeHtml:String});
   assert.match(html,/data-action="session-resume-job51"/);assert.doesNotMatch(html,/data-action="verify-recheck-/);
+});
+
+test('ordinary job51 acknowledgement releases the same blocker once, preserves peers and remains unverified',async()=>{
+  const f=await fixture(),manager=createChannelVerification();
+  f.manifest.platforms={job51:{rows:1,errors:[{code:'verification_required',stopChannel:true}]},liepin:{rows:2,errors:[{code:'login_required',stopChannel:true}]}};
+  await write(f.file,f.manifest);
+  assert.equal(await consumeChannelVerificationRetry(f.task,'job51'),null);
+  await manager.finish(f.task,'job51');
+  assert.equal((await read(f.file)).platforms.job51.errors[0].resolved_at,undefined);
+  const retried=await consumeChannelVerificationRetry(f.task,'job51');
+  assert.equal(retried.platforms.job51.errors[0].resolution,'manual_retry_requested');
+  assert.deepEqual(retried.platforms.liepin,f.manifest.platforms.liepin);
+  assert.equal((await read(path.join(f.task.outputDir,'渠道核验状态.json'))).channels.job51.verifiedAt,null);
+  assert.equal(await consumeChannelVerificationRetry(f.task,'job51'),null);
+});
+
+test('stale acknowledgements, interrupted checks and non-session failures cannot authorize a retry',async()=>{
+  for(const kind of ['changed-error','schema-error','interrupted']){
+    const f=await fixture(),manager=createChannelVerification();
+    f.manifest.platforms.job51={errors:[{code:kind==='schema-error'?'api_schema_changed':'verification_required',stopChannel:true}]};
+    await write(f.file,f.manifest);await manager.finish(f.task,'job51');
+    if(kind==='changed-error'){f.manifest.platforms.job51.errors.push({code:'login_required',stopChannel:true});await write(f.file,f.manifest);}
+    if(kind==='interrupted')await saveChannelVerification(f.task,'job51',{state:'checking',mode:'ordinary',acknowledgedAt:new Date().toISOString()});
+    const before=await fs.readFile(f.file,'utf8');
+    assert.equal(await consumeChannelVerificationRetry(f.task,'job51'),null,kind);
+    assert.equal(await fs.readFile(f.file,'utf8'),before,kind);
+  }
+});
+
+test('job51 processed button hides after acknowledgement and reappears for a new verification failure',()=>{
+  const task={id:'ui',status:'running',platforms:['job51'],metrics:{knowledgeRows:1,channelDiagnostics:{job51:{status:'manual',label:'需要验证'}},channelVerification:{job51:{state:'manual_checked',mode:'ordinary'}}}};
+  const render=()=>renderCollectionDashboard(task,{number:String,escapeHtml:String});
+  assert.doesNotMatch(render(),/data-action="session-process-job51"/);
+  assert.match(render(),/data-action="session-resume-job51"/);
+  delete task.metrics.channelVerification.job51;
+  assert.match(render(),/data-action="session-process-job51"/);
+  assert.doesNotMatch(render(),/data-action="session-resume-job51"/);
+  task.metrics.channelHeartbeats={job51:{state:'healthy',label:'入库活跃',requiresManual:false}};
+  task.metrics.channelDiagnostics={};
+  assert.doesNotMatch(render(),/data-action="session-process-job51"/);
+});
+
+test('browser launch failures have an actionable local-session diagnostic instead of another captcha warning',()=>{
+  for(const error of [{code:'browser_start_failed'},{code:'collection_error',error:'浏览器启动失败；请检查配置目录是否被旧窗口占用，不会接管日常浏览器或删除登录数据。private stack'}]){
+    const result=channelErrorDiagnostic([error]);
+    assert.equal(result.status,'manual');assert.equal(result.code,'browser_start_failed');
+    assert.match(result.reason,/普通登录窗口/);assert.doesNotMatch(JSON.stringify(result),/private stack/);
+  }
+  assert.equal(channelErrorDiagnostic([{code:'collection_error',error:'unrelated failure'}]).code,'collection_error');
 });
 
 test('observed website success can finish with a missing channel; an unverified window cannot',async()=>{

@@ -11,7 +11,8 @@
   <link rel="stylesheet" href="/insight-layout.css?v=20261112-province-tooltip" />
   <link rel="stylesheet" href="/insight-classifier.css?v=20261112-discovery-results" />
   <link rel="stylesheet" href="/confirmation-dialog.css?v=20261112-clear-prompts" />
-  <link rel="stylesheet" href="/resume-matching.css?v=20261113-requirements" />
+  <link rel="stylesheet" href="/resume-matching.css?v=20261118-memory" />
+  <link rel="stylesheet" href="/source-data.css?v=20261119-pipeline" />
 </head>
 <body>
   <div class="shell">
@@ -22,6 +23,7 @@
       </div>
       <nav aria-label="主导航">
         <a class="nav-item active" href="/tasks" data-view="tasks" aria-label="任务中心" title="任务中心"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg></span> 任务中心</a>
+        <a class="nav-item" href="/sources" data-view="quality" aria-label="源数据" title="源数据"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11M15 9v11M3 14h18"/></svg></span> 源数据</a>
         <a class="nav-item" href="/insights" data-view="insights" aria-label="岗位洞察" title="岗位洞察"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4v16h16M8 15l4-5 4 2 4-7"/></svg></span> 岗位洞察</a>
         <a class="nav-item" href="/matching" data-view="matching" aria-label="简历匹配" title="简历匹配"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6M8 13h5m-5 4h3m3 0 2 2 4-4"/></svg></span> 简历匹配</a>
         <a class="nav-item" href="/?view=assistant" data-view="assistant" aria-label="求职助手" title="求职助手"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/></svg></span> 求职助手</a>
@@ -63,6 +65,7 @@
         </section>
       </div>
 
+      <div id="qualityView" class="app-view hidden" aria-label="采集源数据"></div>
       <div id="matchingView" class="app-view hidden" aria-label="简历匹配"></div>
       <div id="assistantView" class="app-view hidden">
         <div class="assistant-workspace">
@@ -186,10 +189,10 @@
     <div class="interview-classifier-body">
       <div id="interviewClassifierError" class="interview-error" role="alert" hidden></div>
       <form id="interviewClassifierForm">
-        <div class="interview-budget-grid"><label>抽样篇数<input name="sampleCount" type="number" min="60" max="1000" step="1" value="200" required /></label><label>本轮预算（元）<input name="budget" type="number" min="0.01" max="20" step="0.01" value="0.5" required /></label></div>
+        <div class="interview-budget-grid"><label>抽样篇数<input name="sampleCount" type="number" min="60" max="1000" step="1" value="200" required /></label></div>
         <p id="interviewClassifierCredential" class="interview-note"></p>
         <details class="interview-model"><summary>费用与评测设置</summary><div class="interview-budget-grid"><label>输入单价（元 / 百万 Token）<input name="inputPrice" type="number" min="0.001" max="100" step="0.001" value="0.8" required /></label><label>输出单价（元 / 百万 Token）<input name="outputPrice" type="number" min="0.001" max="100" step="0.001" value="2.7" required /></label></div><p id="interviewClassifierBenchmark"></p></details>
-        <label class="interview-classifier-consent"><input type="checkbox" name="confirmed" /> 同意向 Qwen 发送本任务的脱敏公开面经，按本轮预算标注</label>
+        <label class="interview-classifier-consent"><input type="checkbox" name="confirmed" /> 同意向 Qwen 发送本任务的脱敏公开面经，处理公开面经</label>
         <div class="interview-actions"><button class="primary" type="submit" disabled>Qwen 标注并训练</button><button id="interviewClassifierRefresh" class="ghost" type="button">刷新</button><button id="interviewClassifierCancel" class="ghost" type="button" disabled>停止本轮</button></div>
       </form>
       <div id="interviewClassifierResult" aria-live="polite"></div>
@@ -212,6 +215,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/vendor/d3.min.js"></script>
-  <script type="module" src="/app.js?v=20261113-version-bound-top50"></script>
+  <script type="module" src="/app.js?v=20261119-pipeline"></script>
 </body>
 </html>

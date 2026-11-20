@@ -3,6 +3,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import { readJobDataset } from './job_dataset.mjs';
 import {normalizeSalary,normalizeEmploymentType,roleFamilies,skillRules} from './job_knowledge_schema.mjs';
+import {normalizeJobFields,PROCESSING_HASH} from './job_processing_rules.mjs';
 import {knowledgeStore} from './job_knowledge_store.mjs';
 import {insightSnapshotContextKey} from './insight-report-snapshots.mjs';
 import {writeJsonAtomic} from './collector_storage.mjs';
@@ -821,7 +822,9 @@ if (!focused.length) throw new Error(`没有岗位通过“${detectedRole.name}�
 const enriched = focused.map((item) => {
   const semantic=semanticData?.byKey.get(semanticRowKey(item.row));
   const labels={...Object.fromEntries(['skills','tasks'].map(field=>[field,semantic?.fit==='include'?(semantic[field]||[]).map(t=>t.name):[]])),domains:[],industries:[]};
-  return { ...item, salary: normalizeSalary(item.row['薪资']), labels, semantic, label_source: semantic?.fit==='include'?'Qwen语义抽取':'未完成语义标注' };
+  const row=item.row;
+  const processing=row.knowledge_processing?.rulesHash===PROCESSING_HASH?row.knowledge_processing:normalizeJobFields({platform:row['平台'],job_id:row['岗位ID'],job_name:row['岗位名称'],job_description:row['岗位描述'],salary:row['薪资'],city:row['原始工作城市']||row['工作城市'],province:row['省份']||row['工作省份'],education:row['学历要求'],experience:row['经验要求'],company_size:row['公司规模'],employment_type:row['用工类型']});
+  return { ...item, processing, salary:processing.salary, labels, semantic, label_source: semantic?.fit==='include'?'Qwen语义抽取':'未完成语义标注' };
 });
 const semanticAccepted=enriched.filter(item=>item.semantic?.fit==='include');
 const sample = enriched.map((item) => item.row);
@@ -867,10 +870,11 @@ const observations = enriched.map((item) => {
   const domainEvidence = ['skills','tasks'].flatMap(field=>(item.semantic?.fit==='include'?item.semantic[field]||[]:[]).map(tag=>({label:tag.name,quote:tag.quote,field:tag.field,category:field,...(tag.category?{technology_category:tag.category}:{})})));
   return { row_no: row.row_no, platform: text(row['平台']), job_id: text(row['岗位ID']) || `row-${row.row_no}`, job_name: text(row['岗位名称']),
     company_name:text(row['公司名称']), company_id:text(row['公司ID']),
-    province:text(row['省份']||row['工作省份']), city: row['工作城市'], raw_city: text(row['原始工作城市']), district: text(row['区县'] || row['工作区域']) || text(row['原始工作城市']).split(/[-—]/).slice(1).join('-'),
+    province:item.processing.fields.province, city: row['工作城市'], raw_city: text(row['原始工作城市']), district: text(row['区县'] || row['工作区域']) || text(row['原始工作城市']).split(/[-—]/).slice(1).join('-'),
     experience: text(row['经验要求']) || '未明确', education: text(row['学历要求']) || '未明确', company_size: text(row['公司规模']) || '未明确',
     employment_type: normalizeEmploymentType(row['用工类型']), salary_midpoint_k: item.salary ? item.salary.midpoint / 1000 : null,
     salary_raw:text(row['薪资']),salary_period:item.salary?.original_period||'',salary_basis:item.salary?.basis||'',salary_conversion_days:item.salary?.conversion_days??null,
+    processing_rules_hash:PROCESSING_HASH,processing_usability:item.processing.usability,
     skills: [...new Set(item.labels.skills)], skill_tags:item.semantic?.fit==='include'?(item.semantic.skills||[]).map(tag=>({...tag})):[], tasks: [...new Set(item.labels.tasks)], domains: [...new Set(item.labels.domains)],
     knowledge_key:row.knowledge_key||'',knowledge_hash:row.knowledge_hash||'',
     industry:item.labels.industries[0]||'',industries:item.labels.industries,source_industry:text(row['行业']),semantic_labeled:item.semantic?.fit==='include',semantic_fit:item.semantic?.fit||'unlabeled',semantic_key:item.semantic?.key||'',company_key: text(row['公司ID'] || row['公司名称']) ? `${text(row['平台'])}:${text(row['公司ID'] || row['公司名称'])}` : '',

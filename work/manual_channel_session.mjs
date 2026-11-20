@@ -13,6 +13,7 @@ import {launchOrdinaryChromeContext} from './ordinary_chrome_session.mjs';
 import {standardBrowserExecutable} from './browser_executables.mjs';
 import {writeJsonAtomic} from './collector_storage.mjs';
 import {saveChannelVerification,ensureChannelManifest} from './channel_verification_state.mjs';
+import {updateChannelManifest} from './channel_manifest_store.mjs';
 
 const loginCodes=new Set(['session_required','login_required','auth_required']);
 const verifiedCodes=new Set([...loginCodes,'verification_required','access_blocked','navigation_error']);
@@ -74,19 +75,19 @@ export async function clearPlatformCooldown(platform,rateDir,{now=new Date().toI
 export async function markChannelReady(task,platform,{state='verified',rateDir,note=''}={}){
   if(!['job51','liepin','zhaopin','jobonline'].includes(platform))throw fail('该渠道不支持人工会话确认',400);
   if(!['logged_in','verified'].includes(state))throw fail('人工状态无效',400);
-  const file=path.join(task.outputDir,'采集清单.json');
-  const manifest=await ensureChannelManifest(task,platform);
-  const channel=manifest.platforms[platform];
+  await ensureChannelManifest(task,platform);
   const now=new Date().toISOString(),resolved=[];
-  channel.errors=(channel.errors||[]).map(error=>{
-    if(error.resolved_at)return error;
-    const code=String(error.code||'');
-    const covered=state==='verified'?verifiedCodes.has(code):loginCodes.has(code);
-    if(!covered)return error;
-    resolved.push(code);
-    return {...error,resolved_at:now,resolution:`manual_${state}`,...(note?{manual_note:note}:{})};
+  await updateChannelManifest(task,manifest=>{
+    const channel=manifest.platforms[platform];
+    channel.errors=(channel.errors||[]).map(error=>{
+      if(error.resolved_at)return error;
+      const code=String(error.code||'');
+      const covered=state==='verified'?verifiedCodes.has(code):loginCodes.has(code);
+      if(!covered)return error;
+      resolved.push(code);
+      return {...error,resolved_at:now,resolution:`manual_${state}`,...(note?{manual_note:note}:{})};
+    });
   });
-  await writeJsonAtomic(file,manifest);
   if(rateDir)await clearPlatformCooldown(platform,rateDir,{now});
   const verificationState=state==='verified'?'verified':'manual_checked';
   await saveChannelVerification(task,platform,{

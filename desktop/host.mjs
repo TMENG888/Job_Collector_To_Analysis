@@ -36,7 +36,7 @@ export async function createDesktop({runtime,baseURL=process.env.JOB_DESKTOP_BAS
   function failed(message){clearTimeout(workspaceTimer);workspaceStatus='error';workspaceError=message;layout();emit();}
   function loading(){clearTimeout(workspaceTimer);workspaceStatus='loading';workspaceError='';layout();emit();workspaceTimer=setTimeout(()=>failed('本地页面加载超时，请检查后台服务后重试'),20000);}
   function load(url){loading();workspace.webContents.loadURL(url).catch(error=>{if(error.code!=='ERR_ABORTED')failed('本地页面连接失败，请检查后台服务后重试');});}
-  function syncView(view){if(['tasks','insights','matching','assistant'].includes(view)){workspaceRoute=view;emit();}}
+  function syncView(view){if(['tasks','quality','insights','matching','assistant'].includes(view)){workspaceRoute=view;emit();}}
   function syncURL(url){if(isWorkspaceURL(url,base)&&/^\/browser(?:\/|$)/.test(new URL(url).pathname)){workspaceRoute='tasks';load(workspaceURL(base,'tasks'));return;}syncView(workspaceViewForURL(url,base));}
   async function command(name,value={}){
     if(!COMMANDS.has(name)||!value||typeof value!=='object'||Array.isArray(value)||JSON.stringify(value).length>4096)throw Error('不支持的桌面操作');
@@ -57,7 +57,7 @@ export async function createDesktop({runtime,baseURL=process.env.JOB_DESKTOP_BAS
   workspace.webContents.on('did-navigate-in-page',(event,url,isMainFrame)=>{if(event.isMainFrame??isMainFrame)syncURL(event.url||url);});
   const onWorkspaceView=(event,view)=>{
     if(event.sender!==workspace.webContents||event.senderFrame!==workspace.webContents.mainFrame||!isWorkspaceURL(event.senderFrame.url,base))return;
-    if(!['tasks','insights','matching','assistant'].includes(view))return;
+    if(!['tasks','quality','insights','matching','assistant'].includes(view))return;
     clearTimeout(workspaceTimer);workspaceStatus='ready';workspaceError='';layout();syncView(view);
   };
   ipcMain.on('job-desktop:workspace-view',onWorkspaceView);

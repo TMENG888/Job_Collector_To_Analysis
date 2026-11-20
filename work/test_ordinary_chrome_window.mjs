@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {EventEmitter} from 'node:events';
 import {ordinaryChromeArguments,assertOrdinaryChromePage,selectOrdinaryChromePage,launchOrdinaryChromeContext} from './ordinary_chrome_session.mjs';
 import {createChannelVerification} from './channel_manual_verification.mjs';
 import {collectLiepinWebsite} from './liepin_website_session.mjs';
@@ -41,7 +42,7 @@ test('normal Chrome new-tab window remains usable with native window validation'
 });
 test('already-navigated onboarding shell cannot masquerade as a browser tab',async()=>{
   const url='https://safe.liepin.com/page/liepin/captchaPage_ip_PC',f=fixture([url],{invalid:[url]});
-  await assert.rejects(selectOrdinaryChromePage(f.context),/关闭旧猎聘窗口/);
+  await assert.rejects(selectOrdinaryChromePage(f.context),/关闭该渠道旧登录窗口/);
   assert.deepEqual(f.counts(),{attached:1,detached:1});
 });
 test('challenge is preferred over search/blank; malformed challenge cannot be sidestepped',async()=>{
@@ -60,6 +61,27 @@ test('foreign tabs are not selected for recruitment navigation',async()=>{
 test('zero-sized window rejected and CDP session detached on failure',async()=>{
   const f=fixture(['about:blank'],{width:0});await assert.rejects(assertOrdinaryChromePage(f.context,f.pages[0]));
   assert.equal(f.counts().detached,1);
+});
+
+test('stale Edge port file cannot prevent connection to the new child endpoint',async()=>{
+  const profile=await fs.mkdtemp('E:/Codex/temp/20261118-jobonline-login-test-');
+  const stale='49985\n/devtools/browser/old-endpoint';
+  await fs.writeFile(path.join(profile,'DevToolsActivePort'),stale);
+  const f=fixture(['about:blank']);let args,connected,disconnected=0;
+  const browser={contexts:()=>[f.context],close:async()=>{disconnected++;}};
+  const context=await launchOrdinaryChromeContext(profile,{
+    executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',allocatePort:async()=>52228,
+    launch:(exe,values)=>{args=values;const child=new EventEmitter();child.pid=1234;child.unref=()=>{};queueMicrotask(()=>child.emit('spawn'));return child;},
+    processAlive:pid=>pid===1234,
+    fetchImpl:async url=>{assert.equal(url,'http://127.0.0.1:52228/json/version');return {ok:true,json:async()=>({webSocketDebuggerUrl:'ws://127.0.0.1:52228/devtools/browser/1234-abcd'})};},
+    connect:async endpoint=>{connected=endpoint;return browser;},
+  });
+  assert.ok(args.includes('--remote-debugging-port=52228'));
+  assert.equal(connected,'http://127.0.0.1:52228');
+  assert.equal(await fs.readFile(path.join(profile,'DevToolsActivePort'),'utf8'),stale);
+  const record=JSON.parse(await fs.readFile(path.join(profile,'.job-collector-normal-chrome.json'),'utf8'));
+  assert.equal(record.pid,1234);assert.equal(record.endpoint,connected);
+  await context.close();assert.equal(disconnected,1);
 });
 test('verification exposes actionable shell error and releases lease without goto',async()=>{
   let navigations=0,released=0,closed=0;

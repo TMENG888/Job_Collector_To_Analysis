@@ -85,10 +85,10 @@ test('saved response after process crash replays locally and reconciles usage on
   await restored.resume(run.id,{confirmed:true});const result=await settled(restored,run.id);
   assert.equal(result.status,'completed');assert.equal(remaining,119);assert.equal(result.labeled,120);assert.equal(result.requestsCompleted,120);assert.ok(Math.abs(result.costEstimate-120*cost)<1e-10);
 });
-test('retry obeys original remaining budget and does not issue an extra request',async()=>{
+test('label validation retries continue beyond obsolete budget amounts',async()=>{
   let calls=0;const f=await fixture(async(_url,options)=>{calls++;const response=output(options,{invalid:true}),data=await response.json();data.usage={prompt_tokens:100,completion_tokens:5500,total_tokens:5600};return {ok:true,json:async()=>data};});
   const started=await f.service.start({inputFile,role,sampleCount:120,budget:.025,jointAnnotations:true});
-  const result=await settled(f.service,started.id);assert.equal(result.status,'failed');assert.match(result.message,/预算/);assert.ok(calls<=1);assert.ok(result.costEstimate<=result.budget);
+  const result=await settled(f.service,started.id);assert.equal(result.status,'failed');assert.match(result.message,/连续5条/);assert.equal(calls,10);assert.ok(result.costEstimate>result.budget);
 });
 test('unknown network usage is reserved, not auto-retried, and does not reset on resume',async()=>{
   let calls=0;const f=await fixture(async()=>{calls++;throw Error('network disconnected');});
@@ -148,17 +148,16 @@ test('default four lanes handle out-of-order responses without duplicate labels'
   assert.match(renderTrainingProgress({id:'test',runId:run.id,role,status:'labeling'},{run:result}),/并发 <strong>4<\/strong> 路/);
 });
 
-test('parallel reservations enforce the shared budget before dispatch',async()=>{
+test('parallel lanes finish all samples beyond legacy cost caps and retain complete usage',async()=>{
   let calls=0;const f=await fixture(async(_url,options)=>{
     calls++;const [entry]=JSON.parse(await fs.readFile(path.join(f.directory,'index.json'),'utf8'));
     const state=JSON.parse(await fs.readFile(path.join(f.directory,entry.id,'state.json'),'utf8'));
-    assert.ok(state.costEstimate+state.pendingReserve<=state.budget+1e-12);
     assert.equal(state.pendingReserve,Object.values(state.pendingRequests).reduce((sum,item)=>sum+item.reserved,0));
     const response=output(options),payload=await response.json();payload.usage={prompt_tokens:100,completion_tokens:6000,total_tokens:6100};
     return {ok:true,json:async()=>payload};
   },{requestConcurrency:4});
   const run=await f.service.start({inputFile,role,sampleCount:120,budget:.05,jointAnnotations:true}),result=await settled(f.service,run.id);
-  assert.equal(result.status,'failed');assert.match(result.message,/预算/);assert.ok(calls>0&&calls<4);assert.ok(result.costEstimate<=result.budget);assert.deepEqual(result.pendingRequests,{});
+  assert.equal(result.status,'completed');assert.equal(calls,120);assert.ok(result.costEstimate>result.budget);assert.equal(result.promptTokens,12000);assert.equal(result.completionTokens,720000);assert.deepEqual(result.pendingRequests,{});
 });
 
 test('one disconnected lane drains successful peers and resumes only unfinished samples',async()=>{

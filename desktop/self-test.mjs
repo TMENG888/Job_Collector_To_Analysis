@@ -10,7 +10,7 @@ export async function runSelfTest({app,createDesktop,runtime}) {
   let workspaceDown=false,desktop,exitCode=1;
   const server=http.createServer((req,res)=>{
     if(workspaceDown){res.destroy();return;}
-    const route=req.url.includes('view=assistant')?'assistant':req.url.startsWith('/tasks')?'tasks':req.url.startsWith('/matching')?'matching':'insights';
+    const route=req.url.includes('view=assistant')?'assistant':req.url.startsWith('/tasks')?'tasks':req.url.startsWith('/matching')?'matching':req.url.startsWith('/quality')?'quality':'insights';
     res.writeHead(200,{'content-type':'text/html; charset=utf-8'});
     res.end('<!doctype html><meta charset="utf-8"><style>body{margin:0}.shell{display:grid;grid-template-columns:76px minmax(0,1fr)}.sidebar{display:block;width:76px}main{min-width:0}</style><body data-view="'+route+'"><div class="shell"><aside class="sidebar">Web导航</aside><main><h1>隔离本地工作台</h1></main></div>');
   });
@@ -25,7 +25,7 @@ export async function runSelfTest({app,createDesktop,runtime}) {
     check('trusted shell bridge',await desktop.window.webContents.executeJavaScript('typeof window.jobDesktop.command'),'function');
     check('trusted IPC version',(await desktop.window.webContents.executeJavaScript('window.jobDesktop.command("state")')).version,'0.2.0');
     check('workspace receives no host bridge',await desktop.workspace.webContents.executeJavaScript('typeof window.jobDesktop'),'undefined');
-    check('four desktop navigation items',await desktop.window.webContents.executeJavaScript('Array.from(document.querySelectorAll("[data-route]")).map(x=>x.dataset.route)'),['tasks','insights','matching','assistant']);
+    check('five desktop navigation items',await desktop.window.webContents.executeJavaScript('Array.from(document.querySelectorAll("[data-route]")).map(x=>x.dataset.route)'),['tasks','quality','insights','matching','assistant']);
     check('retired browser controls absent',await desktop.window.webContents.executeJavaScript('!!document.querySelector("#browserChrome,#tools,#recruiterStart,[data-route=browser]")'),false);
     const {Menu}=await import('electron');
     const zoomMenu=id=>Menu.getApplicationMenu().getMenuItemById('workspace-zoom-'+id).click();
@@ -51,7 +51,7 @@ export async function runSelfTest({app,createDesktop,runtime}) {
     zoomMenu('reset');
     check('reset restores both views',[desktop.window.webContents.getZoomFactor(),desktop.workspace.webContents.getZoomFactor()],[1,1]);
     for(const [key,value] of Object.entries({nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}))check('workspace '+key,desktop.workspace.webContents.getLastWebPreferences()[key],value);
-    for(const route of ['tasks','insights','matching','assistant']) {
+    for(const route of ['tasks','quality','insights','matching','assistant']) {
       await desktop.command('workspace',{route});
       await wait(()=>desktop.state().workspaceStatus==='ready'&&desktop.state().workspaceRoute===route,'route '+route);
       check(route+' rendered',await desktop.workspace.webContents.executeJavaScript('document.body.dataset.view'),route);
@@ -117,12 +117,16 @@ export async function runLayoutTest({app,createDesktop,runtime}) {
       check('real scaled toolbar boundary '+factor,Math.round(await desktop.window.webContents.executeJavaScript('document.querySelector(".appbar").getBoundingClientRect().bottom')*factor),desktop.workspace.getBounds().y);
     }
     zoomMenu('reset');
-    for(const route of ['insights','tasks','matching','assistant']) {
+    for(const route of ['insights','tasks','quality','matching','assistant']) {
       await desktop.command('workspace',{route});
       await wait(()=>local.executeJavaScript('document.body.dataset.view==='+JSON.stringify(route)));
       check('real '+route+' Web sidebar hidden',await local.executeJavaScript('getComputedStyle(document.querySelector(".sidebar")).display'),'none');
       check('real '+route+' single-column grid',await local.executeJavaScript('getComputedStyle(document.querySelector(".shell")).gridTemplateColumns.trim().split(/\\s+/).length'),1);
-      check('real '+route+' title',await local.executeJavaScript('document.querySelector("#pageTitle").textContent'),{tasks:'采集任务',insights:'岗位洞察',matching:'简历匹配',assistant:'求职助手'}[route]);
+      check('real '+route+' title',await local.executeJavaScript('document.querySelector("#pageTitle").textContent'),{tasks:'采集任务',quality:'数据质量报告',insights:'岗位洞察',matching:'简历匹配',assistant:'求职助手'}[route]);
+      if(route==='quality'){
+        await wait(()=>local.executeJavaScript('!!document.querySelector("#qualityReport .quality-metrics")'));
+        check('real quality report loaded',await local.executeJavaScript('document.querySelectorAll("#qualityReport .quality-metrics strong").length'),4);
+      }
       check('real '+route+' visible content',await local.executeJavaScript('document.querySelector("#'+route+'View").getBoundingClientRect().height>0'),true);
       await wait(()=>desktop.state().workspaceStatus==='ready');
       await wait(()=>desktop.window.webContents.executeJavaScript('document.querySelector("[data-route='+route+']").classList.contains("active")'));

@@ -1,3 +1,4 @@
+import {assistantUsage} from './model_usage.mjs';
 import {randomUUID} from 'node:crypto';
 import {answerJobDecision,answerSalaryBenchmark,answerJobDetails,answerRoleComparison,extractResumeSkills,modelAvailability,redactPersonalInfo} from './job_decision_assistant.mjs';
 import {updateCareerGoal,applyCareerGoal,effectiveResumeProfile,isSalaryQuestion,hiringScopeIntent,conditionReleased} from './job_assistant_goal.mjs';
@@ -115,6 +116,7 @@ export function createChatAgent({getModel=async()=>({}),fetcher=fetch,now=Date.n
         if(turn.model_run.limits)turn.model_run.limits={...turn.model_run.limits,model_requests:(turn.model_run.limits.model_requests??MAX_ROUNDS)+1,intent_requests:1};
       }
     }
+    turn.usage=assistantUsage(turn.model_run);
     signal?.throwIfAborted();emit('phase',{phase:'saving',message:'答复已整理，正在保存本轮会话'});
     turn.turnId=randomUUID();
     if(!repository)return;
@@ -483,7 +485,7 @@ export function createChatAgent({getModel=async()=>({}),fetcher=fetch,now=Date.n
                 // DeepSeek thinking mode rejects required/named tool choices. Keep
                 // thinking enabled and enforce evidence use in local validation.
                 const requestSignal=AbortSignal.any([abort,AbortSignal.timeout(25000)]);
-                const response=await fetcher(endpoint,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${env.JOB_ASSISTANT_API_KEY}`},signal:requestSignal,body:JSON.stringify({model:env.JOB_ASSISTANT_MODEL,stream:true,...(deepseek?{thinking:{type:'enabled'},reasoning_effort:'low'}:{temperature:.2}),max_tokens:deepseek?4096:1400,messages,tools:availableTools,tool_choice:deepseek?'auto':step===0?'required':'auto',parallel_tool_calls:false})});
+                const response=await fetcher(endpoint,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${env.JOB_ASSISTANT_API_KEY}`},signal:requestSignal,body:JSON.stringify({model:env.JOB_ASSISTANT_MODEL,stream:true,stream_options:{include_usage:true},...(deepseek?{thinking:{type:'enabled'},reasoning_effort:'low'}:{temperature:.2}),max_tokens:deepseek?4096:1400,messages,tools:availableTools,tool_choice:deepseek?'auto':step===0?'required':'auto',parallel_tool_calls:false})});
                 const diagnostic={step:step+1,http_status:response.status??200};modelRun.requests.push(diagnostic);
                 if(!response.ok){modelRun.error_code=`http_${response.status}`;throw new Error('模型请求失败');}
                 const value=await readModelReply(response,{signal:requestSignal,onProgress:data=>emit('phase',data)}),reply=value.choices?.[0]?.message;

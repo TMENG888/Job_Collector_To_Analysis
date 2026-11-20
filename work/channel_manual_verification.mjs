@@ -5,7 +5,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {DEFAULT_LIEPIN_PROFILE,launchWebsiteContext,websiteSearchURL,assertWebsitePage} from './liepin_website_session.mjs';
 import {parseLiepinResponse} from './direct_liepin_adapter.mjs';
-import {writeJsonAtomic} from './collector_storage.mjs';
+import {updateChannelManifest} from './channel_manifest_store.mjs';
 import {liepinCities} from './liepin_cities.mjs';
 import {openOfficialInOrdinaryBrowser} from './official_manual_browser.mjs';
 import {browserProfileRoot} from './managed_browser.mjs';
@@ -146,11 +146,12 @@ export function createCollectorChannelVerification({openContext=openOwnedContext
       if(!entry.ready||!officialPage(platform,entry.page.url()))throw fail('尚未观察到官网搜索成功；请在该窗口刷新并完成验证，确认岗位列表出现后再点“已处理”');
       if(platform==='liepin')await assertWebsitePage(entry.page);
       else{const {guard}=await import('./browser_channel_common.mjs');await guard(entry.page);}
-      const file=path.join(task.outputDir,'采集清单.json'),manifest=await ensureChannelManifest(task,platform);
-      const channel=manifest.platforms[platform];
+      await ensureChannelManifest(task,platform);
       const verifiedAt=entry.verifiedAt;
-      channel.errors=(channel.errors||[]).map(error=>requiresManual(error)&&!error.resolved_at?{...error,resolved_at:verifiedAt,resolution:'manual_website_search'}:error);
-      await writeJsonAtomic(file,manifest);
+      await updateChannelManifest(task,manifest=>{
+        const channel=manifest.platforms[platform];
+        channel.errors=(channel.errors||[]).map(error=>requiresManual(error)&&!error.resolved_at?{...error,resolved_at:verifiedAt,resolution:'manual_website_search'}:error);
+      });
       await closeEntry(entry);
       return {state:'verified',platform,verifiedAt,message:'官网搜索已核验，会话已保留；请手动续采，站点冷却期不变'};
     },

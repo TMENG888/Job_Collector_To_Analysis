@@ -14,7 +14,7 @@ export function checkedBaseURL(value = 'http://127.0.0.1:8788') {
   return u.origin;
 }
 export function workspaceURL(base, route) {
-  const routes = {tasks:'/tasks', insights:'/insights', matching:'/matching', assistant:'/?view=assistant'};
+  const routes = {tasks:'/tasks', quality:'/sources', insights:'/insights', matching:'/matching', assistant:'/?view=assistant'};
   if (!Object.hasOwn(routes, route)) throw Error('未知工作台页面');
   return checkedBaseURL(base) + routes[route];
 }
@@ -26,7 +26,8 @@ export function workspaceViewForURL(value, base) {
   const u = new URL(value);
   if (u.searchParams.get('view') === 'assistant') return 'assistant';
   const first = u.pathname.split('/').filter(Boolean)[0];
-  if (['tasks','insights','matching'].includes(first)) return first;
+  if (first==='sources') return 'quality';
+  if (['tasks','quality','insights','matching'].includes(first)) return first;
   if(first==='browser')return 'tasks';
   return u.pathname === '/' ? 'tasks' : null;
 }

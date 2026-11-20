@@ -114,19 +114,21 @@ export function createAnnotationSchemas(dataDir,{directory,model=createRecruiter
   }
   return {model,
     async status(inputFile,role){const index=await read(indexFile,{}),entry=index[scope(inputFile,role)]||{};return {busy,model:await model.status(),lastAttempt:entry.lastAttempt||null,draft:entry.draft?await checked(entry.draft,inputFile,role):null,approved:entry.approved?await checked(entry.approved,inputFile,role):null};},
-    async draft({inputFile,role,budget=.1,shareConfirmed=false,notes=''}){if(!String(inputFile).startsWith('kb://task/')&&inputFile!=='kb://all'||!role||/^(自动识别|auto)$/i.test(role))throw Error('请选择明确目标岗位');if(shareConfirmed!==true)throw Error('请先同意DeepSeek处理岗位名称及补充边界');if(!Number.isFinite(budget)||budget<.05||budget>.5)throw Error('规范起草预算须为0.05–0.50元');if(typeof notes!=='string'||notes.length>2000)throw Error('补充说明最多2000字');return exclusive(async()=>{
-      const usageBudget={limit:budget,spent:0},result=await model.request(annotationSchemaDraftPrompt,{target_role:role,notes},{budget:usageBudget,maxTokens:3200});
+    async draft({inputFile,role,budget=null,shareConfirmed=false,notes=''}){if(!String(inputFile).startsWith('kb://task/')&&inputFile!=='kb://all'||!role||/^(自动识别|auto)$/i.test(role))throw Error('请选择明确目标岗位');if(shareConfirmed!==true)throw Error('请先同意DeepSeek处理岗位名称及补充边界');if(typeof notes!=='string'||notes.length>2000)throw Error('补充说明最多2000字');return exclusive(async()=>{
+      const usageBudget={spent:0};let result;
+      try{result=await model.request(annotationSchemaDraftPrompt,{target_role:role,notes},{budget:usageBudget,maxTokens:3200});}
+      catch(error){const index=await read(indexFile,{}),key=scope(inputFile,role);index[key]={...index[key],lastAttempt:{id:randomUUID(),status:'failed',error:error.message,usage:error.usage||null}};await save(indexFile,index);throw error;}
       const attempt={id:randomUUID(),inputFile,role,notes,budget,createdAt:new Date().toISOString(),model:result._model||'DeepSeek',usage:result._usage||null,response:result};
       await save(path.join(directory,'attempts',attempt.id+'.json'),attempt);
       return adoptAttempt(attempt,{notes,budget});
     });},
-    async recoverDraft({inputFile,role,id,notes='',budget=.1}){return exclusive(async()=>{
+    async recoverDraft({inputFile,role,id,notes='',budget=null}){return exclusive(async()=>{
       file(id);const index=await read(indexFile,{}),entry=index[scope(inputFile,role)]||{};
       if(entry.lastAttempt?.id!==id||entry.lastAttempt.status!=='failed')throw Error('只能恢复当前岗位最近失败的规范响应');
       const attempt=await read(path.join(directory,'attempts',id+'.json'),null);
       if(!attempt||attempt.id!==id||attempt.inputFile!==inputFile||attempt.role!==role)throw Error('原始响应不属于当前岗位和数据源');
       if(typeof notes!=='string'||notes.length>2000||attempt.notes!==undefined&&attempt.notes!==notes)throw Error('补充边界与原始请求不一致，未复用响应');
-      if(!Number.isFinite(budget)||budget<.05||budget>.5)throw Error('规范起草预算须为0.05–0.50元');
+
       for(const existing of [entry.draft,entry.approved].filter(Boolean))if((await checked(existing,inputFile,role)).createdAt>attempt.createdAt)throw Error('已有更新的规范，未覆盖');
       return adoptAttempt(attempt,{notes,budget,recovered:true});
     });},

@@ -11,6 +11,7 @@ export function createInsightSnapshotLoader({api,selection,apply,classifier}){
     if(pending){queued=true;return pending;}
     pending=(async()=>{do{
       queued=false;const selected=selection(),requested=signature();let next;
+      if(!selected.role&&selected.inputFile?.startsWith('kb://processed/'))next={inputFile:selected.inputFile,status:'empty',message:'清洗数据已接入，请选择目标岗位',report:null,reportVersion:null,snapshot:null};
       if(selected.role){
         let snapshotEndpointAvailable=false;
         try{

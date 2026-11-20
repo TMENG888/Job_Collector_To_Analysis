@@ -33,10 +33,10 @@ export function createInsightTrainingQueue({directory,service,pollMs=1000,now=()
       if(!schemaState.approved?.schema?.retrieval||notes&&schemaState.approved.notes!==notes){
         if(!schemaState.model?.configured)throw Error('请先配置DeepSeek规范起草模型');
         await update(id,{status:'drafting',message:'DeepSeek扩展岗位职称、技术检索词及分类边界'});
-        const draft=await service.schemas.draft({...scope,budget:job.schemaBudget,shareConfirmed:true,notes});
+        const draft=await service.schemas.draft({...scope,shareConfirmed:true,notes});
         check();
         const approved=await service.schemas.approve({...scope,id:draft.id,confirmed:true,approvalMode:'workflow'});
-        await update(id,{schemaId:approved.id,schemaEstimate:Number(draft.usage?.estimate||0),schemaAdoption:'workflow'});
+        await update(id,{schemaId:approved.id,schemaEstimate:Number(draft.usage?.estimate||0),schemaUsage:draft.usage||null,schemaAdoption:'workflow'});
       }else await update(id,{schemaId:schemaState.approved.id,schemaAdoption:'existing'});
       check();
       await update(id,{status:'retrieving',message:'按扩展检索词扫描全岗位库，保留目标、相近和随机候选'});
@@ -44,7 +44,7 @@ export function createInsightTrainingQueue({directory,service,pollMs=1000,now=()
       await update(id,{retrieval:preview.sampling?.retrieval,library:preview.sampling?.library,sampling:preview.sampling});
       if(!preview.canStart){await update(id,{status:'needs_samples',message:'可用去重样本不足500条，保留任务和已起草规范，不继续付费'});return;}
       check();
-      run=await service.start({...scope,sampleCount:job.sampleCount,budget:job.labelBudget,jointAnnotations:true,trainingScope:'all',trainingKeywords:job.keywords||''});
+      run=await service.start({...scope,sampleCount:job.sampleCount,jointAnnotations:true,trainingScope:'all',trainingKeywords:job.keywords||''});
       }
       await update(id,{status:'labeling',runId:run.id,message:'Qwen联合标注，随后训练与隔离评测'});
       const deadline=Date.now()+2*60*60*1000;
@@ -53,40 +53,42 @@ export function createInsightTrainingQueue({directory,service,pollMs=1000,now=()
         if(current.settling&&!['preparing','labeling','training'].includes(current.status)){await delay(pollMs);continue;}
         if(['preparing','labeling','training'].includes(current.status)){
           if(find(id).cancelRequested)await service.cancelRun(run.id);
-          await update(id,{status:find(id).cancelRequested?'cancelling':current.status==='training'?'training':'labeling',message:current.message,labelEstimate:current.costEstimate||0});
+          await update(id,{status:find(id).cancelRequested?'cancelling':current.status==='training'?'training':'labeling',message:current.message,labelEstimate:current.costEstimate||0,labelUsage:{input:current.promptTokens||0,output:current.completionTokens||0,estimate:current.costEstimate||0,unknown:current.unknownUsageRequests||0}});
           await delay(pollMs);continue;
         }
         const status=current.status==='completed'?(current.eligible?'completed':'rejected'):finished.has(current.status)?current.status:'failed';
-        await update(id,{status,message:status==='completed'?'验收通过，分类器已加入岗位洞察':status==='rejected'?'分类器未通过验收，保留标签和评测；不用于正式筛选':current.message,labelEstimate:current.costEstimate||0,eligible:current.eligible===true});return;
+        await update(id,{status,message:status==='completed'?'验收通过，分类器已加入岗位洞察':status==='rejected'?'分类器未通过验收，保留标签和评测；不用于正式筛选':current.message,labelEstimate:current.costEstimate||0,labelUsage:{input:current.promptTokens||0,output:current.completionTokens||0,estimate:current.costEstimate||0,unknown:current.unknownUsageRequests||0},eligible:current.eligible===true});return;
       }
       throw Error('追踪已超过2小时，请核对训练记录；不自动重发模型请求');
-    }catch(error){await update(id,{status:find(id).cancelRequested?'cancelled':'failed',message:find(id).cancelRequested?'已停止后续步骤；在途请求费用需核对':clean(error)});}
+    }catch(error){
+      const job=find(id);if(job.status==='drafting'){const schema=await service.schemas.status(job.inputFile,job.role).catch(()=>null),usage=error.usage||schema?.lastAttempt?.usage;if(usage)await update(id,{schemaUsage:usage,schemaEstimate:usage.estimate||0});}
+      await update(id,{status:find(id).cancelRequested?'cancelled':'failed',message:find(id).cancelRequested?'已停止后续步骤；在途请求费用需核对':clean(error)});}
     finally{active=null;}
   }
   return {
-    async list(){await serial;await ready();return {workflow:'keyword-training-v1',trainingScope:'all',autoCreate:true,autoExecute:false,resume:true,busy:!!active,jobs:structuredClone(state.jobs.filter(job=>!isRetired(job.role,job.createdAt))),defaults:{sampleCount:CLASSIFIER_SAMPLE_COUNT,schemaBudget:.1,labelBudget:1.9}};},
+    async list(){await serial;await ready();return {workflow:'keyword-training-v1',trainingScope:'all',autoCreate:true,autoExecute:false,resume:true,busy:!!active,jobs:structuredClone(state.jobs.filter(job=>!isRetired(job.role,job.createdAt))),defaults:{sampleCount:CLASSIFIER_SAMPLE_COUNT,costLimit:false}};},
     async enqueue({taskId,label,inputFile,role,rows,keywords=''}){
       const seeds=trainingKeywords(keywords);keywords=seeds.join('，');
       const global=inputFile==='kb://all'&&taskId==='all'&&seeds.length>0;
       if(!taskId||!role||!global&&(!String(inputFile).startsWith('kb://task/')||decodeURIComponent(new URL(inputFile).pathname.slice(1))!==taskId)||!Number.isSafeInteger(rows)||rows<=0)throw Error('请选择有岗位数据的数据源，全库训练须输入明确岗位检索词');
       return mutate(()=>{const key=createHash('sha256').update(JSON.stringify([taskId,inputFile,role,rows,...(keywords?[keywords]:[])])).digest('hex');const existing=state.jobs.find(j=>j.key===key&&!isRetired(j.role,j.createdAt)&&(!keywords||!finished.has(j.status)));if(existing)return existing;
-        const job={id:randomUUID(),key,taskId,label,inputFile,role,keywords,sourceRows:rows,status:'queued',sampleCount:CLASSIFIER_SAMPLE_COUNT,schemaBudget:.1,labelBudget:1.9,message:'待启动：扩展检索词 → 全库选样 → Qwen标注 → 训练评测',createdAt:now(),updatedAt:now()};state.jobs.unshift(job);return job;});
+        const job={id:randomUUID(),key,taskId,label,inputFile,role,keywords,sourceRows:rows,status:'queued',sampleCount:CLASSIFIER_SAMPLE_COUNT,costLimit:false,message:'待启动：扩展检索词 → 全库选样 → Qwen标注 → 训练评测',createdAt:now(),updatedAt:now()};state.jobs.unshift(job);return job;});
     },
-    async start(id,{confirmed,sampleCount=CLASSIFIER_SAMPLE_COUNT,schemaBudget=.1,labelBudget=1.9}={}){
-      if(confirmed!==true)throw Error('需明确确认本次模型处理和预算');
+    async start(id,{confirmed,sampleCount=CLASSIFIER_SAMPLE_COUNT,schemaBudget=null,labelBudget=null}={}){
+      if(confirmed!==true)throw Error('需明确确认本次模型处理');
       if(sampleCount!==CLASSIFIER_SAMPLE_COUNT)throw Error('岗位分类器标注量固定为500条，请刷新界面后重试');
       await ready();const selected=find(id);if(isRetired(selected.role,selected.createdAt))throw Error('该分类器训练记录已删除，请创建新任务');
-      if(!Number.isInteger(sampleCount)||sampleCount<120||sampleCount>2000||!Number.isFinite(schemaBudget)||schemaBudget<.05||schemaBudget>.5||!Number.isFinite(labelBudget)||labelBudget<=0||labelBudget>20)throw Error('请填写有效抽样条数与起草/标注预算');
+      if(!Number.isInteger(sampleCount)||sampleCount<120||sampleCount>2000)throw Error('请填写有效抽样条数');
       const job=await mutate(async()=>{const job=find(id);if(active||running.has(job.status))throw Error('已有队列任务运行中');if(job.status!=='queued')throw Error('此任务已执行，不自动付费重试；请查看原训练记录');const status=await service.status('');if(status.busy)throw Error('已有规范、标注或训练任务运行中');if(!status.credentials?.configured)throw Error('请先配置Qwen标注密钥');const schema=await service.schemas.status(job.inputFile,job.role);const notes=job.keywords?'用户输入的岗位检索关键词：'+job.keywords:'';if((!schema.approved?.schema?.retrieval||notes&&schema.approved.notes!==notes)&&!schema.model?.configured)throw Error('请先配置DeepSeek检索词扩展模型');Object.assign(job,{status:'drafting',sampleCount,schemaBudget,labelBudget,confirmedAt:now(),cancelRequested:false,updatedAt:now()});active=id;return job;});
       void execute(id);return job;
     },
     async resume(id,{confirmed}={}){
-      if(confirmed!==true)throw Error('请确认在原预算内继续本轮');
+      if(confirmed!==true)throw Error('请确认从断点继续本轮');
       const job=await mutate(async()=>{
         const job=find(id);if(active)throw Error('已有训练任务运行中');
         if(!['failed','interrupted','cancelled'].includes(job.status)||!job.runId||isRetired(job.role,job.createdAt))throw Error('该训练任务不可继续');
         if((await service.status('')).busy)throw Error('已有规范、标注或训练任务运行中');
-        Object.assign(job,{status:'labeling',cancelRequested:false,message:'恢复原轮次、固定样本与剩余预算',updatedAt:now()});active=id;return job;
+        Object.assign(job,{status:'labeling',cancelRequested:false,message:'恢复原轮次及固定样本',updatedAt:now()});active=id;return job;
       });
       void execute(id,true);return job;
     },

@@ -23,7 +23,7 @@ export async function prepareStructuredCollection(task){
     if(selected.some(city=>!city.code))throw Error('就业在线任务城市未配置，拒绝静默改为全国或其他城市');
     config.platforms.jobonline.cities=selected;
   }
-  config.request={...request,concurrency:1,platformConcurrency:2,minimumIntervalMs:Math.max(policy.minimumIntervalMs,Number(request.minimumIntervalMs)||0),attempts:Math.min(2,Math.max(1,Number(request.attempts)||2))};
+  config.request={...request,concurrency:1,platformConcurrency:Object.entries(config.platforms||{}).filter(([key,value])=>value.enabled&&collectionChannelAvailable(key,task)).length||1,minimumIntervalMs:Math.max(policy.minimumIntervalMs,Number(request.minimumIntervalMs)||0),attempts:Math.min(2,Math.max(1,Number(request.attempts)||2))};
   config.acquisitionMode=policy.mode;config.transportMode=collectionMode(task);config.collectionTransportPolicy=policy;
   if(policy.mode===HYBRID_MODE&&JSON.stringify(config.browser)!==JSON.stringify({limitMode:'source_or_target'})){config.browser={limitMode:'source_or_target'};changes.push('浏览器改为按任务目标或平台可访问分页边界采集，移除旧单轮页数与条数限制');}
   config.taskTargetRows=task.collectUntilExhausted?0:task.targetRows;config.collectUntilExhausted=!!task.collectUntilExhausted;config.apiExecutionVersion=3;

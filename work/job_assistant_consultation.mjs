@@ -111,7 +111,7 @@ export async function runCareerConsultation({index,message,state,getModel,fetche
     const requestSignal=AbortSignal.any([abort,AbortSignal.timeout(phase==='quality'?8000:25000)]);
     const response=await waitForRequest(()=>fetcher(deepseek?'https://api.deepseek.com/chat/completions':'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',{
       method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${env.JOB_ASSISTANT_API_KEY}`},signal:requestSignal,
-      body:JSON.stringify({model:env.JOB_ASSISTANT_MODEL,stream:true,...(deepseek?(['verification','quality'].includes(phase)?{thinking:{type:'disabled'}}:{thinking:{type:'enabled'},reasoning_effort:'low'}):{temperature:.2}),max_tokens:phase==='quality'?5000:1800,
+      body:JSON.stringify({model:env.JOB_ASSISTANT_MODEL,stream:true,stream_options:{include_usage:true},...(deepseek?(['verification','quality'].includes(phase)?{thinking:{type:'disabled'}}:{thinking:{type:'enabled'},reasoning_effort:'low'}):{temperature:.2}),max_tokens:phase==='quality'?5000:1800,
         messages:[{role:'system',content:system},{role:'user',content:JSON.stringify(payload)}],...(phase==='verification'?{max_tokens:6000}:{})})
     }),requestSignal);
     diagnostic.http_status=response.status??200;

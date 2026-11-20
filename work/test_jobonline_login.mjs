@@ -71,9 +71,24 @@ test('logged collection writes real isolated SQLite with 200 website rows and pr
   assert.equal((await readNativeTaskRows(directory,id,'jobonline')).length,201);
   assert.equal((await readNativeTaskRows(directory,id,'iguopin')).length,1);
 });
-test('login recovery is visible outside collapsed channel details and preserves verified control',()=>{
+test('login recovery is visible outside collapsed channel details only when needed',()=>{
   const format={number:String,escapeHtml:String},task={id:'owned',status:'ready',platforms:['jobonline'],collectUntilExhausted:true,metrics:{knowledgeRows:258,liveCollection:{platformCounts:{jobonline:258}},jobonlineSession:{state:'login_required',label:'请先登录',connected:false}}};
   let html=renderCollectionDashboard(task,format);assert.ok(html.indexOf('jobonline-login-prompt')<html.indexOf('<details'));assert.match(html,/session-open-jobonline/);assert.doesNotMatch(html,/session-process-jobonline/);
   task.metrics.jobonlineSession={state:'pending',connected:true};html=renderCollectionDashboard(task,format);assert.match(html,/验证并继续采集/);
-  task.metrics.jobonlineSession={state:'verified',connected:true};html=renderCollectionDashboard(task,format);assert.doesNotMatch(html,/class="jobonline-login-prompt"/);assert.match(html,/验证并续采/);
+  for(const status of ['running','ready','completed']){
+    task.status=status;task.metrics.jobonlineSession={state:'verified',connected:true};
+    html=renderCollectionDashboard(task,format);
+    assert.doesNotMatch(html,/class="jobonline-login-prompt"|session-(open|process)-jobonline/);
+  }
+  task.status='running';
+  for(const state of ['expired','verification_required']){
+    task.metrics.jobonlineSession={state,connected:true};html=renderCollectionDashboard(task,format);
+    assert.match(html,/class="jobonline-login-prompt"/);assert.match(html,/session-process-jobonline/);
+  }
+  task.metrics.jobonlineSession={state:'checking',connected:true};html=renderCollectionDashboard(task,format);
+  assert.match(html,/aria-busy="true"/);assert.match(html,/data-action="session-open-jobonline" disabled/);
+  assert.match(html,/data-action="session-process-jobonline" disabled>验证中…/);
+  task.metrics.jobonlineSession={state:'verified',connected:true};
+  task.metrics.channelHeartbeats={jobonline:{state:'blocked',requiresManual:false,code:'network_timeout'}};
+  html=renderCollectionDashboard(task,format);assert.doesNotMatch(html,/session-(open|process)-jobonline/);
 });

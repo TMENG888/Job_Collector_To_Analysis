@@ -50,7 +50,7 @@ async function launchManagedBrowser(key,sessionId,profile,file,executableKind='s
     if(launchError)throw launchError;
     const state=await readBrowserState(key,file);if(state?.session_id===sessionId)return {...state,reused:false};
     const result=await fs.readFile(file,'utf8').then(JSON.parse).catch(()=>null);
-    if(result?.session_id===sessionId&&result.state==='failed')throw Error(result.message);
+    if(result?.session_id===sessionId&&result.state==='failed')throw Object.assign(Error(result.message),{code:result.code||'browser_start_failed',stopChannel:true});
     if(i>8&&!processAlive(host.pid))throw Error('受管理浏览器启动失败，请检查浏览器日志；已有登录目录未改动');
     await sleep(250);
   }

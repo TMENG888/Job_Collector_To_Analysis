@@ -69,7 +69,7 @@ export function createInterviewSupervised(dataDir,{directory=interviewClassifier
     const history=await Promise.all(index.filter(r=>!taskId||r.taskId===taskId).slice(0,1000).map(r=>read(path.join(runPath(r.id),'state.json'),null)));
     const totals=history.filter(Boolean).reduce((a,r)=>({runs:a.runs+1,promptTokens:a.promptTokens+r.promptTokens,completionTokens:a.completionTokens+r.completionTokens,costEstimate:a.costEstimate+r.costEstimate,unknownUsageRequests:a.unknownUsageRequests+r.unknownUsageRequests+(r.inFlight?1:0)}),{runs:0,promptTokens:0,completionTokens:0,costEstimate:0,unknownUsageRequests:0});
     const enabled=await read(activeFile,null),published=await read(publishedFile,null);
-    return {role,model:QWEN_MODEL,credentials:await credentials.status(),run:await publicRun(run),busy,busyTaskId:active?.taskId||index.find(r=>r.id===lock?.id)?.taskId||null,totals,benchmark,activeModel:enabled?{id:enabled.id,version:enabled.version,role:enabled.role}:null,publishedRun:published?.id||null,limits:{minSamples:60,maxSamples:1000,maxBudget:20},pricing:{...QWEN_PRICING,basis:'配置单价估算，非实际账单；不扣缓存折扣'},workflow:'Qwen标注→自动证据校验→训练→Codex参考标签离线回归；无Codex复核环节'};
+    return {role,model:QWEN_MODEL,credentials:await credentials.status(),run:await publicRun(run),busy,busyTaskId:active?.taskId||index.find(r=>r.id===lock?.id)?.taskId||null,totals,benchmark,activeModel:enabled?{id:enabled.id,version:enabled.version,role:enabled.role}:null,publishedRun:published?.id||null,limits:{minSamples:60,maxSamples:1000,costLimit:false},pricing:{...QWEN_PRICING,basis:'配置单价估算，非实际账单；不扣缓存折扣'},workflow:'Qwen标注→自动证据校验→训练→Codex参考标签离线回归；无Codex复核环节'};
   }
   async function execute(run,ref,signal){
     let key='';
@@ -94,7 +94,6 @@ export function createInterviewSupervised(dataDir,{directory=interviewClassifier
         const batch=prepared.samples.slice(offset,offset+5),maxTokens=5000;
         const messages=[{role:'system',content:interviewAnnotationPrompt},{role:'user',content:JSON.stringify({target_role:role,posts:batch.map(s=>({id:s.id,title:redactTitle(s.title),evidence_options:s.options}))})}];
         const inputUpper=Buffer.byteLength(JSON.stringify(messages),'utf8')+2048,reserved=(inputUpper*run.inputPrice+maxTokens*run.outputPrice)/1e6;
-        if(run.budgetAccounted+reserved>run.budget)throw Error('已到费用预算，已保存标签；不自动追加费用或重试');
         await update(run,{requestsStarted:run.requestsStarted+1,inFlight:true,inFlightReservation:reserved});
         let payload;
         try{
@@ -110,7 +109,6 @@ export function createInterviewSupervised(dataDir,{directory=interviewClassifier
           run.inFlight=false;run.inFlightReservation=0;
           await update(run);
           await save(path.join(folder,'responses',String(run.requestsCompleted)+'.json'),{model:payload.model,usage,content:payload.choices?.[0]?.message?.content});
-          if(cost>reserved||run.budgetAccounted>run.budget)throw Error('实际Token用量超过预留估算，停止后续请求');
         }catch(error){
           if(run.inFlight){run.unknownUsageRequests++;run.budgetAccounted+=reserved;run.inFlight=false;run.inFlightReservation=0;await update(run);}
           throw Error(scrub(error.message)+'；可能已计费，未自动重试');
@@ -136,10 +134,10 @@ export function createInterviewSupervised(dataDir,{directory=interviewClassifier
   return {
     directory,credentials,status,
     async dispose(){if(active){active.controller.abort();active.child?.kill('SIGTERM');}},
-    async start({taskId,sampleCount=200,budget=.5,inputPrice=QWEN_PRICING.input_per_million,outputPrice=QWEN_PRICING.output_per_million,confirmed=false}={}){
-      if(confirmed!==true)throw Error('需要明确同意向Qwen发送脱敏公开面经及本轮预算');
+    async start({taskId,sampleCount=200,budget=null,inputPrice=QWEN_PRICING.input_per_million,outputPrice=QWEN_PRICING.output_per_million,confirmed=false}={}){
+      if(confirmed!==true)throw Error('需要明确同意向Qwen发送脱敏公开面经');
       if(active)throw Error('已有面经模型任务运行中');
-      if(typeof taskId!=='string'||!taskId||taskId.length>250||!Number.isSafeInteger(sampleCount)||sampleCount<60||sampleCount>1000||!Number.isFinite(budget)||budget<=0||budget>20||![inputPrice,outputPrice].every(p=>Number.isFinite(p)&&p>0&&p<=100))throw Error('请选择任务；样本60–1000，预算0–20元，单价须有效');
+      if(typeof taskId!=='string'||!taskId||taskId.length>250||!Number.isSafeInteger(sampleCount)||sampleCount<60||sampleCount>1000||![inputPrice,outputPrice].every(p=>Number.isFinite(p)&&p>0&&p<=100))throw Error('请选择任务；样本60–1000，单价须有效');
       const run={id:randomUUID(),taskId,role,model:QWEN_MODEL,requestedSamples:sampleCount,budget,inputPrice,outputPrice,status:'preparing',message:'冻结分组与参考测试隔离',sampled:0,labeled:0,positive:0,negative:0,review:0,promptTokens:0,completionTokens:0,cachedTokens:0,costEstimate:0,budgetAccounted:0,unknownUsageRequests:0,requestsStarted:0,requestsCompleted:0,inFlight:false,createdAt:new Date().toISOString()};
       const controller=new AbortController();active={id:run.id,taskId,controller,child:null};
       try{

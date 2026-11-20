@@ -55,8 +55,8 @@ export function createRoleReferenceService(dataDir,{directory=semanticRoleRoot()
   }
   return {
     async status(){let current=null,error='';try{current=activeRoleReference();}catch(e){error=e.message;}return {mode:'semantic-nearest-with-other',busy,ready:!!current,error,active:summary(current),draft:summary(await read(draftFile,null)),model:await model.status(),roleCount:current?.roles.length||0,otherCount:current?.references.other.length||0,description:'本地语义向量最近参照；其他岗位可拒绝，分数不是概率；不使用逻辑回归或规则回退'};},
-    async draft({budget=.5,shareConfirmed=false,extraRoles=[]}={}){
-      if(shareConfirmed!==true||!Number.isFinite(budget)||budget<=0||budget>.5||!Array.isArray(extraRoles)||extraRoles.length>5)throw Error('请授权岗位名称传输，预算须在0–0.50元内');
+    async draft({budget=null,shareConfirmed=false,extraRoles=[]}={}){
+      if(shareConfirmed!==true||!Array.isArray(extraRoles)||extraRoles.length>5)throw Error('请授权岗位名称传输并检查岗位参数');
       const roles=[...new Set([...roleFamilies.map(r=>r.name),...extraRoles.map(r=>text(r,'岗位名',2,40))])];
       return exclusive(async()=>{
         const result=await model.request(referenceDraftPrompt,{roles,other_ids:otherReferenceIds},{budget:{limit:budget,spent:0},maxTokens:12000});

@@ -19,7 +19,7 @@ export function renderDiscoveredRoles(run,query=''){
 }
 export function installInsightDiscovery({api,toast}){
   const slot=document.querySelector('[data-discovery-slot]');if(!slot)return;
-  slot.innerHTML='<section class="training-discovery" aria-label="发现岗位方向"><div class="discovery-toolbar"><strong>岗位方向</strong><label class="discovery-budget">预算 ¥<input data-discovery-budget aria-label="识别预算（元）" type="number" min="0.05" max="0.50" step="0.05" value="0.50"></label><button type="button" class="secondary" data-discovery-start disabled>发现岗位方向</button><button type="button" class="ghost" data-discovery-view disabled aria-haspopup="dialog">查看岗位</button><button type="button" class="ghost" data-discovery-cancel hidden>停止</button></div><p data-discovery-status role="status" aria-live="polite" class="classifier-muted" hidden></p></section>';
+  slot.innerHTML='<section class="training-discovery" aria-label="发现岗位方向"><div class="discovery-toolbar"><strong>岗位方向</strong><button type="button" class="secondary" data-discovery-start disabled>发现岗位方向</button><button type="button" class="ghost" data-discovery-view disabled aria-haspopup="dialog">查看岗位</button><button type="button" class="ghost" data-discovery-cancel hidden>停止</button></div><p data-discovery-status role="status" aria-live="polite" class="classifier-muted" hidden></p></section>';
   const dialog=document.createElement('dialog');dialog.className='discovery-dialog';dialog.setAttribute('aria-labelledby','discovery-dialog-title');
   dialog.innerHTML='<header class="discovery-dialog-head"><div><h2 id="discovery-dialog-title">岗位发现结果</h2><span data-discovery-count></span></div><button type="button" class="ghost" data-discovery-close aria-label="关闭岗位方向弹窗">关闭</button></header><p class="discovery-dialog-progress" data-discovery-progress role="status" aria-live="polite" hidden></p><div class="discovery-dialog-filter" data-discovery-filter><input type="search" data-discovery-search aria-label="搜索岗位方向" placeholder="搜索岗位或代表标题"></div><div class="discovery-dialog-results" data-discovery-results></div><footer class="discovery-dialog-actions" data-discovery-actions hidden><button type="button" class="secondary" data-discovery-dialog-start>发现岗位方向</button></footer>';
   document.body.append(dialog);
@@ -42,21 +42,21 @@ export function installInsightDiscovery({api,toast}){
     const run=state?.run,busy=!!state?.busy||pending||!!authorized;
     $('[data-discovery-start]').disabled=busy||!state?.capability||!state?.model?.configured||unsupported();
     $('[data-discovery-start]').textContent=run?.status==='clustering'?'聚类中…':run?.status==='naming'?'识别中…':run?.status==='partial'?'继续发现岗位方向':'发现岗位方向';
-    $('[data-discovery-budget]').disabled=busy;
     $('[data-discovery-cancel]').hidden=!state?.busy&&!authorized;
     const count=directions(run).length;
     $('[data-discovery-view]').disabled=!state?.capability||unsupported();
     $('[data-discovery-view]').textContent=count?`查看结果 (${count})`:'查看结果';
     const named=(run?.clusters||[]).filter(c=>c.interpretation?.name).length;
     const status=unsupported()?'':error||(['failed','interrupted','cancelled'].includes(run?.status)?run.message||'任务已停止':busy?(run?.status==='naming'?`正在识别岗位方向 · ${named}/${run?.clusters?.length||0} 组`:'正在聚类…'):run?.status==='partial'?'部分方向待识别':'');
-    $('[data-discovery-status]').textContent=status;$('[data-discovery-status]').hidden=!status;
+    const usage=run?.usage,detail=usage?`输入 ${Number(usage.input||0).toLocaleString()} / 输出 ${Number(usage.output||0).toLocaleString()} Token · 估算 ¥${Number(usage.estimate||0).toFixed(4)}（非账单）`:'';
+    $('[data-discovery-status]').textContent=[status,detail].filter(Boolean).join(' · ');$('[data-discovery-status]').hidden=!status&&!detail;
     renderResults();
   }
   async function refresh(){
     if(loading||unsupported()){render();return;}loading=true;
     try{state=await api('/api/insights/discovery');error=actionError;render();}catch(e){error=e.message;render();}finally{loading=false;}
     if(authorized&&state?.run?.id===authorized.runId){
-      if(state.run.status==='clustered'&&!pending){const consent=authorized;authorized=null;await post('name',{confirmed:true,budget:consent.budget});await refresh();}
+      if(state.run.status==='clustered'&&!pending){authorized=null;await post('name',{confirmed:true});await refresh();}
       else if(['failed','cancelled','interrupted'].includes(state.run.status))authorized=null;
     }else if(authorized&&state?.run?.id&&state.run.id!==authorized.runId)authorized=null;
     render();
@@ -67,11 +67,10 @@ export function installInsightDiscovery({api,toast}){
     renderResults();($$('[data-discovery-filter]').hidden?$$('[data-discovery-close]'):$$('[data-discovery-search]')).focus();
   }
   async function startDiscovery(){
-    if(pending||state?.busy||authorized||unsupported())return;const budget=Number($('[data-discovery-budget]').value);
-    if(!Number.isFinite(budget)||budget<.05||budget>.5){toast('识别预算须为0.05–0.50元',true);return;}
+    if(pending||state?.busy||authorized||unsupported())return;
     $$('[data-discovery-search]').value='';openResults();
-    if(['clustered','partial'].includes(state?.run?.status)){await post('name',{confirmed:true,budget});await refresh();}
-    else {const run=await post('scan');if(run?.id){authorized={runId:run.id,budget};await refresh();}}
+    if(['clustered','partial'].includes(state?.run?.status)){await post('name',{confirmed:true});await refresh();}
+    else {const run=await post('scan');if(run?.id){authorized={runId:run.id};await refresh();}}
   }
   $('[data-discovery-start]').onclick=startDiscovery;
   $$('[data-discovery-dialog-start]').onclick=startDiscovery;

@@ -3,6 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
+import net from 'node:net';
 import {chromium} from 'playwright-core';
 import {withAccountLock} from './collection_concurrency.mjs';
 import {writeJsonAtomic} from './collector_storage.mjs';
@@ -10,15 +11,16 @@ import {writeJsonAtomic} from './collector_storage.mjs';
 const failure=message=>Object.assign(Error(message),{code:'session_required',stopChannel:true});
 const alive=pid=>{try{if(!Number.isSafeInteger(pid)||pid<1)return false;process.kill(pid,0);return true;}catch{return false;}};
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-export function ordinaryChromeArguments(profile){
+export function ordinaryChromeArguments(profile,{port=0}={}){
   if(!path.isAbsolute(profile))throw failure('普通浏览器需要独立的绝对路径会话目录');
+  if(!Number.isSafeInteger(port)||port<0||port>65535)throw failure('普通浏览器本机端口无效');
   // Skip Chrome's own onboarding, NOT website login/security verification.
   // `--source-shortcut-location=start-menu` keeps the launch looking like a
   // normal Start-menu Chrome start while the dedicated profile and localhost
   // debugging port let the collector attach after the human finishes login.
-  return [`--user-data-dir=${profile}`,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run','--source-shortcut-location=start-menu','--new-window','about:blank'];
+  return [`--user-data-dir=${profile}`,'--remote-debugging-address=127.0.0.1',`--remote-debugging-port=${port}`,'--no-first-run','--source-shortcut-location=start-menu','--new-window','about:blank'];
 }
-const invalidWindow=()=>failure('当前 Chrome 页面不属于普通浏览器窗口（可能是旧的首次引导窗口）；请关闭旧猎聘窗口后重新打开，登录资料会保留');
+const invalidWindow=()=>failure('当前页面不属于普通浏览器窗口（可能是旧的首次引导窗口）；请关闭该渠道旧登录窗口后重新打开，登录资料会保留');
 const blankTab=value=>value==='about:blank'||value==='chrome://newtab/'||value==='edge://newtab/';
 export async function assertOrdinaryChromePage(context,page){
   let url;try{url=new URL(page.url());}catch{throw invalidWindow();}
@@ -48,20 +50,19 @@ export async function selectOrdinaryChromePage(context,{hosts=[]}={}){
   if(!page)throw invalidWindow();
   await assertOrdinaryChromePage(context,page);return page;
 }
-function endpointFromPortFile(raw){
-  const [port,route]=String(raw).trim().split(/\r?\n/);
-  if(!/^\d+$/.test(port)||Number(port)<1||Number(port)>65535||!/^\/devtools\/browser\/[a-f0-9-]+$/i.test(route||''))throw failure('普通浏览器本机会话端口无效');
-  return {endpoint:`http://127.0.0.1:${port}`,browser_ws:`ws://127.0.0.1:${port}${route}`};
+async function availableLoopbackPort(){
+  const server=net.createServer();
+  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
+  const port=server.address().port;
+  await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+  return port;
 }
-export async function launchOrdinaryChromeContext(profile,{executablePath,existingOnly=false,launch=spawn,connect=(endpoint)=>chromium.connectOverCDP(endpoint,{timeout:10000}),fetchImpl=fetch,processAlive=alive,wait=sleep,timeoutMs=15000}={}){
+export async function launchOrdinaryChromeContext(profile,{executablePath,existingOnly=false,launch=spawn,connect=(endpoint)=>chromium.connectOverCDP(endpoint,{timeout:10000}),fetchImpl=fetch,processAlive=alive,wait=sleep,timeoutMs=15000,allocatePort=availableLoopbackPort}={}){
   if(!executablePath||!path.isAbsolute(executablePath))throw failure('系统 Chrome 路径无效');
   ordinaryChromeArguments(profile);profile=path.resolve(profile);
   await fs.mkdir(profile,{recursive:true});
-  const file=path.join(profile,'.job-collector-normal-chrome.json'),portFile=path.join(profile,'DevToolsActivePort');
+  const file=path.join(profile,'.job-collector-normal-chrome.json');
   const read=file=>fs.readFile(file,'utf8').catch(error=>{if(error.code==='ENOENT')return null;throw error;});
-  // Chrome briefly holds this file exclusively while publishing its endpoint.
-  // Wait inside the same bounded launch; never spawn a replacement browser.
-  const readPort=()=>read(portFile).catch(error=>{if(error.code==='EBUSY')return null;throw error;});
   const check=async entry=>{
     const endpoint=new URL(entry.endpoint);
     if(endpoint.origin!==entry.endpoint||endpoint.hostname!=='127.0.0.1'||endpoint.protocol!=='http:'||!endpoint.port)throw failure('拒绝连接非本机浏览器端口');
@@ -78,22 +79,25 @@ export async function launchOrdinaryChromeContext(profile,{executablePath,existi
       await check(saved);return {...saved,reused:true};
     }
     if(existingOnly)throw failure('登录窗口未连接，请先在渠道明细中打开登录窗口');
-    const previousPort=await readPort(),temp=path.join(profile,'temp');await fs.mkdir(temp,{recursive:true});
-    const child=launch(executablePath,ordinaryChromeArguments(profile),{detached:true,windowsHide:false,stdio:'ignore',env:{...process.env,TEMP:temp,TMP:temp}});
+    const port=await allocatePort(),endpoint=`http://127.0.0.1:${port}`;
+    if(!Number.isSafeInteger(port)||port<1||port>65535)throw failure('普通浏览器本机端口无效');
+    const temp=path.join(profile,'temp');await fs.mkdir(temp,{recursive:true});
+    // Edge can retain an old DevToolsActivePort across launches. Connect only
+    // to the loopback port selected for this child, then pin its websocket id.
+    const child=launch(executablePath,ordinaryChromeArguments(profile,{port}),{detached:true,windowsHide:false,stdio:'ignore',env:{...process.env,TEMP:temp,TMP:temp}});
     let exited=false;child.once('exit',()=>{exited=true;});
     await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',()=>reject(failure('普通 Chrome 启动失败，请检查安装路径')));});
     child.unref();
     const deadline=Date.now()+timeoutMs;
     while(Date.now()<deadline){
-      if(exited||!processAlive(child.pid))throw failure('会话目录可能被旧窗口占用；请手动关闭旧猎聘窗口后再试，不会强制关闭或清除登录资料');
-      const raw=await readPort();
-      if(raw&&raw!==previousPort){
-        let port;try{port=endpointFromPortFile(raw);}catch{await wait(100);continue;}
-        const entry={kind:'job-collector-normal-chrome-v1',profile,executable:executablePath,pid:child.pid,...port,opened_at:new Date().toISOString()};
-        try{await check(entry);}catch{await wait(100);continue;}
-        await writeJsonAtomic(file,entry);return {...entry,reused:false};
-      }
-      await wait(100);
+      if(exited||!processAlive(child.pid))throw failure('会话目录可能被旧窗口占用；请手动关闭该渠道旧登录窗口后再试，不会强制关闭或清除登录资料');
+      let entry;
+      try{
+        const version=await fetchImpl(endpoint+'/json/version',{signal:AbortSignal.timeout(1500)}).then(response=>{if(!response.ok)throw failure('普通浏览器端口无响应');return response.json();});
+        entry={kind:'job-collector-normal-chrome-v1',profile,executable:executablePath,pid:child.pid,endpoint,browser_ws:version.webSocketDebuggerUrl,opened_at:new Date().toISOString()};
+        await check(entry);
+      }catch{await wait(100);continue;}
+      await writeJsonAtomic(file,entry);return {...entry,reused:false};
     }
     throw failure('普通 Chrome 连接超时；请核对是否仍有旧验证窗口占用，不自动重启或重复打开');
   },{interval:200});

@@ -4,6 +4,7 @@ import json,time,hashlib,re,math,threading,gc
 from pathlib import Path
 from collections import Counter
 import numpy as np,psutil,jieba,ctypes
+from resume_vector_cache import ENCODING_CONTRACT,materialize_vectors
 ROOT=Path(sys.argv[1]).resolve()
 PROJECT=Path(__file__).resolve().parent.parent
 CONFIG=json.loads((ROOT/'config.json').read_text(encoding='utf-8'))
@@ -57,8 +58,10 @@ import torch
 from sentence_transformers import SentenceTransformer,CrossEncoder
 torch.set_num_threads(4);torch.set_num_interop_threads(1)
 emb_dir=PROJECT/'work/role_screening_models/bge-small-zh-v1.5';embedding_manifest=verify(emb_dir)
+embedding_files=json.loads((emb_dir/'local-manifest.json').read_text(encoding='utf-8'))['files']
+embedding_cache_model={**embedding_manifest,'files_sha256':hashlib.sha256(json.dumps(embedding_files,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
 tick=time.perf_counter();encoder=SentenceTransformer(str(emb_dir),device='cpu',local_files_only=True,trust_remote_code=False)
-encoder.max_seq_length=512;encoder.eval();embedding_load=time.perf_counter()-tick
+encoder.max_seq_length=ENCODING_CONTRACT['max_seq_length'];encoder.eval();embedding_load=time.perf_counter()-tick
 def windows(text,tokenizer,limit,overlap):
  enc=tokenizer(text,add_special_tokens=False,truncation=False,return_offsets_mapping=True)
  offsets=enc['offset_mapping'];out=[];start=0
@@ -74,30 +77,19 @@ def windows(text,tokenizer,limit,overlap):
 chunks=[];owners=[];bounds=[]
 for local,j in enumerate([jobs[i] for i in unique]):
  # Token offsets cover every character of full JD. No head-only truncation.
- for a,b in windows(j['description'],encoder.tokenizer,350,40):
+ for a,b in windows(j['description'],encoder.tokenizer,ENCODING_CONTRACT['window_tokens'],ENCODING_CONTRACT['overlap_tokens']):
   title=j['job_name'];chunk=title+'\n'+j['description'][a:b]
   if len(encoder.tokenizer(chunk,add_special_tokens=True)['input_ids'])>512:raise ValueError('embedding title too long')
   chunks.append(chunk);owners.append(local);bounds.append([a,b])
-fingerprint=hashlib.sha256(json.dumps([embedding_manifest,chunks],ensure_ascii=False).encode()).hexdigest()
-cache_dir=CACHE_ROOT/fingerprint;cache_dir.mkdir(parents=True,exist_ok=True)
-cache=cache_dir/'embeddings.npy';meta=cache_dir/'embedding-cache.json';tick=time.perf_counter()
-if cache.exists() and meta.exists() and json.loads(meta.read_text(encoding='utf-8'))['fingerprint']==fingerprint:
- vectors=np.load(cache,allow_pickle=False);log('embedding_cache_reused',chunks=len(chunks))
-else:
- # A memmap is a durable per-batch checkpoint; only a finished index is promoted.
- partial=cache_dir/'embeddings.partial.npy';progress=cache_dir/'embedding-progress.json'
- progress_data=json.loads(progress.read_text(encoding='utf-8')) if progress.exists() else {}
- valid=partial.exists() and progress_data.get('fingerprint')==fingerprint
- offset=progress_data['done'] if valid else 0
- matrix=np.lib.format.open_memmap(partial,mode='r+' if valid else 'w+',dtype='float32',shape=(len(chunks),512))
- log('embedding_started',chunks=len(chunks),resuming=offset)
- last=time.perf_counter()
- for a in range(offset,len(chunks),4):
-  b=min(a+4,len(chunks));matrix[a:b]=encoder.encode(chunks[a:b],batch_size=4,prompt='',normalize_embeddings=True,show_progress_bar=False,convert_to_numpy=True)
-  matrix.flush();progress.write_text(json.dumps({'fingerprint':fingerprint,'done':b,'total':len(chunks)}),encoding='utf-8')
-  if time.perf_counter()-last>20:log('embedding_progress',done=b,total=len(chunks));last=time.perf_counter()
- assert np.isfinite(matrix).all();del matrix;partial.replace(cache)
- meta.write_text(json.dumps({'fingerprint':fingerprint,'shape':[len(chunks),512],'owners':owners,'bounds':bounds,'model':embedding_manifest}),encoding='utf-8');vectors=np.load(cache,allow_pickle=False)
+tick=time.perf_counter();last_vector_log=0
+def vector_progress(stage,**values):
+ global last_vector_log
+ now=time.perf_counter()
+ if stage!='embedding_progress' or values['done']==values['total'] or now-last_vector_log>20:
+  log(stage,**values);last_vector_log=now
+vectors,embedding_cache_stats=materialize_vectors(CACHE_ROOT,chunks,embedding_cache_model,
+ lambda texts:encoder.encode(texts,batch_size=4,prompt=ENCODING_CONTRACT['prompt'],normalize_embeddings=ENCODING_CONTRACT['normalize_embeddings'],show_progress_bar=False,convert_to_numpy=True),
+ dimension=encoder.get_sentence_embedding_dimension(),batch_size=4,on_progress=vector_progress)
 embedding_seconds=time.perf_counter()-tick
 q=encoder.encode(queries,batch_size=4,prompt='为这个句子生成表示以用于检索相关文章：',normalize_embeddings=True,show_progress_bar=False,convert_to_numpy=True)
 chunk_scores=np.max(vectors@q.T,axis=1);dense=np.full(n,-2,dtype=np.float64);np.maximum.at(dense,np.array(owners),chunk_scores)
@@ -107,7 +99,7 @@ rrf=np.zeros(n)
 for order in [bm_order[:250],vector_order[:250]]:
  for rank,i in enumerate(order,1):rrf[i]+=1/(60+rank)
 candidates=np.flatnonzero(rrf>0);candidates=sorted(candidates,key=lambda i:(-rrf[i],jobs[unique[i]]['key']))
-save('retrieval.json',{'vector_model':embedding_manifest,'embedding_load_seconds':embedding_load,'embedding_seconds':embedding_seconds,'chunks':len(chunks),'unique':n,'candidates':len(candidates),'candidates_top250_per_channel':True,'rrf_k':60,'duplicates':aliases,'ranked':[{'key':jobs[unique[int(i)]]['key'],'index':unique[int(i)],'bm25':float(bm25[i]),'dense':float(dense[i]),'rrf':float(rrf[i])} for i in candidates]})
+save('retrieval.json',{'vector_model':embedding_manifest,'embedding_cache':embedding_cache_stats,'embedding_load_seconds':embedding_load,'embedding_seconds':embedding_seconds,'chunks':len(chunks),'unique':n,'candidates':len(candidates),'candidates_top250_per_channel':True,'rrf_k':60,'duplicates':aliases,'ranked':[{'key':jobs[unique[int(i)]]['key'],'index':unique[int(i)],'bm25':float(bm25[i]),'dense':float(dense[i]),'rrf':float(rrf[i])} for i in candidates]})
 log('hybrid_done',candidates=len(candidates),chunks=len(chunks))
 rerank_dir=PROJECT/'work/role_screening_models/mmarco-mMiniLMv2-L12-H384-v1';reranker_manifest=verify(rerank_dir)
 tick=time.perf_counter();reranker=CrossEncoder(str(rerank_dir),device='cpu',max_length=512,local_files_only=True,trust_remote_code=False,default_activation_function=torch.nn.Identity());reranker.model.eval();reranker_load=time.perf_counter()-tick
@@ -140,6 +132,6 @@ for rank,ci in enumerate(order,1):
  i=int(candidates[ci]);j=jobs[unique[i]]
  ranked.append({**j,'rank':rank,'bm25_score':float(bm25[i]),'vector_similarity':float(dense[i]),'rrf_score':float(rrf[i]),'rerank_score':float(cross[ci]),'recall_rank':candidates.index(i)+1})
 save('ranked.json',ranked)
-save('performance.json',{'source_rows':len(jobs),'unique_rows':n,'chunks':len(chunks),'candidates':len(candidates),'rerank_pairs':len(pairs),'embedding_model':embedding_manifest,'reranker_model':reranker_manifest,'embedding_load_seconds':embedding_load,'embedding_seconds':embedding_seconds,'reranker_load_seconds':reranker_load,'rerank_seconds':time.perf_counter()-tick,'total_seconds':time.perf_counter()-START,'memory':stats,'filters_before_ranking':[],'full_body_policy':'all JD characters covered by overlapping token windows; max chunk reranker score; query is factual profile summary, not full resume','limits':'Top250 per retrieval channel is a recall cutoff. Classifier pool may have false positives and misses. Rerank logits are relevance scores, not success probabilities. No human matching labels.'})
+save('performance.json',{'source_rows':len(jobs),'unique_rows':n,'chunks':len(chunks),'candidates':len(candidates),'rerank_pairs':len(pairs),'embedding_model':embedding_manifest,'embedding_cache':embedding_cache_stats,'reranker_model':reranker_manifest,'embedding_load_seconds':embedding_load,'embedding_seconds':embedding_seconds,'reranker_load_seconds':reranker_load,'rerank_seconds':time.perf_counter()-tick,'total_seconds':time.perf_counter()-START,'memory':stats,'filters_before_ranking':[],'full_body_policy':'all JD characters covered by overlapping token windows; max chunk reranker score; query is factual profile summary, not full resume','limits':'Top250 per retrieval channel is a recall cutoff. Classifier pool may have false positives and misses. Rerank logits are relevance scores, not success probabilities. No human matching labels.'})
 log('finished',top=[{'title':j['job_name'],'company':j['company'],'score':round(j['rerank_score'],3)} for j in ranked[:10]])
 done.set()

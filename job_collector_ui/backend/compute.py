@@ -27,6 +27,7 @@ class ComputeSupervisor:
     def __init__(self, settings, ledger, owner):
         self.settings, self.ledger, self.owner = settings, ledger, owner
         self.semaphore = asyncio.Semaphore(1)
+        self.analysis_semaphore = asyncio.Semaphore(1)
         self.tasks, self.processes = {}, {}
 
     def command(self, body):
@@ -73,8 +74,9 @@ class ComputeSupervisor:
 
     async def execute(self, task_id, command, kind):
         process = None
+        drains = None
         try:
-            async with self.semaphore:
+            async with (self.analysis_semaphore if kind == "analysis" else self.semaphore):
                 if self.ledger.job(task_id)["state"] != "queued":
                     return
                 self.ledger.update_job(task_id, "running")
@@ -94,7 +96,8 @@ class ComputeSupervisor:
                             tail = (tail + chunk)[-16000:]
                     return tail
 
-                stdout, stderr = await asyncio.wait_for(asyncio.gather(drain(process.stdout, 'stdout'), drain(process.stderr, 'stderr')), 900 if kind == "cluster" else 3600)
+                drains = asyncio.gather(drain(process.stdout, 'stdout'), drain(process.stderr, 'stderr'))
+                stdout, stderr = await asyncio.wait_for(drains, 900 if kind == "cluster" else 3600)
                 code = await process.wait()
                 error = re.sub(r"sk-[\w.-]+", "[密钥隐藏]", stderr.decode("utf-8", "replace"))[-1800:]
                 self.ledger.update_job(task_id, "completed" if code == 0 else "failed", code, error if code else "")
@@ -105,6 +108,9 @@ class ComputeSupervisor:
             await terminate(process)
             self.ledger.update_job(task_id, "failed", -1, type(error).__name__ + "：计算未完成，原输入保留")
         finally:
+            if drains is not None:
+                drains.cancel()
+                await asyncio.gather(drains, return_exceptions=True)
             self.processes.pop(task_id, None)
 
     def logs(self, task_id, stdout_offset, stderr_offset):

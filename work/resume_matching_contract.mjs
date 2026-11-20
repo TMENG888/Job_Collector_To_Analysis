@@ -2,9 +2,9 @@ import {createHash} from 'node:crypto';
 import {redactClassifierText} from './insight-classifier-input.mjs';
 export const matchingVersion='resume-requirement-coverage-v3';
 export const matchHash=text=>createHash('sha256').update(text).digest('hex');
-export function redactMatchingResume(text,filename=''){
+export function redactMatchingResume(text,filename='',{minLength=40,maxLength=40000}={}){
   let value=String(text||'').replace(/\r\n?/g,'\n').trim();
-  if(value.length<40||value.length>40000)throw Error('请输入40至40000字的简历正文');
+  if(value.length<minLength||value.length>maxLength)throw Error(`请输入${minLength}至${maxLength}字的简历正文`);
   const names=[value.match(/(?:^|\n)姓名\s*[:：]\s*([\u4e00-\u9fff]{2,4})(?=\s|$)/)?.[1],value.match(/^([\u4e00-\u9fff]{2,4})\s+(?=[A-Za-z])/)?.[1],String(filename).match(/^([\u4e00-\u9fff]{2,4})[_\s-]/)?.[1]].filter(Boolean);
   for(const name of names)value=value.split(name).join('[候选人]');
   return redactClassifierText(value).replace(/(?<!\d)0\d{2,3}[-－]\d{7,8}(?!\d)/g,'[电话已移除]').replace(/(?<!\d)\d{17}[\dXx](?!\d)/g,'[证件号已移除]').split('\n').filter(line=>!/(?:性别|婚育|民族|宗教|身份证|出生日期|政治面貌)\s*[:：]/.test(line)).join('\n');

@@ -230,6 +230,8 @@ function renderTurn(item,turn){
   item.querySelector('.assistant-live-run')?.remove();
   const sourcePrefix=`assistant-turn-${++renderedTurns}`;
   setAssistantMarkdown(item.querySelector('.assistant-message-text'),turn.answer,turn.result?.sources||[],sourcePrefix);
+  item.querySelector('[data-operation-usage]')?.remove();
+  if(turn.usage){const u=turn.usage,line=document.createElement('p');line.dataset.operationUsage='';line.className='assistant-muted';line.textContent=`本次输入 ${Number(u.input||0).toLocaleString()} / 输出 ${Number(u.output||0).toLocaleString()} Token · ${u.estimate===null?'模型单价未配置':`估算 ¥${Number(u.estimate||0).toFixed(4)}（非账单）`}${u.unknown?' · '+Number(u.unknown)+'次请求用量待核':''}`;item.querySelector('.assistant-message-text').after(line);}
   const result=turn.result,stats=result?.statistics;
   const supplement=document.createElement('div');supplement.className='assistant-message-evidence';
   supplement.innerHTML=`<div class="assistant-execution-label">${escape(assistantExecutionLabel(turn))}${turn.dataset_changed?' · 数据库已更新，旧条件和引用已重置':''}</div>

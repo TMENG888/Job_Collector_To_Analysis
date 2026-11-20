@@ -14,6 +14,8 @@ import {admitKnowledgeJobs,admissionSummary,ADMISSION_VERSION} from './job_data_
 import {createTermReviewMethods} from './skill_term_review.mjs';
 import {roleClassifier,supervisedRoleFamilies,roleScreeningStatus,roleScreeningCacheKey} from './role-classifier-registry.mjs';
 import {knowledgeDatabasePath,storageError} from './knowledge_storage.mjs';
+import {initializeIngestionAudit,beginIngestionAudit} from './knowledge_ingestion_audit.mjs';
+import {openProcessedCache,readProcessingBatch} from './job_processing_cache.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 export const defaultKnowledgeDir=()=>process.env.JOB_UI_DATA_DIR?path.resolve(process.env.JOB_UI_DATA_DIR):path.join(root,'ui_data');
@@ -71,6 +73,7 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
     INSERT OR IGNORE INTO metadata VALUES('revision','0');
     CREATE TABLE IF NOT EXISTS jobs(job_key TEXT PRIMARY KEY,platform TEXT NOT NULL,job_id TEXT NOT NULL,content_hash TEXT NOT NULL,raw TEXT NOT NULL,observation TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(platform,job_id));
     CREATE INDEX IF NOT EXISTS jobs_id_lookup ON jobs(job_id);
+    CREATE INDEX IF NOT EXISTS jobs_processing_scope ON jobs(job_key,platform,content_hash);
     CREATE TABLE IF NOT EXISTS job_versions(job_key TEXT,content_hash TEXT,raw TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(job_key,content_hash));
     CREATE TABLE IF NOT EXISTS tasks(task_id TEXT PRIMARY KEY,label TEXT NOT NULL,archived INTEGER NOT NULL DEFAULT 0,output_dir TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS memberships(task_id TEXT,job_key TEXT,source TEXT NOT NULL,PRIMARY KEY(task_id,job_key));
@@ -79,24 +82,25 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
     CREATE TABLE IF NOT EXISTS labels(label_id TEXT PRIMARY KEY,job_key TEXT NOT NULL,content_hash TEXT NOT NULL,state TEXT NOT NULL,data TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS labels_job_lookup ON labels(job_key,content_hash,state);
     CREATE TABLE IF NOT EXISTS analyses(analysis_id TEXT PRIMARY KEY,role TEXT,revision INTEGER,snapshot_uri TEXT,data TEXT NOT NULL,created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS snapshots(snapshot_id TEXT PRIMARY KEY,revision INTEGER,task_id TEXT,rows_json TEXT NOT NULL,created_at TEXT NOT NULL);`);return db;}
+    CREATE TABLE IF NOT EXISTS snapshots(snapshot_id TEXT PRIMARY KEY,revision INTEGER,task_id TEXT,rows_json TEXT NOT NULL,created_at TEXT NOT NULL);`);initializeIngestionAudit(db);return db;}
   function bump(db){db.exec("UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='revision'");}
   function ingest(db,task,rows,source){
     const upsert=db.prepare('INSERT INTO jobs VALUES(?,?,?,?,?,?,?) ON CONFLICT(job_key) DO UPDATE SET content_hash=excluded.content_hash,raw=excluded.raw,observation=excluded.observation,updated_at=excluded.updated_at');
     const version=db.prepare('INSERT OR IGNORE INTO job_versions VALUES(?,?,?,?)');
     const membership=db.prepare('INSERT INTO memberships VALUES(?,?,?) ON CONFLICT(task_id,job_key) DO UPDATE SET source=excluded.source');
-    let changed=0;
+    let changed=0;const audit=beginIngestionAudit(db,task,rows.length);
     for(const input of rows){
       if(input.task_id&&input.task_id!==task.id)throw new Error('知识库拒绝其他任务的记录');
-      let row=canonicalKnowledgeRow(input);if(!row)continue;
+      let row=canonicalKnowledgeRow(input);if(!row){audit.reject(input,platformAliases[input.platform||input['平台']]);continue;}
       const key=knowledgeJobKey(row),old=db.prepare('SELECT * FROM jobs WHERE job_key=?').get(key);
       if(old){const before=JSON.parse(old.raw),merged={...before};for(const [f,v]of Object.entries(row))if(v!=null&&String(v).trim())merged[f]=v;if(String(before.job_description||'').length>String(row.job_description||'').length)merged.job_description=before.job_description;row=merged;}
       const digest=hash(row),stamp=new Date().toISOString();
+      audit.observe(key,row.platform,old?.content_hash,digest);
       if(old?.content_hash!==digest){upsert.run(key,row.platform,row.job_id,digest,JSON.stringify(row),JSON.stringify(classifyKnowledgeRow(row)),stamp);version.run(key,digest,JSON.stringify(row),stamp);changed++;}
       if(!db.prepare('SELECT 1 FROM memberships WHERE task_id=? AND job_key=?').get(task.id,key))changed++;
       membership.run(task.id,key,source);
     }
-    if(changed)bump(db);return changed;
+    audit.finish();if(changed)bump(db);return changed;
   }
   async function syncInternal(options={}){
     const tasks=options.tasks||await readJson(path.join(dataDir,'tasks.json'),[]);const errors=[];const db=await open();
@@ -201,11 +205,13 @@ export function createKnowledgeStore(dataDir=defaultKnowledgeDir()){
     async read(uri='kb://all',{synchronize=true}={}){await ensureMetadata({synchronize});const db=new DatabaseSync(filename,{readOnly:true});try{
       db.exec('BEGIN');
       const url=new URL(uri);if(url.protocol!=='kb:')throw new Error('无效知识库数据源');
+      if(url.hostname==='processed')return readProcessingBatch(dataDir,decodeURIComponent(url.pathname.slice(1)));
       if(url.hostname==='snapshot'){const saved=db.prepare('SELECT * FROM snapshots WHERE snapshot_id=?').get(decodeURIComponent(url.pathname.slice(1)));if(!saved)throw new Error('知识库分析快照不存在');return {rows:JSON.parse(saved.rows_json),revision:saved.revision,snapshot:uri};}
       if(!['task','all'].includes(url.hostname))throw new Error('不支持的知识库数据源');
       const taskId=url.hostname==='task'?decodeURIComponent(url.pathname.slice(1)):'';
       if(url.hostname==='task'&&!taskId)throw new Error('缺少知识库任务 ID');
-      return {...status(db),rows:selected(db,taskId).map(j=>{const labels=approvedLabels(db,j);return {...JSON.parse(j.raw),knowledge_key:j.job_key,knowledge_hash:j.content_hash,knowledge_approved_skills:labels.skills,knowledge_approved_term_skills:labels.reviewed_terms,knowledge_approved_tasks:labels.tasks,knowledge_approved_domains:labels.domains};})};
+      const processedCache=openProcessedCache(dataDir);
+      try{return {...status(db),rows:selected(db,taskId).map(j=>{const labels=approvedLabels(db,j),processing=processedCache.get(j.job_key,j.content_hash);return {...JSON.parse(j.raw),knowledge_key:j.job_key,knowledge_hash:j.content_hash,...(processing?{knowledge_processing:processing}:{}),knowledge_approved_skills:labels.skills,knowledge_approved_term_skills:labels.reviewed_terms,knowledge_approved_tasks:labels.tasks,knowledge_approved_domains:labels.domains};})};}finally{processedCache.close();}
     }finally{db.close();}},
     async snapshot(uri,{synchronize=true}={}){const data=await this.read(uri,{synchronize});const db=await open();try{const id=randomUUID();db.prepare('INSERT INTO snapshots VALUES(?,?,?,?,?)').run(id,data.revision,uri,JSON.stringify(data.rows),new Date().toISOString());return {uri:`kb://snapshot/${id}`,revision:data.revision,rows:data.rows.length};}finally{db.close();}},
     async publishAnalysis(report){const db=await open();try{const id=hash([report.role,report.generated_at,report.input_file]);db.prepare('INSERT OR REPLACE INTO analyses VALUES(?,?,?,?,?,?)').run(id,report.role,report.knowledge_revision??null,report.knowledge_snapshot||'',JSON.stringify(report),report.generated_at||new Date().toISOString());bump(db);return id;}finally{db.close();}},

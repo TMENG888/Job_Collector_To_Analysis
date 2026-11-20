@@ -26,8 +26,8 @@ class TrainingStart(Contract):
     id: str = Field(min_length=1, max_length=80)
     confirmed: Literal[True]
     sampleCount: StrictInt = Field(default=500, ge=500, le=500)
-    schemaBudget: float = Field(default=.1, ge=.05, le=.5)
-    labelBudget: float = Field(default=1.9, gt=0, le=20)
+    schemaBudget: float | None = Field(default=None, ge=0)
+    labelBudget: float | None = Field(default=None, ge=0)
 
 
 class RunIdentity(Contract):
@@ -42,7 +42,7 @@ class ClassifierStart(Contract):
     inputFile: str = Field(min_length=1, max_length=2000)
     role: str = Field(min_length=1, max_length=240)
     sampleCount: StrictInt = Field(default=500, ge=500, le=500)
-    budget: float = Field(default=2, gt=0, le=20)
+    budget: float | None = Field(default=None, ge=0)
     inputPrice: float | None = Field(default=None, gt=0, le=100)
     outputPrice: float | None = Field(default=None, gt=0, le=100)
     jointAnnotations: StrictBool = False
@@ -72,14 +72,14 @@ class SemanticStart(Contract):
     inputFile: str = Field(min_length=1, max_length=2000)
     role: str = Field(default="", max_length=240)
     sampleCount: StrictInt = Field(default=200, ge=1, le=1000)
-    budget: float = Field(default=.5, gt=0, le=20)
+    budget: float | None = Field(default=None, ge=0)
     shareConfirmed: Literal[True]
 
 
 class SchemaDraft(Contract):
     inputFile: str = Field(min_length=1, max_length=2000)
     role: str = Field(min_length=1, max_length=240)
-    budget: float = Field(default=.1, gt=0, le=.5)
+    budget: float | None = Field(default=None, ge=0)
     shareConfirmed: Literal[True]
     notes: str = Field(default="", max_length=3000)
 
@@ -91,14 +91,14 @@ class ClassifierDelete(Contract):
 
 class DiscoveryName(Contract):
     confirmed: Literal[True]
-    budget: float = Field(default=.5, ge=.05, le=.5)
+    budget: float | None = Field(default=None, ge=0)
 
 
 class MatchingStart(Contract):
     role: str = Field(min_length=1, max_length=240)
     resume: str = Field(min_length=40, max_length=40000)
     filename: str = Field(default="", max_length=240)
-    budget: float = Field(default=.5, ge=.05, le=.5)
+    budget: float | None = Field(default=None, ge=0)
     shareConfirmed: Literal[True]
     requestId: str = Field(min_length=36, max_length=36)
 
@@ -109,4 +109,16 @@ class MatchingResume(RunIdentity):
 
 class MatchingAssess(MatchingResume):
     keys: list[str] = Field(min_length=1, max_length=10)
+    requestId: str = Field(min_length=36, max_length=36)
+
+
+class MatchingDocument(Contract):
+    name: str = Field(min_length=1, max_length=240)
+    text: str = Field(min_length=40, max_length=40000)
+
+
+class MatchingMessage(MatchingResume):
+    message: str = Field(default="", max_length=12000)
+    documents: list[MatchingDocument] = Field(default_factory=list, max_length=3)
+    budget: float | None = Field(default=None, ge=0)
     requestId: str = Field(min_length=36, max_length=36)

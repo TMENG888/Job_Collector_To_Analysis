@@ -10,30 +10,61 @@ import {managedComputeEnabled,startManagedCompute} from './managed-compute.mjs';
 import {assertCollectorResources} from './collector_resources.mjs';
 import {redactClassifierText} from './insight-classifier-input.mjs';
 import {matchingVersion,matchHash,redactMatchingResume,validateMatchingProfile,validateMatchingReviews,matchingProfilePrompt,matchingReviewPrompt} from './resume_matching_contract.mjs';
+import {profileUpdatePrompt,redactProfileMessage,profileEvidenceText,validateProfileUpdate} from './resume_matching_memory.mjs';
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const read=async(file,fallback)=>{try{return JSON.parse(await fs.readFile(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}};
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const fields=['key','job_id','platform','job_name','company','city','description','salary_raw','salary_midpoint_k','education','education_raw','experience','company_size','employment_type','industry','url','source_verified','content_hash'];
 export const matchingDirectory=()=>path.resolve(process.env.JOB_RESUME_MATCHING_DIR||'E:/Codex/work/job-resume-matching');
+export function matchingComputeProgress(p){
+  const stages={bm25_done:'关键词初筛完成',embedding_started:'正在计算新增或变化的岗位向量',embedding_progress:'正在计算新增或变化的岗位向量',embedding_cache_reused:'已复用岗位向量',hybrid_done:'混合召回完成',reranker_started:'正在重排候选岗位',reranker_progress:'正在重排候选岗位',finished:'岗位重排完成'};
+  let message=stages[p.stage]||'正在匹配';
+  if(p.stage?.startsWith('embedding_')&&Number.isFinite(p.reused_chunks))message+=` · 复用 ${p.reused_chunks} 个文本片段${p.pending_chunks?`，本轮计算 ${p.pending_chunks} 个`:''}`;
+  return {stage:p.stage,message,done:p.done??null,total:p.total??null,seconds:p.seconds,
+    ...Object.fromEntries(['chunks','unique_chunks','reused_chunks','imported_chunks','encoded_chunks','pending_chunks'].filter(k=>Number.isFinite(p[k])).map(k=>[k,p[k]]))};
+}
 export function createResumeMatching({dataDir,store,catalog,directory=matchingDirectory(),modelFactory=createRecruiterModel,resources=assertCollectorResources,compute,now=()=>new Date().toISOString()}={}){
   let active=null,starting=false;
   const folder=id=>{if(!uuid.test(String(id)))throw Error('匹配记录ID无效');return path.join(directory,'runs',id);};
   const stateFile=id=>path.join(folder(id),'state.json');
   const save=async run=>{run.updatedAt=now();await writeJsonAtomic(stateFile(run.id),run);};
   const modelFor=run=>modelFactory({dataDir,runtimeDir:path.join(folder(run.id),'deepseek')});
+  async function savedProfile(id){
+    const profile=await read(path.join(folder(id),'profile.json'),null);if(profile)return profile;
+    const imported=(await read(path.join(folder(id),'result.json'),null))?.profile;if(!imported)return null;
+    try{return {...validateMatchingProfile(structuredClone(imported),profileEvidenceText(imported)),source:'saved-profile-evidence'};}catch{return null;}
+  }
   async function record(id){const run=await read(stateFile(id),null);if(!run)throw Error('匹配记录不存在');return run;}
-  function brief(r){return Object.fromEntries(['id','role','status','phase','progress','message','createdAt','updatedAt','sourceRows','candidateRows','estimate','budget','warning','resultAvailable','imported'].map(k=>[k,r[k]]));}
+  function brief(r){return {...Object.fromEntries(['id','role','status','phase','progress','message','createdAt','updatedAt','sourceRows','candidateRows','estimate','usage','operationUsage','warning','resultAvailable','imported','parentId','profileReply'].map(k=>[k,r[k]])),sessionId:r.sessionId||r.id,revision:r.revision||1};}
   async function status(){
     const ids=await read(path.join(directory,'index.json'),[]),runs=[];
-    for(const id of ids.slice(0,30)){
+    for(const id of ids){
       const r=await read(stateFile(id),null);if(!r)continue;
-      if(!starting&&['preparing','profiling','queued','matching','reviewing'].includes(r.status)&&active?.run.id!==r.id){r.status='interrupted';r.message='服务已中断，结果与计算断点保留；继续操作沿用原预算';await save(r);}
-      runs.push(brief(r));
+      if(!starting&&['preparing','profiling','queued','matching','reviewing'].includes(r.status)&&active?.run.id!==r.id){r.status='interrupted';r.message='服务已中断，结果与计算断点保留；可从断点继续';await save(r);}
+      if(!runs.some(existing=>existing.sessionId===(r.sessionId||r.id)))runs.push(brief(r));
+      if(runs.length>=30)break;
     }
     const meta=await modelFactory({dataDir,runtimeDir:path.join(directory,'model-status')}).status();
     return {version:matchingVersion,busy:!!active||starting,active:active?brief(active.run):null,runs,model:{configured:meta.configured,model:meta.model},score:{type:coverageVersion,higherIsBetter:true,probability:false}};
   }
   async function result(id){const r=await record(id);const value=await read(path.join(folder(id),'result.json'),null);if(!value)throw Error('尚无匹配结果');return {...value,run:brief(r)};}
+  async function conversation(id){
+    const current=await record(id),chain=[],seen=new Set();let run=current;
+    while(run){
+      if(seen.has(run.id)||chain.length>=100)throw Error('匹配会话历史异常');seen.add(run.id);
+      chain.unshift(run);run=run.parentId?await record(run.parentId):null;
+    }
+    const messages=[];
+    for(const r of chain){
+      const input=await read(path.join(folder(r.id),'input.json'),null);
+      messages.push({id:r.id+'-user',role:'user',text:input?.message||'上传简历，建立目标岗位画像',attachments:input?.documents?.map(d=>d.name)||[],createdAt:r.createdAt,revision:r.revision||1});
+      const p=await savedProfile(r.id);
+      if(p)messages.push({id:r.id+'-assistant',role:'assistant',text:r.profileReply||p.reply||'已建立人才画像，可以继续补充技能、项目和业务经历。',createdAt:r.updatedAt,revision:r.revision||1,usage:r.usage|| (await read(path.join(folder(r.id),'result.json'),null))?.usage});
+    }
+    const profile=await savedProfile(current.id);
+    const previous=profile|| (current.parentId?await savedProfile(current.parentId):null);
+    return {run:brief(current),profile:previous,profileRevision:profile?(current.revision||1):Math.max(1,(current.revision||2)-1),messages};
+  }
   async function update(task,values){Object.assign(task.run,values);await save(task.run);}
   function assertTask(task){task.abort.signal.throwIfAborted();}
   async function localCompute(task){
@@ -44,11 +75,10 @@ export function createResumeMatching({dataDir,store,catalog,directory=matchingDi
     const log=await fs.open(path.join(folder(task.run.id),'compute.log'),'a');
     const writeLog=chunk=>{logWrites=logWrites.then(()=>log.write(chunk)).catch(error=>{task.progressError=error;child.kill('SIGTERM');});};
     const abort=()=>child.kill('SIGTERM');task.abort.signal.addEventListener('abort',abort,{once:true});
-    const stages={bm25_done:'关键词初筛完成',embedding_started:'正在建立岗位向量缓存',embedding_progress:'正在计算岗位向量',embedding_cache_reused:'已复用岗位向量缓存',hybrid_done:'混合召回完成',reranker_started:'正在重排候选岗位',reranker_progress:'正在重排候选岗位',finished:'岗位重排完成'};
     child.stdout.on('data',chunk=>{
       writeLog(chunk);buffer+=chunk.toString();let i;
       while((i=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+1);let p;try{p=JSON.parse(line);}catch{continue;}
-        const progress={stage:p.stage,message:stages[p.stage]||'正在匹配',done:p.done??null,total:p.total??null,seconds:p.seconds};
+        const progress=matchingComputeProgress(p);
         saves=saves.then(()=>update(task,{progress})).catch(error=>{task.progressError=error;child.kill('SIGTERM');});
       }
     });
@@ -60,7 +90,7 @@ export function createResumeMatching({dataDir,store,catalog,directory=matchingDi
     const run=task.run,dir=folder(run.id),model=modelFor(run);task.model=model;
     let reviews=[],reviewWarning='';
     try{
-      const resume=await fs.readFile(path.join(dir,'resume-redacted.txt'),'utf8');
+      let resume=await fs.readFile(path.join(dir,'resume-redacted.txt'),'utf8');
       let source=await read(path.join(dir,'source.json'),null),jobs=await read(path.join(dir,'jobs.json'),null);
       if(!source||!jobs){
         await update(task,{status:'preparing',phase:'snapshot',message:'正在读取分类器岗位快照'});
@@ -77,8 +107,21 @@ export function createResumeMatching({dataDir,store,catalog,directory=matchingDi
       let profile=await read(path.join(dir,'profile.json'),null);
       if(!profile){
         await update(task,{status:'profiling',phase:'profile',message:'DeepSeek正在解析简历能力'});
-        const parsed=await model.request(matchingProfilePrompt,{resume,target_role:run.role},{signal:task.abort.signal,budget,maxTokens:3600});assertTask(task);
-        profile={...validateMatchingProfile(parsed,resume),model:parsed._model};await writeJsonAtomic(path.join(dir,'profile.json'),profile);
+        if(run.parentId){
+          const input=await read(path.join(dir,'input.json'),null),memory=await conversation(run.parentId);
+          const previous=await savedProfile(run.parentId);
+          if(!previous||!input)throw Error('上一版画像或补充资料缺失，未发起模型请求');
+          const pool=[profileEvidenceText(previous),input.message,...input.documents.map(d=>d.text)].join('\n\n');
+          const parsed=await model.request(profileUpdatePrompt,{target_role:run.role,current_profile:previous,conversation:memory.messages,message:input.message,documents:input.documents,evidence_pool:pool},{signal:task.abort.signal,budget,maxTokens:5600});assertTask(task);
+          profile={...validateProfileUpdate(parsed,pool),model:parsed._model};
+          run.profileReply=profile.reply;
+          resume=profileEvidenceText(profile);
+          await fs.writeFile(path.join(dir,'resume-redacted.txt'),resume,{mode:0o600});
+        }else{
+          const parsed=await model.request(matchingProfilePrompt,{resume,target_role:run.role},{signal:task.abort.signal,budget,maxTokens:3600});assertTask(task);
+          profile={...validateMatchingProfile(parsed,resume),model:parsed._model};
+        }
+        await writeJsonAtomic(path.join(dir,'profile.json'),profile);await save(run);
       }
       let ranked=await read(path.join(dir,'ranked.json'),null),performance=await read(path.join(dir,'performance.json'),null);
       if(!ranked||!performance){await update(task,{status:'matching',phase:'matching',message:'正在检索与重排岗位'});await localCompute(task);assertTask(task);ranked=await read(path.join(dir,'ranked.json'),null);performance=await read(path.join(dir,'performance.json'),null);}
@@ -90,10 +133,10 @@ export function createResumeMatching({dataDir,store,catalog,directory=matchingDi
       assertTask(task);const usage=(await model.status()).usage;
       const output={version:matchingVersion,role:run.role,sourceRows:jobs.length,createdAt:now(),profile,jobs:ranked,reviews:Object.fromEntries(reviews.map(r=>[r.key,r])),reviewCount:reviews.length,coverage,source,performance,usage,score:{type:coverageVersion,probability:false,higherIsBetter:true}};
       await writeJsonAtomic(path.join(dir,'result.json'),output);
-      await update(task,{status:'completed',phase:'completed',message:'匹配完成',resultAvailable:true,estimate:usage.estimate,warning:reviewWarning||null,progress:null});
+      await update(task,{status:'completed',phase:'completed',message:'匹配完成',resultAvailable:true,estimate:usage.estimate,usage,operationUsage:usage,warning:reviewWarning||null,progress:null});
     }catch(error){
       const usage=await model.status().then(s=>s.usage).catch(()=>null);
-      await update(task,{status:task.abort.signal.aborted?'cancelled':'failed',message:task.abort.signal.aborted?'已停止，计算断点与已发生用量保留':String(error.message).replace(/sk-[\w.-]+/g,'[密钥隐藏]'),estimate:usage?.estimate??run.estimate,progress:null});
+      await update(task,{status:task.abort.signal.aborted?'cancelled':'failed',message:task.abort.signal.aborted?'已停止，计算断点与已发生用量保留':String(error.message).replace(/sk-[\w.-]+/g,'[密钥隐藏]'),estimate:usage?.estimate??run.estimate,usage:usage||run.usage,progress:null});
     }finally{if(active===task)active=null;}
   }
   async function executeCoverage(task){
@@ -106,9 +149,9 @@ export function createResumeMatching({dataDir,store,catalog,directory=matchingDi
       await assessRequirementJobs({jobs:value.jobs.filter(j=>run.coverageKeys.includes(j.key)).map(j=>({key:j.key,title:j.job_name,jd:redactClassifierText(j.description)})),resume,model,budget,cache:coverage,signal:task.abort.signal,
         onSave:async cache=>{await writeJsonAtomic(path.join(dir,'coverage.json'),cache);const usage=(await model.status()).usage;await writeJsonAtomic(path.join(dir,'result.json'),{...value,coverage:cache,coverageUpdatedAt:now(),score:{type:coverageVersion,probability:false},usage:{...usage,estimate:(run.billingOffset||0)+usage.estimate}});},
         onProgress:progress=>update(task,{progress})});
-      const current=(await model.status()).usage;await update(task,{status:'completed',message:'岗位要求核验完成',resultAvailable:true,estimate:(run.billingOffset||0)+current.estimate,warning:null,progress:null});
+      const current=(await model.status()).usage;run.operationUsage={input:Math.max(0,(current.input||0)-(run.operationUsageBefore?.input||0)),output:Math.max(0,(current.output||0)-(run.operationUsageBefore?.output||0)),estimate:Math.max(0,current.estimate-(run.operationUsageBefore?.estimate||0)),unknown:Math.max(0,(current.unknown||0)-(run.operationUsageBefore?.unknown||0))};await update(task,{status:'completed',message:'岗位要求核验完成',resultAvailable:true,estimate:(run.billingOffset||0)+current.estimate,usage:{...current,estimate:(run.billingOffset||0)+current.estimate},warning:null,progress:null});
     }catch(error){
-      const usage=await model.status().then(s=>s.usage).catch(()=>null);await update(task,{status:task.abort.signal.aborted?'cancelled':'failed',message:String(error.message).replace(/sk-[\w.-]+/g,'[密钥隐藏]'),estimate:(run.billingOffset||0)+(usage?.estimate||0),progress:null});
+      const usage=await model.status().then(s=>s.usage).catch(()=>null);await update(task,{status:task.abort.signal.aborted?'cancelled':'failed',message:String(error.message).replace(/sk-[\w.-]+/g,'[密钥隐藏]'),estimate:(run.billingOffset||0)+(usage?.estimate||0),usage:usage||run.usage,progress:null});
     }finally{if(active===task)active=null;}
   }
   function launch(run){const task={run,abort:new AbortController(),child:null,model:null};active=task;task.promise=run.phase==='coverage'?executeCoverage(task):execute(task);}
@@ -122,36 +165,68 @@ export function createResumeMatching({dataDir,store,catalog,directory=matchingDi
       await fs.access(path.join(dir,'resume-redacted.txt')).catch(()=>{throw Error('此历史记录未保存脱敏简历，请上传简历新建匹配');});
       const meta=await modelFor(run).status();if(!meta.configured)throw Error('请先配置DeepSeek');if(meta.usage.unknown||meta.usage.inFlight)throw Error('存在用量未知的请求，不自动追加付费');
       run.billingOffset=Math.max(run.billingOffset||0,(run.estimate||0)-meta.usage.estimate,(value.usage?.estimate||0)-meta.usage.estimate);
-      if(run.billingOffset+meta.usage.estimate>=run.budget)throw Error('本轮预算已用完，不自动追加费用');
+      run.operationUsageBefore=structuredClone(meta.usage);
       Object.assign(run,{status:'reviewing',phase:'coverage',coverageKeys:body.keys,message:'正在逐项核验岗位要求',warning:null});await save(run);await fs.mkdir(path.dirname(receipt),{recursive:true});await writeJsonAtomic(receipt,{id:run.id,fingerprint});launch(run);return brief(run);
     }finally{starting=false;}
   }
   async function start(body){
     if(!body||body.shareConfirmed!==true)throw Error('请同意DeepSeek分析脱敏简历与少量JD');
     if(!uuid.test(body.requestId||''))throw Error('匹配请求标识无效');
-    const resume=redactMatchingResume(body.resume,body.filename),fingerprint=matchHash(JSON.stringify([body.role,resume,body.budget??.5]));
+    const resume=redactMatchingResume(body.resume,body.filename),fingerprint=matchHash(JSON.stringify([body.role,resume]));
     const prior=await read(path.join(directory,'requests',body.requestId+'.json'),null);
     if(prior){if(prior.fingerprint!==fingerprint)throw Error('同一请求标识不能用于不同的简历或参数');return brief(await record(prior.id));}
     if(active||starting)throw Error('已有简历匹配正在运行，请等待或停止');starting=true;
     try{
       const roles=(await catalog()).roles;if(!roles.some(r=>r.role===body.role&&r.status==='ready'))throw Error('请选择已训练成功且可用的岗位分类器');
-      const limit=Number(body.budget??.5);if(!Number.isFinite(limit)||limit<.05||limit>.5)throw Error('匹配预算上限为¥0.50');
       if(!(await modelFactory({dataDir,runtimeDir:path.join(directory,'model-status')}).status()).configured)throw Error('请先在求职助手中配置DeepSeek');
       for(const f of ['bge-small-zh-v1.5','mmarco-mMiniLMv2-L12-H384-v1'])await fs.access(path.join(project,'work/role_screening_models',f,'model.safetensors')).catch(()=>{throw Error('本地匹配模型不可用，请检查运行环境');});
       const id=randomUUID(),dir=folder(id);await fs.mkdir(path.join(dir,'temp'),{recursive:true});
-      const run={id,role:body.role,status:'preparing',phase:'snapshot',createdAt:now(),budget:limit,estimate:0,requestId:body.requestId,resumeHash:matchHash(resume),version:matchingVersion,message:'已创建匹配任务'};
+      const run={id,sessionId:id,revision:1,role:body.role,status:'preparing',phase:'snapshot',createdAt:now(),budget:null,estimate:0,requestId:body.requestId,resumeHash:matchHash(resume),version:matchingVersion,message:'已创建匹配任务'};
       await fs.writeFile(path.join(dir,'resume-redacted.txt'),resume,{mode:0o600});await writeJsonAtomic(path.join(dir,'config.json'),{role:run.role,cacheDir:path.join(directory,'indexes')});await save(run);
+      await writeJsonAtomic(path.join(dir,'input.json'),{message:'已上传简历，请建立人才画像并匹配'+run.role,documents:body.filename?[{name:path.basename(body.filename),text:''}]:[]});
       await fs.mkdir(path.join(directory,'requests'),{recursive:true});
       await writeJsonAtomic(path.join(directory,'requests',body.requestId+'.json'),{id,fingerprint});
       const ids=await read(path.join(directory,'index.json'),[]);await writeJsonAtomic(path.join(directory,'index.json'),[id,...ids]);launch(run);return brief(run);
     }finally{starting=false;}
   }
+  async function message(body){
+    if(body?.shareConfirmed!==true||!uuid.test(body.requestId||''))throw Error('请确认DeepSeek处理补充资料');
+    const parent=await record(body.id);
+    const text=body.message?.trim()?redactProfileMessage(body.message):'';
+    if(!Array.isArray(body.documents)||body.documents.length>3)throw Error('每轮最多补充3份资料');
+    const documents=body.documents.map(d=>({name:path.basename(String(d.name||'补充资料')).slice(0,240),text:redactMatchingResume(d.text,d.name)}));
+    if(!text&&!documents.length)throw Error('请填写修改要求或上传补充资料');
+    if(documents.reduce((n,d)=>n+d.text.length,0)>60000)throw Error('本轮补充资料合计不能超过60000字');
+    const fingerprint=matchHash(JSON.stringify(['message',body.id,text,documents]));
+    const receipt=path.join(directory,'requests',body.requestId+'.json'),prior=await read(receipt,null);
+    if(prior){if(prior.fingerprint!==fingerprint)throw Error('同一请求标识不能用于不同参数');return brief(await record(prior.id));}
+    if(active||starting)throw Error('已有匹配任务运行中，请等待本轮完成');starting=true;
+    try{
+      const ids=await read(path.join(directory,'index.json'),[]);
+      for(const id of ids){const r=await record(id);if((r.sessionId||r.id)===(parent.sessionId||parent.id)){
+        if(id!==parent.id)throw Error('当前会话已有更新版本，请刷新后继续');break;
+      }}
+      if(!['completed','failed','cancelled','interrupted'].includes(parent.status))throw Error('当前画像仍在处理中');
+      if(!await savedProfile(parent.id))throw Error('尚未建立可用画像，请先完成首次匹配');
+      if((parent.revision||1)>=100)throw Error('当前会话已达到100轮，请新建目标岗位会话');
+      const meta=await modelFor(parent).status();if(meta.usage.unknown||meta.usage.inFlight)throw Error('上一轮存在用量未知的请求，请先核对账单');
+      if(!meta.configured)throw Error('请先配置DeepSeek');
+      const previousProfile=await savedProfile(parent.id);
+      const id=randomUUID(),dir=folder(id),run={id,sessionId:parent.sessionId||parent.id,parentId:parent.id,revision:(parent.revision||1)+1,role:parent.role,status:'preparing',phase:'snapshot',createdAt:now(),budget:null,estimate:0,requestId:body.requestId,version:matchingVersion,message:'正在更新人才画像并重新匹配'};
+      await fs.mkdir(path.join(dir,'temp'),{recursive:true});
+      await fs.writeFile(path.join(dir,'resume-redacted.txt'),await fs.readFile(path.join(folder(parent.id),'resume-redacted.txt'),'utf8').catch(e=>{if(e.code!=='ENOENT')throw e;return profileEvidenceText(previousProfile);}),{mode:0o600});
+      await writeJsonAtomic(path.join(dir,'input.json'),{message:text||'请从补充资料中提取并完善人才画像',documents});
+      await writeJsonAtomic(path.join(dir,'config.json'),{role:run.role,cacheDir:path.join(directory,'indexes')});await save(run);
+      await fs.mkdir(path.dirname(receipt),{recursive:true});await writeJsonAtomic(receipt,{id,fingerprint});
+      await writeJsonAtomic(path.join(directory,'index.json'),[id,...ids]);launch(run);return brief(run);
+    }finally{starting=false;}
+  }
   async function resume(body){
-    if(active||starting)throw Error('已有简历匹配正在运行');if(body.shareConfirmed!==true)throw Error('请确认继续原轮次及原预算');
-    starting=true;try{const run=await record(body.id);if(!['failed','interrupted','cancelled'].includes(run.status)||(run.imported&&run.phase!=='coverage'))throw Error('当前记录不能继续');const usage=(await modelFor(run).status()).usage;if(usage.unknown||usage.inFlight)throw Error('上轮用量未知，不自动追加付费请求');run.status=run.phase==='coverage'?'reviewing':'preparing';run.message='沿用原预算继续匹配';await save(run);launch(run);return brief(run);}finally{starting=false;}
+    if(active||starting)throw Error('已有简历匹配正在运行');if(body.shareConfirmed!==true)throw Error('请确认继续原轮次');
+    starting=true;try{const run=await record(body.id);if(!['failed','interrupted','cancelled'].includes(run.status)||(run.imported&&run.phase!=='coverage'))throw Error('当前记录不能继续');const usage=(await modelFor(run).status()).usage;if(usage.unknown||usage.inFlight)throw Error('上轮用量未知，不自动追加付费请求');run.status=run.phase==='coverage'?'reviewing':'preparing';run.message='从断点继续匹配';await save(run);launch(run);return brief(run);}finally{starting=false;}
   }
   async function cancel(){if(active){active.abort.abort();active.model?.cancel();active.child?.kill('SIGTERM');}return {message:'已请求停止，已完成结果与用量保留'};}
-  return {status,start,resume,assess,result,cancel,get busy(){return starting||!!active;},async close(){await cancel();await active?.promise;}};
+  return {status,start,resume,assess,result,conversation,message,cancel,get busy(){return starting||!!active;},async close(){await cancel();await active?.promise;}};
 }
 export function createResumeMatchingHandler(service){
   return async(req,res,pathname)=>{
@@ -161,11 +236,13 @@ export function createResumeMatchingHandler(service){
       const url=new URL(req.url,'http://localhost');
       if(req.method==='GET'&&pathname==='/api/resume-matching')return send(200,await service.status());
       if(req.method==='GET'&&pathname==='/api/resume-matching/result')return send(200,await service.result(url.searchParams.get('id')));
+      if(req.method==='GET'&&pathname==='/api/resume-matching/conversation')return send(200,await service.conversation(url.searchParams.get('id')));
       if(req.method!=='POST')return send(405,{error:'请求方法不支持'});
       if(!String(req.headers['content-type']||'').startsWith('application/json'))return send(415,{error:'请使用JSON请求'});
-      const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>200000)throw Error('简历请求过大');chunks.push(chunk);}
+      const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>400000)throw Error('简历请求过大');chunks.push(chunk);}
       const body=JSON.parse(Buffer.concat(chunks).toString());if(!body||typeof body!=='object'||Array.isArray(body))throw Error('请求参数无效');
       if(pathname==='/api/resume-matching/start')return send(202,{run:await service.start(body)});
+      if(pathname==='/api/resume-matching/message')return send(202,{run:await service.message(body)});
       if(pathname==='/api/resume-matching/assess')return send(202,{run:await service.assess(body)});
       if(pathname==='/api/resume-matching/resume')return send(202,{run:await service.resume(body)});
       if(pathname==='/api/resume-matching/cancel')return send(202,await service.cancel());

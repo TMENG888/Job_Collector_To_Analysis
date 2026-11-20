@@ -40,7 +40,7 @@ export function installSemanticCloud({api,toast}){
     }else{
       const label=run?.status==='completed'?'标签已保存':({preparing:'准备中',labeling:'提取中',running:'提取中',failed:'提取失败',cancelled:'已停止',interrupted:'已中断'}[run?.status]||'标签待应用');
       const problem=['failed','interrupted'].includes(run?.status)?run.message:'';
-      $('[data-sem-status]').innerHTML=run?`<div class="classifier-semantic-line"><strong>${label}</strong><span>已标注 ${Number(run.processed||0)} / ${Number(run.sampled??run.sampleCount??0)} 条${run.jointAnnotations?` · 纳入 ${Number(run.accepted||0)} · 待核 ${Number(run.uncertain||0)}`:` · 待补 ${Number(run.remainingRows||0)} · 估算 ¥${Number(run.costEstimate||0).toFixed(4)}`}</span></div>${problem?`<p role="alert">${escape(problem)}</p>`:''}`:'';
+      $('[data-sem-status]').innerHTML=run?`<div class="classifier-semantic-line"><strong>${label}</strong><span>已标注 ${Number(run.processed||0)} / ${Number(run.sampled??run.sampleCount??0)} 条${run.jointAnnotations?` · 纳入 ${Number(run.accepted||0)} · 待核 ${Number(run.uncertain||0)}`:` · 待补 ${Number(run.remainingRows||0)} · 输入 ${Number(run.promptTokens||0).toLocaleString()} / 输出 ${Number(run.completionTokens||0).toLocaleString()} Token · 估算 ¥${Number(run.costEstimate||0).toFixed(4)}（非账单）`}</span></div>${problem?`<p role="alert">${escape(problem)}</p>`:''}`:'';
     }
     parent.dispatchEvent(new CustomEvent('insight-semantic-visibility'));
   }

@@ -36,6 +36,6 @@ try{
  await writeJsonAtomic(file,{...base,state:'closed',closed_at:new Date().toISOString()});
 }catch(error){
  await context?.close().catch(()=>{});
- await writeJsonAtomic(file,{...base,state:'failed',message:'浏览器启动失败；请检查配置目录是否被旧窗口占用，不会接管日常浏览器或删除登录数据。'+error.message});
+ await writeJsonAtomic(file,{...base,state:'failed',code:error.code||'browser_start_failed',message:'浏览器启动失败；请检查配置目录是否被旧窗口占用，不会接管日常浏览器或删除登录数据。'+error.message});
  process.exitCode=1;
 }

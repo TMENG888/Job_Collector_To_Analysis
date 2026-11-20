@@ -8,7 +8,8 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
+from types import SimpleNamespace
 import httpx
 from .app import create_app
 from .config import Settings
@@ -17,6 +18,7 @@ from .ledger import Ledger
 from .models import ComputeRequest
 from .processes import ProcessOwner
 from .reports import build_report, province_name
+from .worker import Worker
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMP = Path('E:/Codex/temp/20261111-fastapi-migration/tests')
@@ -61,12 +63,27 @@ class APITest(unittest.IsolatedAsyncioTestCase):
         await self.life.__aexit__(None,None,None)
 
     async def test_contract_rejects_invalid_budget_unknown_field_and_false_confirmation(self):
-        for body in ({'id':'x','confirmed':True,'labelBudget':21},{'id':'x','confirmed':True,'sampleCount':4},
+        for body in ({'id':'x','confirmed':True,'labelBudget':-1},{'id':'x','confirmed':True,'sampleCount':4},
                      {'id':'x','confirmed':False},{'id':'x','confirmed':1},{'id':'x','confirmed':True,'ignored':1}):
             response = await self.client.post('/api/insights/training/start',json=body)
             self.assertEqual(response.status_code,400,response.text)
             self.assertTrue(all('input' not in item for item in response.json()['details']))
         self.assertEqual(self.calls,[])
+
+    async def test_optional_legacy_amounts_have_no_cost_cap(self):
+        from .models import TrainingStart, ClassifierStart, SemanticStart, SchemaDraft, DiscoveryName, MatchingStart, MatchingMessage
+        cases = [(TrainingStart, {'id':'x','confirmed':True}),
+                 (ClassifierStart, {'inputFile':'kb://all','role':'研发'}),
+                 (SemanticStart, {'inputFile':'kb://all','shareConfirmed':True}),
+                 (SchemaDraft, {'inputFile':'kb://all','role':'研发','shareConfirmed':True}),
+                 (DiscoveryName, {'confirmed':True}),
+                 (MatchingStart, {'role':'研发','resume':'a'*40,'shareConfirmed':True,'requestId':str(uuid.uuid4())}),
+                 (MatchingMessage, {'id':'x','message':'补充Docker','shareConfirmed':True,'requestId':str(uuid.uuid4())})]
+        for model, body in cases:
+            parsed = model.model_validate(body)
+            key = 'labelBudget' if model is TrainingStart else 'budget'
+            self.assertIsNone(getattr(parsed,key))
+            self.assertEqual(getattr(model.model_validate({**body,key:10000}),key),10000)
 
     async def test_same_command_replays_ack_and_never_dispatches_twice(self):
         headers={'idempotency-key':'test-command-1'}
@@ -83,7 +100,7 @@ class APITest(unittest.IsolatedAsyncioTestCase):
 
     async def test_resume_matching_contract_and_idempotent_dispatch(self):
         body={'role':'研发','resume':'使用Python开发检索系统，负责接口实现与性能优化。'*4,'budget':.5,'shareConfirmed':True,'requestId':str(uuid.uuid4())}
-        for patch_value in ({'budget':.51},{'shareConfirmed':False},{'shareConfirmed':1},{'unexpected':True}):
+        for patch_value in ({'budget':-1},{'shareConfirmed':False},{'shareConfirmed':1},{'unexpected':True}):
             reply=await self.client.post('/api/resume-matching/start',json={**body,**patch_value})
             self.assertEqual(reply.status_code,400,reply.text)
         self.assertEqual(self.calls,[])
@@ -96,6 +113,20 @@ class APITest(unittest.IsolatedAsyncioTestCase):
         page=await self.client.get('/matching')
         self.assertEqual(page.status_code,200)
         self.assertIn('matchingView',page.text)
+
+    async def test_matching_conversation_updates_validate_and_dispatch_only_once(self):
+        body={'id':str(uuid.uuid4()),'message':'补充Docker部署经验','documents':[{'name':'项目.docx','text':'使用Docker部署服务并负责接口开发和故障排查。'*3}],'budget':.5,'shareConfirmed':True,'requestId':str(uuid.uuid4())}
+        for changed in ({'shareConfirmed':False},{'budget':-1},{'documents':[{'name':'x','text':'short'}]}, {'unknown':True}):
+            reply=await self.client.post('/api/resume-matching/message',json={**body,**changed})
+            self.assertEqual(reply.status_code,400,reply.text)
+        self.assertEqual(self.calls,[])
+        headers={'idempotency-key':body['requestId']}
+        first=await self.client.post('/api/resume-matching/message',json=body,headers=headers)
+        replay=await self.client.post('/api/resume-matching/message',json=body,headers=headers)
+        self.assertEqual(first.status_code,202,first.text)
+        self.assertEqual(replay.headers['x-operation-replayed'],'1')
+        self.assertEqual(len(self.calls),1)
+        self.assertEqual(json.loads(self.calls[0].content)['documents'],body['documents'])
 
     async def test_requirement_coverage_requires_confirmation_and_ten_job_limit(self):
         body={'id':str(uuid.uuid4()),'keys':['k1'],'shareConfirmed':True,'requestId':str(uuid.uuid4())}
@@ -200,6 +231,31 @@ class APITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code,400,response.text)
         self.assertEqual(self.app.state.ledger.jobs(),[])
 
+    async def test_data_quality_deep_link_and_api_filters(self):
+        response = await self.client.get('/quality')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-view="quality"', response.text)
+        self.assertIn('id="qualityView"', response.text)
+        self.assertEqual(self.calls, [])
+        response = await self.client.get('/api/knowledge/quality', params={'taskId':'fixture', 'platform':'就业在线'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.calls[-1].url.params['taskId'], 'fixture')
+        self.assertEqual(self.calls[-1].url.params['platform'], '就业在线')
+
+    async def test_source_data_page_and_read_only_api_proxy(self):
+        response = await self.client.get('/sources')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('aria-label="源数据"', response.text)
+        self.assertIn('/source-data.css', response.text)
+        self.assertNotIn('/data-quality.css', response.text)
+        response = await self.client.get('/api/knowledge/source-data', params={'taskId':'fixture','platform':'智联招聘','q':'Python','page':2,'pageSize':20})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.calls[-1].url.params['taskId'], 'fixture')
+        self.assertEqual(self.calls[-1].url.params['q'], 'Python')
+        response = await self.client.get('/api/knowledge/source-data/detail', params={'taskId':'fixture','platform':'智联招聘','jobId':'shared'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.calls[-1].url.params['jobId'], 'shared')
+
     async def test_native_role_snapshots_are_independent_and_support_etag(self):
         database=self.settings.data/'knowledge/岗位知识库.sqlite'
         database.parent.mkdir(parents=True)
@@ -268,6 +324,32 @@ class StorageTest(unittest.TestCase):
 
 
 class ComputeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_training_and_analysis_run_in_separate_serial_lanes(self):
+        folder=Path(tempfile.mkdtemp(dir=TEMP));settings=Settings(ROOT,folder/'data',folder/'runtime')
+        ledger=Ledger(folder/'operations.sqlite');owner=ProcessOwner();supervisor=ComputeSupervisor(settings,ledger,owner)
+        supervisor.command=lambda body:([sys.executable,'-B','-c','import time;time.sleep(30)'],body.folder)
+        jobs=[]
+        try:
+            for kind, resource in [('classifier','train-a'),('classifier','train-b'),('analysis','report-a'),('analysis','report-b')]:
+                jobs.append(await supervisor.submit(ComputeRequest(kind=kind,folder=resource,requestId=resource)))
+            for _ in range(100):
+                states=[ledger.job(job['id'])['state'] for job in jobs]
+                if states==['running','queued','running','queued'] and len(supervisor.processes)==2:
+                    break
+                await asyncio.sleep(.02)
+            self.assertEqual(states,['running','queued','running','queued'])
+            self.assertEqual(len(supervisor.processes),2)
+            await supervisor.cancel(jobs[2]['id'])
+            for _ in range(100):
+                if ledger.job(jobs[3]['id'])['state']=='running' and jobs[3]['id'] in supervisor.processes:
+                    break
+                await asyncio.sleep(.02)
+            self.assertEqual(ledger.job(jobs[0]['id'])['state'],'running')
+            self.assertEqual(ledger.job(jobs[3]['id'])['state'],'running')
+            self.assertEqual(ledger.job(jobs[1]['id'])['state'],'queued')
+        finally:
+            await supervisor.close();owner.close()
+
     async def test_subprocess_logs_are_retained_and_read_incrementally(self):
         import base64
         folder=Path(tempfile.mkdtemp(dir=TEMP));settings=Settings(ROOT,folder/'data',folder/'runtime')
@@ -322,6 +404,39 @@ class ComputeTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ledger.job(second['id'])['state'],'cancelled')
         finally:
             await supervisor.close();owner.close()
+
+
+class WorkerTempTest(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_start_creates_temp_and_passes_it_to_browser_worker(self):
+        folder = Path(tempfile.mkdtemp(dir=TEMP))
+        for mode in ('TEMP', 'TMP', 'default'):
+            with self.subTest(mode=mode):
+                runtime = folder / mode / 'runtime'
+                explicit = folder / mode / 'missing-temp'
+                expected = (runtime / 'temp' if mode == 'default' else explicit).resolve()
+                environment = {'TEMP': '', 'TMP': ''}
+                if mode != 'default':
+                    environment[mode] = str(explicit)
+                worker = Worker(Settings(ROOT, folder / 'data', runtime), Mock())
+                await worker.client.aclose()
+                worker.client = httpx.AsyncClient(transport=httpx.MockTransport(
+                    lambda request: httpx.Response(200, json={'worker': True})))
+                process = SimpleNamespace(pid=123, returncode=None)
+                try:
+                    with patch.dict(os.environ, environment), patch(
+                        'job_collector_ui.backend.worker.asyncio.create_subprocess_exec',
+                        new_callable=AsyncMock, return_value=process,
+                    ) as launch:
+                        self.assertFalse(expected.exists())
+                        await worker.start()
+                        child_env = launch.call_args.kwargs['env']
+                        self.assertEqual(Path(child_env['TEMP']), expected)
+                        self.assertEqual(child_env['TEMP'], child_env['TMP'])
+                        with tempfile.TemporaryDirectory(prefix='playwright-artifacts-', dir=child_env['TEMP']) as artifacts:
+                            self.assertTrue(Path(artifacts).is_dir())
+                finally:
+                    process.returncode = 0
+                    await worker.close()
 
 
 if __name__=='__main__':

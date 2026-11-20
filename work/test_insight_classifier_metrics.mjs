@@ -7,11 +7,12 @@ const run={role:'数据分析',targeted:true,labeled:400,sampled:400,budget:.5,
   evaluation:{test:metrics,counts:{train:{n:420},validation:{n:120},test:{n:80}},excluded_rows:70,
     comparison:[{name:'旧候选',metrics},{name:'新候选',metrics}]}};
 
-test('result retains the F1 summary without detailed evaluation and usage panels',()=>{
+test('result retains the F1 summary without detailed evaluation panels, showing concise token usage',()=>{
   const html=renderClassifierMetrics(run);
   assert.match(html,/测试 F1 · 对 Qwen 标签/);
   assert.match(html,/90\.0%/);
-  assert.doesNotMatch(html,/评测与用量|留出测试|验证集|classifier-metric-details|classifier-comparison|Token/);
+  assert.doesNotMatch(html,/评测与用量|留出测试|验证集|classifier-metric-details|classifier-comparison/);
+  assert.match(html,/Token/);assert.doesNotMatch(html,/费用／预算/);
   assert.equal(run.evaluation.test,metrics);
 });
 

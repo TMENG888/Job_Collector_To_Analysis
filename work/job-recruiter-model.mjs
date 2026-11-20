@@ -4,8 +4,8 @@ import {randomUUID} from 'node:crypto';
 import {createAssistantCredentialStore,assistantProviders} from './job_assistant_credentials.mjs';
 import {writeJsonAtomic} from './collector_storage.mjs';
 
-// These are budgeting assumptions, NOT a provider tariff or billing receipt.
-export const recruiterPrices=Object.freeze({input:4,output:8,basis:'预算假设：输入4、输出8元/百万Token；非官方报价、非账单，未计缓存折扣'});
+// Configured estimation rates, not a provider tariff or billing receipt.
+export const recruiterPrices=Object.freeze({input:4,output:8,basis:'估算单价：输入4、输出8元/百万Token；非官方报价、非账单，未计缓存折扣'});
 export function parseRecruiterJson(content){
   if(typeof content!=='string')throw Error('DeepSeek返回内容不是文本；用量已记录');
   const trimmed=content.trim(),fence=trimmed.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
@@ -21,15 +21,14 @@ export function createRecruiterModel({dataDir,runtimeDir,credentials=createAssis
   }
   async function status(){const meta=await credentials.status();return {configured:meta.configured&&meta.provider_id==='deepseek',provider:'DeepSeek',model:meta.model,prices:recruiterPrices,busy,usage:await usage()};}
   async function request(prompt,data,{signal,budget,maxTokens=2200}={}){
-    if(busy)throw Error('已有DeepSeek请求进行中');busy=true;const local=new AbortController();controller=local;
+    if(busy)throw Error('已有DeepSeek请求进行中');busy=true;const local=new AbortController();controller=local;let before=null;
     try{
       signal?.throwIfAborted();local.signal.throwIfAborted();
       const config=await credentials.load();
       if(config.JOB_ASSISTANT_PROVIDER!=='deepseek'||!config.JOB_ASSISTANT_API_KEY||!config.JOB_ASSISTANT_MODEL)throw Error('请先在求职助手配置DeepSeek；不会改用Qwen标注密钥');
       const content=JSON.stringify(data),reserve=((Buffer.byteLength(content+prompt,'utf8')+1024)*recruiterPrices.input+maxTokens*recruiterPrices.output)/1e6;
-      if(budget&&budget.spent+reserve>budget.limit)throw Error('预算不足以覆盖下一个请求的保守估算，未发起请求');
       signal?.throwIfAborted();local.signal.throwIfAborted();
-      const log=await usage();if(log.inFlight)log.unknown++;log.inFlight=true;log.requests++;
+      const log=await usage();before={...log};if(log.inFlight)log.unknown++;log.inFlight=true;log.requests++;
       await fs.mkdir(runtimeDir,{recursive:true});await writeJsonAtomic(file,log);if(budget)budget.spent+=reserve;
       let payload;
       try{
@@ -47,6 +46,9 @@ export function createRecruiterModel({dataDir,runtimeDir,credentials=createAssis
       if(payload.choices?.[0]?.finish_reason!=='stop')throw Error('DeepSeek输出截断或未正常完成；用量已记录，不采用部分结果');
       const parsed=parseRecruiterJson(payload.choices?.[0]?.message?.content);
       Object.defineProperties(parsed,{_usage:{value:{input:u.prompt_tokens,output:u.completion_tokens,estimate}},_model:{value:config.JOB_ASSISTANT_MODEL}});return parsed;
+    }catch(error){
+      if(before){const after=await usage().catch(()=>null);if(after)error.usage={input:after.input-before.input,output:after.output-before.output,estimate:after.estimate-before.estimate,unknown:after.unknown-before.unknown};}
+      throw error;
     }finally{busy=false;if(controller===local)controller=null;}
   }
   return {request,status,cancel(){controller?.abort();}};

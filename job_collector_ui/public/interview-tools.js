@@ -58,7 +58,7 @@ export function installInterviewTools({api,toast,refresh,getTask,escapeHtml,numb
     if(action==='refresh-ranking'){await renderPage({focus:true});return;}
     if(!task)return;
     if(action==='classifier'){
-      const {openInterviewClassifier}=await import('./interview-classifier.js?v=20261112-compact-copy');
+      const {openInterviewClassifier}=await import('./interview-classifier.js?v=20261118-usage-only');
       await openInterviewClassifier({api,toast,escapeHtml,number,taskId:task.id,title:task.label||task.primaryKeyword||'牛客面经'});return;
     }
     if(action==='configure'){

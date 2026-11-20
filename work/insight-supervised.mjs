@@ -39,7 +39,8 @@ export function classifierCredentials(dataDir,{protect=windowsProtect}={}){
 }
 // Read committed data only. Do not run an ingestion pass or rewrite the knowledge DB.
 export async function readClassifierRows(dataDir,uri,limit=12000){
-  const url=new URL(uri);if(url.protocol!=='kb:'||!['task','all','snapshot'].includes(url.hostname))throw Error('请选择知识库岗位数据集');
+  const url=new URL(uri);if(url.protocol!=='kb:'||!['task','all','snapshot','processed'].includes(url.hostname))throw Error('请选择知识库岗位数据集');
+  if(url.hostname==='processed'){const {readProcessingBatch}=await import('./job_processing_cache.mjs');const result=readProcessingBatch(dataDir,decodeURIComponent(url.pathname.slice(1)));return {rows:limit===null?result.rows:result.rows.slice(0,limit),total:result.rows.length};}
   const db=new DatabaseSync(knowledgeDatabasePath(dataDir),{readOnly:true});
   try{
     db.exec('PRAGMA busy_timeout=2000');
@@ -228,7 +229,7 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
     const totals=history.filter(Boolean).reduce((n,r)=>({runs:n.runs+1,promptTokens:n.promptTokens+r.promptTokens,completionTokens:n.completionTokens+r.completionTokens,costEstimate:n.costEstimate+r.costEstimate}),{runs:0,promptTokens:0,completionTokens:0,costEstimate:0});
     const schemaState=await schemas.status(inputFile,role);
     const schemaSummary=doc=>doc?{id:doc.id,parentDraftId:doc.parentDraftId,version:doc.version,sha256:doc.sha256,usage:doc.usage,approvalMode:doc.approvalMode||'human'}:null;
-    return {credentials:await credentials.status(),run:await result(run),totals,analysis,activeModel:selected,screeningModel:selected||released?.metadata||null,annotationSchema:schemaState?{busy:schemaState.busy,draft:schemaSummary(schemaState.draft),approved:schemaSummary(schemaState.approved)}:null,screening:{mode:experiment?'experimental-lr':'supervised-only',ready:!!(selected||released),source:selected?'qwen-trained':released?'released-supervised':'none',role:role||selected?.role||'',algorithm:'TF-IDF＋逻辑回归',version:selected?.version||released?.metadata.version||null,threshold:selected?.threshold??released?.metadata.threshold??null,error:selectionError||(!selected&&!released?'尚无合格专用分类器；已完成候选可用于全量试分析':'')},busy:!!active||externalBusy||!!schemaState?.busy,capabilities:{annotationSchemas:true,samplingPreview:true,jointAnnotations:!!publishJoint,savedAnnotations:!!publishJoint,semanticReferences:false,training:true,candidateTrial:true,semanticFields:semanticLabelFields,resume:true,validationRetryLimit:1,annotationConcurrency:requestConcurrency},pricing:{...QWEN_PRICING,basis:'公开短上下文单价估算，非账单；实际以百炼业务空间账单为准'},limits:{minSamples:experiment?120:CLASSIFIER_SAMPLE_COUNT,maxSamples:experiment?2000:CLASSIFIER_SAMPLE_COUNT,defaultSamples:CLASSIFIER_SAMPLE_COUNT,fixedSamples:!experiment,maxBudget:20}};
+    return {credentials:await credentials.status(),run:await result(run),totals,analysis,activeModel:selected,screeningModel:selected||released?.metadata||null,annotationSchema:schemaState?{busy:schemaState.busy,draft:schemaSummary(schemaState.draft),approved:schemaSummary(schemaState.approved)}:null,screening:{mode:experiment?'experimental-lr':'supervised-only',ready:!!(selected||released),source:selected?'qwen-trained':released?'released-supervised':'none',role:role||selected?.role||'',algorithm:'TF-IDF＋逻辑回归',version:selected?.version||released?.metadata.version||null,threshold:selected?.threshold??released?.metadata.threshold??null,error:selectionError||(!selected&&!released?'尚无合格专用分类器；已完成候选可用于全量试分析':'')},busy:!!active||externalBusy||!!schemaState?.busy,capabilities:{annotationSchemas:true,samplingPreview:true,jointAnnotations:!!publishJoint,savedAnnotations:!!publishJoint,semanticReferences:false,training:true,candidateTrial:true,semanticFields:semanticLabelFields,resume:true,validationRetryLimit:1,annotationConcurrency:requestConcurrency},pricing:{...QWEN_PRICING,basis:'公开短上下文单价估算，非账单；实际以百炼业务空间账单为准'},limits:{minSamples:experiment?120:CLASSIFIER_SAMPLE_COUNT,maxSamples:experiment?2000:CLASSIFIER_SAMPLE_COUNT,defaultSamples:CLASSIFIER_SAMPLE_COUNT,fixedSamples:!experiment,costLimit:false}};
   }
   async function runTraining(run){
     if(trainRunner)return trainRunner(path.join(directory,run.id));
@@ -291,7 +292,7 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
             const id=batch[0].sourceId;progress.attempts[id]=(progress.attempts[id]||0)+1;
             if(progress.attempts[id]>=2){progress.skipped.push({id,reason:error,request:requestNo});progress.consecutiveSkipped=(progress.consecutiveSkipped||0)+1;}
           }
-          run.message=batch.length===1&&progress.attempts[batch[0].sourceId]>=2?'该条重试仍失败，已跳过并继续':record.errorStatus?'接口临时异常，将在原预算内重试':'响应校验失败，将在原预算内重试；不采用无效标签';
+          run.message=batch.length===1&&progress.attempts[batch[0].sourceId]>=2?'该条重试仍失败，已跳过并继续':record.errorStatus?'接口临时异常，将在有限重试':'响应校验失败，将在有限重试；不采用无效标签';
         }else{
           labeled.push(...validated);if(semantic)semanticRows.push(...semantic);
           progress.consecutiveSkipped=0;run.message='按固定样本继续标注；已保存成功结果';
@@ -326,7 +327,7 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
         for(const [number,item]of Object.entries(run.pendingRequests||{}).sort((a,b)=>Number(a[0])-Number(b[0]))){
           const requestNo=Number(number),file=path.join(runDir,'responses',number+'.json');
           let record=await read(file,null);
-          if(!record){record={transportError:true,reservedCost:item.reserved,sampleIds:item.sampleIds,requestedModel:run.model,fatalMessage:'上次请求中断，用量待核；已按原预留额计入预算'};await save(file,record);}
+          if(!record){record={transportError:true,reservedCost:item.reserved,sampleIds:item.sampleIds,requestedModel:run.model,fatalMessage:'上次请求中断，用量待核；费用估算按原预留额记录，用量待核'};await save(file,record);}
           await accountResponse(record,requestNo);
         }
       };
@@ -384,10 +385,8 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
         const wave=[],batchSize=run.jointAnnotations||progress.forceSingles?1:5;let reservedTotal=0;
         for(let offset=0;offset<remaining.length&&wave.length<run.effectiveConcurrency;offset+=batchSize){
           const item=prepareRequest(remaining.slice(offset,offset+batchSize));
-          if(run.costEstimate+reservedTotal+item.reserved>run.budget)break;
           item.requestNo=run.requestsStarted+wave.length+1;reservedTotal+=item.reserved;wave.push(item);
         }
-        if(!wave.length)throw Error('已到本轮费用预算，标注断点已保存；不会自动追加费用');
         const tokenUpper=wave.reduce((sum,item)=>sum+item.tokens,0);
         while(true){
           signal.throwIfAborted();const now=Date.now();while(tokenWindow.length&&now-tokenWindow[0].at>=60000)tokenWindow.shift();
@@ -491,7 +490,7 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
       const scannedRows=source.scannedRows??source.rows.length;
       return {inputFile,role,readOnly:true,paidRequests:0,annotationSchema:{id:frozen.id,sha256:frozen.sha256},sourceRows:source.total,scannedRows,poolRows:source.rows.length,scopeCandidates:selected.scope_candidates,sampled:selected.samples.length,sampling:selected.sampling||null,canStart:selected.samples.length>=(experiment?120:CLASSIFIER_SAMPLE_COUNT),warnings:[...(selected.sampling?.warnings||[]),...(scannedRows<source.total?['本次读取预算未覆盖全部岗位，请勿将候选数当作全库数量']:[])]};
     },
-    async start({inputFile,role,sampleCount=CLASSIFIER_SAMPLE_COUNT,budget=2,inputPrice=QWEN_PRICING.input_per_million,outputPrice=QWEN_PRICING.output_per_million,jointAnnotations=false,trainingScope='dataset',trainingKeywords:keywords=''}){
+    async start({inputFile,role,sampleCount=CLASSIFIER_SAMPLE_COUNT,budget=null,inputPrice=QWEN_PRICING.input_per_million,outputPrice=QWEN_PRICING.output_per_million,jointAnnotations=false,trainingScope='dataset',trainingKeywords:keywords=''}){
       if(!experiment&&sampleCount!==CLASSIFIER_SAMPLE_COUNT)throw Error('岗位分类器标注量固定为500条，请刷新界面后重试');
       if(active)throw Error('已有标注或训练任务运行中');
       if(typeof jointAnnotations!=='boolean')throw Error('联合标注参数必须为布尔值');
@@ -501,7 +500,7 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
       await beforeStart();
       if(active)throw Error('已有标注或训练任务运行中');
       if(!String(inputFile).startsWith('kb://')||inputFile==='kb://all'&&trainingScope!=='all'||!role||/^(自动识别|auto)$/i.test(role))throw Error('请先指定目标岗位，不对全库混合岗位盲目训练');
-      if(!Number.isInteger(sampleCount)||sampleCount<120||sampleCount>2000||!Number.isFinite(budget)||budget<=0||budget>20||![inputPrice,outputPrice].every(v=>Number.isFinite(v)&&v>0&&v<=100))throw Error('样本数120–2000，预算0–20元；请填写有效Token估算单价');
+      if(!Number.isInteger(sampleCount)||sampleCount<120||sampleCount>2000||![inputPrice,outputPrice].every(v=>Number.isFinite(v)&&v>0&&v<=100))throw Error('样本数120–2000；请填写有效Token估算单价');
       const frozenSchema=await schemas.resolve(inputFile,role);
       const run={id:randomUUID(),inputFile,role,model:QWEN_MODEL,semanticFields:jointAnnotations?semanticLabelFields:[],jointAnnotations,semanticStatus:jointAnnotations?'pending':null,status:'preparing',message:'正在固定抽样范围',requestedSamples:sampleCount,budget,inputPrice,outputPrice,sampled:0,labeled:0,positive:0,negative:0,review:0,promptTokens:0,completionTokens:0,totalTokens:0,cachedTokens:0,costEstimate:0,unknownUsageRequests:0,requestsStarted:0,requestsCompleted:0,inFlight:false,pendingRequests:{},requestConcurrency,effectiveConcurrency:requestConcurrency,createdAt:stamp()};
       run.experiment=experiment;run.trainingScope=trainingScope;run.trainingKeywords=keywords;run.annotationSchema={id:frozenSchema.id,version:frozenSchema.version,sha256:frozenSchema.sha256};
@@ -519,7 +518,7 @@ export function createInsightSupervised(dataDir,{fetcher=fetch,credentials=class
       void execute(run,controller.signal);return result(run);
     },
     async resume(id,{confirmed}={}){
-      if(confirmed!==true)throw Error('请确认在原预算内继续本轮标注');
+      if(confirmed!==true)throw Error('请确认从断点继续本轮标注');
       filename(id);await beforeStart();
       if((await status('')).busy)throw Error('已有规范、标注或训练任务运行中');
       const run=await read(filename(id),null);
